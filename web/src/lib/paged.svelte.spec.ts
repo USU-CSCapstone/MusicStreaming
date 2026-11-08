@@ -30,10 +30,12 @@ function served(rows: () => string[], size = 2) {
 		calls.push(cursor);
 		limits.push(limit);
 		const rest = rows().filter((row) => cursor === undefined || row > cursor);
-		const items = rest.slice(0, size);
+		// Like the API, a limit caps the page.
+		const take = limit ?? size;
+		const items = rest.slice(0, take);
 		const page = {
 			items,
-			nextCursor: rest.length > size ? items[items.length - 1] : null,
+			nextCursor: rest.length > take ? items[items.length - 1] : null,
 			total: rows().length
 		};
 		if (delay.ms) await new Promise((resolve) => setTimeout(resolve, delay.ms));
@@ -76,7 +78,7 @@ describe('a library changing on the device', () => {
 		announce();
 		await vi.advanceTimersByTimeAsync(RELOAD_MS);
 
-		expect(calls).toEqual([undefined, 'a']);
+		expect(calls).toEqual([undefined]);
 		expect(paged.items).toEqual(['0', 'a', 'b', 'c']);
 		expect(paged.total).toBe(7);
 		expect(paged.hasMore).toBe(true);
@@ -123,8 +125,9 @@ describe('a library changing on the device', () => {
 		await stop();
 	});
 
-	it('re-reads in large pages, while more() keeps its own size', async () => {
-		const { limits, load } = served(() => ['a', 'b', 'c', 'd']);
+	it('re-reads a long window in pages of at most 1000, while more() keeps its own size', async () => {
+		const rows = Array.from({ length: 2500 }, (_, i) => String(i).padStart(4, '0'));
+		const { limits, load } = served(() => rows, 1200);
 		const paged = new Paged(await load(), load, '1');
 		const stop = show(paged);
 		await paged.more();
@@ -133,7 +136,24 @@ describe('a library changing on the device', () => {
 
 		announce();
 		await vi.advanceTimersByTimeAsync(RELOAD_MS * 2);
-		expect(limits).toEqual([1000, 1000]);
+		expect(limits).toEqual([1000, 1000, 400]);
+		expect(paged.items).toHaveLength(2400);
+		await stop();
+	});
+
+	it('reads back no more rows than are shown, so an unchanged window stays as it is', async () => {
+		const rows = Array.from({ length: 30 }, (_, i) => String(i).padStart(2, '0'));
+		const { limits, load } = served(() => rows);
+		const paged = new Paged(await load(), load, '1');
+		const stop = show(paged);
+		const shown = paged.items;
+		limits.length = 0;
+
+		announce();
+		await vi.advanceTimersByTimeAsync(RELOAD_MS * 2);
+		expect(paged.items).toBe(shown);
+		expect(paged.items).toHaveLength(2);
+		expect(limits).toEqual([2]);
 		await stop();
 	});
 

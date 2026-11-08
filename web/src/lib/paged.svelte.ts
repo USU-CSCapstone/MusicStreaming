@@ -66,7 +66,9 @@ export class Paged<T> {
 			let page: Page<T>;
 			let cursor: string | undefined;
 			do {
-				page = await this.load(cursor, RELOAD_PAGE);
+				// No more rows than are shown, so an unchanged window reads back the same rows.
+				const wanted = Math.max(1, this.#items.length - rows.length);
+				page = await this.load(cursor, Math.min(RELOAD_PAGE, wanted));
 				rows.push(...page.items);
 				cursor = page.nextCursor ?? undefined;
 			} while (cursor && rows.length < this.#items.length);
