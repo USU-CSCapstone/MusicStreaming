@@ -8,7 +8,7 @@ import type { Request } from './protocol';
 /** The channel every tab and worker of the origin talks on. */
 export const CHANNEL = 'jewelcase-catalog';
 /** How long a request may wait for an answer, from when it was last sent. */
-const TIMEOUT_MS = 10_000;
+export const TIMEOUT_MS = 10_000;
 
 /** What goes over the channel. */
 type Wire =
@@ -23,6 +23,7 @@ export type Handler = (request: Request) => Promise<string>;
 /** A request waiting for its answer. */
 type Pending = {
 	request: Request;
+	timeout: number;
 	settle: (answer: { result?: string; error?: string }) => void;
 	timer?: ReturnType<typeof setTimeout>;
 };
@@ -48,14 +49,15 @@ export class CatalogRouter {
 
 	/**
 	 * Asks the owner, which may be this tab, and resolves with its answer. Rejects with the
-	 * owner's error, or if nobody answered in time. An owner that goes away leaves it waiting for
-	 * the next one.
+	 * owner's error, or if nobody answered in `timeout` milliseconds. An owner that goes away
+	 * leaves it waiting for the next one.
 	 */
-	ask(request: Request): Promise<string> {
+	ask(request: Request, timeout = this.#timeout): Promise<string> {
 		return new Promise((resolve, reject) => {
 			const id = crypto.randomUUID();
 			this.#pending.set(id, {
 				request,
+				timeout,
 				settle: ({ result, error }) =>
 					error === undefined ? resolve(result ?? '') : reject(new Error(error))
 			});
@@ -83,7 +85,7 @@ export class CatalogRouter {
 		clearTimeout(entry.timer);
 		entry.timer = setTimeout(
 			() => this.#answered(id, { error: 'the catalog did not answer' }),
-			this.#timeout
+			entry.timeout
 		);
 		if (this.#handler) this.#answer(this.#handler, entry.request, (a) => this.#answered(id, a));
 		else this.#channel.postMessage({ type: 'request', id, request: entry.request } satisfies Wire);

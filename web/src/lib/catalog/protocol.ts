@@ -39,8 +39,16 @@ export type Ask =
 export type Request =
 	/**
 	 * Answers the API operation `name` for the library from its file on the device; `offline`
-	 * waits for an apply under way rather than failing at once.
+	 * waits for an apply under way rather than failing at once. `user` is who the asking tab is
+	 * signed in as; an owner started for someone else gives the catalog up instead of answering.
 	 */
-	| { type: 'query'; library: string; name: string; params: object; offline?: boolean }
+	| {
+			type: 'query';
+			library: string;
+			name: string;
+			params: object;
+			offline?: boolean;
+			user?: string;
+	  }
 	/** Deletes every file on the device. */
 	| { type: 'signOut' };

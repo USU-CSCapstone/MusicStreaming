@@ -3,13 +3,13 @@
 // tab is not it. The owner tells the worker who is signed in and what the realtime connection
 // hears, and shows what the worker cannot fix itself.
 
-import { API } from '$lib/api/client';
+import { API, ApiError, getMe } from '$lib/api/client';
 import wasmUrl from '$lib/catalog-wasm/jewelcase_catalog_wasm_bg.wasm?url';
 import type { RealtimeServerMessage } from '$lib/api/types';
 import type { Realtime } from '$lib/realtime.svelte';
 import { toast } from '$lib/toast.svelte';
 import type { Ask, FromWorker, Request, ToWorker } from './protocol';
-import { CHANNEL, CatalogRouter } from './router';
+import { CHANNEL, CatalogRouter, TIMEOUT_MS } from './router';
 
 /** The realtime messages that make the worker pull. */
 const PULLING = new Set(['hello', 'libraryChanged', 'accountChanged']);
@@ -17,8 +17,13 @@ const PULLING = new Set(['hello', 'libraryChanged', 'accountChanged']);
 const PAUSE_MS = 3000;
 /** Tries at a sign-out another tab's owner has to answer. */
 const SIGN_OUT_TRIES = 3;
+/** How long a sign-out waits for another tab's owner before trying again. */
+const SIGN_OUT_MS = 3000;
 /** How long the owner waits for its worker to open the files before giving the lock up. */
 const START_MS = 20_000;
+
+/** Whether the browser can elect an owner at all; without Web Locks (plain HTTP, old iOS) the catalog is unavailable. */
+const available = () => !!navigator.locks;
 
 /** Starts the catalog worker. */
 const spawn = () => new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
@@ -79,7 +84,7 @@ export class CatalogClient {
 		});
 		// A tab hearing a sign-out leaves, so a signed-out tab never owns the next account's files.
 		this.#route();
-		this.#join();
+		if (available()) this.#join();
 	}
 
 	/**
@@ -103,10 +108,12 @@ export class CatalogClient {
 	/**
 	 * Answers the API operation `name` for `library` from the device's files, in whichever tab
 	 * owns them. Resolves with the JSON the server would send; rejects if the library is not on
-	 * the device or nobody answers.
+	 * the device, nobody answers, or the browser has no Web Locks.
 	 */
 	query(library: string, name: string, params: object = {}) {
-		return this.#route().ask({ type: 'query', library, name, params });
+		if (!available()) return Promise.reject(new Error('the catalog is not available'));
+		const user = this.#user || undefined;
+		return this.#route().ask({ type: 'query', library, name, params, user });
 	}
 
 	/**
@@ -120,6 +127,7 @@ export class CatalogClient {
 
 	/** Does [`signOut`](#signOut). */
 	async #signOut() {
+		if (!available()) return;
 		await this.#held;
 		for (let attempt = 0; attempt < SIGN_OUT_TRIES; attempt++) {
 			const done = await navigator.locks.request(
@@ -128,13 +136,25 @@ export class CatalogClient {
 				async (lock) => {
 					if (!lock)
 						return this.#route()
-							.ask({ type: 'signOut' })
+							.ask({ type: 'signOut' }, SIGN_OUT_MS)
 							.then(
 								() => true,
 								() => false
 							);
 					this.#launch('');
-					await this.#call({ type: 'signOut' }).catch((error) => console.error(error));
+					let timer: ReturnType<typeof setTimeout>;
+					await Promise.race([
+						this.#call({ type: 'signOut' }),
+						new Promise(
+							(_, reject) =>
+								(timer = setTimeout(
+									() => reject(new Error('the catalog did not answer the sign-out')),
+									TIMEOUT_MS
+								))
+						)
+					])
+						.catch((error) => console.error(error))
+						.finally(() => clearTimeout(timer));
 					this.#stop();
 					return true;
 				}
@@ -212,6 +232,15 @@ export class CatalogClient {
 		if (!started) this.#yield();
 		const stop = started
 			? this.#route().serve(async (request: Request) => {
+					// Device data never crosses accounts; the asker falls back to the server.
+					if (
+						request.type === 'query' &&
+						request.user !== undefined &&
+						request.user !== this.#user
+					) {
+						void this.#leaveIfStale();
+						throw new Error('the catalog is for another account');
+					}
 					const answer = await this.#call(request);
 					// A device wiped for everyone is no one's to keep open.
 					if (request.type === 'signOut') this.disconnect();
@@ -228,6 +257,15 @@ export class CatalogClient {
 			await Promise.race([paused, new Promise((resolve) => setTimeout(resolve, PAUSE_MS))]);
 		}
 		this.#stop();
+	}
+
+	/** Gives the catalog up if the session now belongs to someone other than this tab's account; offline or on any other failure, keeps it. */
+	async #leaveIfStale() {
+		try {
+			if ((await getMe(fetch)).id !== this.#user) this.disconnect();
+		} catch (error) {
+			if (error instanceof ApiError && error.status === 401) this.disconnect();
+		}
 	}
 
 	/** Spawns the worker and sends it `init` for `user`; the first message it gets. */
