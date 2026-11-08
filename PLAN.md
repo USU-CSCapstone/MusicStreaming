@@ -137,7 +137,7 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 ### Stage 9 — Queue, playback & Shift
 
 - A server-owned queue with the Manual Queue, Context Queue, and History. Seeded shuffle in `crates/core`, repeat, and kept sessions. Move player state onto the queue.
-  - **Built:** all of this, online: the core's queue rules, the server's queue, kept queues and player state on items, and the web's queue panel, player and queueing ([`design/queue.md`](design/queue.md), [`design/web.md`](design/web.md#queue-worker)). Views start and queue by recipe (album, artist, songs, search and playlist, with their tag filters), and the playlist and track sorts are the core's. Endless play, and the queue offline, are not (Stage 10).
+  - **Built:** all of this, online: the core's queue rules, the server's queue, kept queues and player state on items, and the web's queue panel, player and queueing ([`design/queue.md`](design/queue.md), [`design/web.md`](design/web.md#queue-worker)). Views start and queue by recipe (album, artist, songs, search and playlist, with their tag filters), and the playlist and track sorts are the core's. Endless play, and kept queues and queue edits offline, are not (Stage 10).
 - The web client side of realtime: connection, progress, a device picker, and remote control. Then Shift, waking, and per-device volume.
 - Transcoding with a cache and seekable streams. Gapless playback, normalization, crossfade, silence skipping, and failure handling.
 
@@ -158,14 +158,15 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 
 Stage 10 is two plans. The first makes the catalog, search and queue building work offline and makes the app installable. The second adds audio and the writes that survive a closed app.
 
-#### Part 1: the offline catalog and the installable app (in progress)
+#### Part 1: the offline catalog and the installable app ✅ (built)
 
 - **The device keeps the whole catalog in SQLite** ([ADR 0008](adr/0008-sqlite-device-catalog.md), [`design/general.md` §3.1](design/general.md#31-the-catalog-queries)). The catalog's read SQL moves into `crates/catalog`, which the server and the device's worker both run, with a test that every shared query gives identical JSON on both.
-- **Sync.** A first sync imports a snapshot file the server builds per library. After that a device pulls the library's change feed and the account's (playlists first), told to pull by realtime hints on `hello` and on every change ([`design/database.md` §5](design/database.md#5-change-feeds)). Catching up is applied at the head, so a reader never sees half of it.
-- **The catalog worker** is owned by one tab at a time, with the others asking it ([`design/web.md`](design/web.md#catalog-worker)). Pages, live updates and search read through it, by the rules of [`design/general.md` §7.1](design/general.md#71-web).
-- **Search rules into `core-wasm`**, with a parity test against the native build, so the device builds the same index the server does. The queue's rules and the track-list comparator (`sort_rows`) already run there.
+- **Sync.** A first sync imports a snapshot file the server builds per library, checked by its hash as it downloads. After that a device pulls the library's change feed and the account's (playlists), told to pull by realtime hints on `hello` and on every change ([`design/database.md` §5](design/database.md#5-change-feeds)). Catching up is applied at the head, so a reader never sees half of it.
+- **The catalog worker** is owned by one tab at a time, with the others asking it ([`design/web.md`](design/web.md#catalog-worker)). Pages, live updates and search read through it, by the rules of [`design/general.md` §7.1](design/general.md#71-web). An open page updates in place when the copy changes.
+- **Search on the device** builds the core's own index from the device database inside the catalog worker, and a golden-file test checks that it ranks like the server. The queue's rules, the list hash and the track-list comparator (`sort_rows`) run in `core-wasm`.
 - **The queue builds on the device**: the list hash moves into the core, and a start or add of a recipe resolves, hashes and attaches on the device, downloading the server's list only on a mismatch ([`design/queue.md` §7](design/queue.md#7-where-it-is-built-and-what-is-not-yet)).
 - **The installable app**: a manifest, a service worker that precaches the build, an image cache with ThumbHash placeholders, a connectivity indicator and a per-device *Work offline* switch ([`design/web.md`](design/web.md#the-installable-app)).
+- **Left for Part 2 or later**: the feed horizon, lyric search on the device, recent searches offline (they need the durable writes below), and the web app's icons, which are a placeholder until the project has artwork.
 - **Accepted until Part 2**: tombstones never age out; a device offline before its first sync says the library is not on it yet; edits made offline are lost if the app closes before it reconnects; nothing plays offline.
 
 **Open questions:**

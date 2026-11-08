@@ -80,6 +80,37 @@ from [Without Docker](#without-docker). CI runs them again on every pull request
 | | `pnpm test` |
 | `api/` | `npx @redocly/cli@2.65.1 lint openapi.yaml` |
 
+`pnpm test` runs Vitest in two projects. The `server` project runs in Node and the `client`
+project in headless Chromium, which `playwright install` fetches. The client project also runs
+the catalog worker's tests against the browser's real private file system (OPFS), so they need
+that browser. Both build the web app's WebAssembly modules first (`pnpm wasm`).
+
+### Catalog parity and golden files
+
+`crates/catalog` holds the SQL the server and the browser share, and a test in the server crate
+(`cargo test -p jewelcase-server parity`) checks that both give identical JSON for every list,
+get, search and recipe. It also compares the answers with the golden files in
+`crates/catalog/parity/`, which the web app's tests replay against the WebAssembly build. After a
+change that alters an answer or the device schema, regenerate them and review the diff:
+
+```sh
+UPDATE_PARITY=1 cargo test -p jewelcase-server parity
+```
+
+### Catalog scale benchmark
+
+An opt-in Playwright run measures a 500,000-track library on the device: importing the snapshot,
+page queries, recipe reads and memory. It is not part of `pnpm test`. It reads files that an
+ignored test in the server crate writes into `target/catalog-scale`:
+
+```sh
+cargo test --release -p jewelcase-server write_device_scale_files -- --ignored --nocapture
+cd web && pnpm wasm && pnpm exec playwright test catalog-scale
+```
+
+The data generator currently fails on the device schema's `libraries` table, so the benchmark
+cannot be regenerated until that is fixed.
+
 Code outside tests may not use `unwrap()`. Use `expect("why it can't fail")` only where failure
 is impossible, and handle anything that depends on input, files, configuration, or the
 environment. `unsafe` is not allowed anywhere.

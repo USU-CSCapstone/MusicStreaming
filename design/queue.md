@@ -30,9 +30,9 @@ The Manual Queue, the context and History are each a short list of spans or runs
 A **list** is `{libraryId, hash, length, recipe?}`. A source names its list by that hash in a field called `list`, everywhere.
 
 - **The hash** is SHA-256 over the track IDs in order, as 8-byte little-endian integers, in lowercase hex.
-  - Only the server's hash names a list; it never takes one from a device. Once the device catalog is built (Stage 10) a device computes one only to check a list it rebuilt ([§7](#7-where-it-is-built-and-what-is-not-yet)).
+  - Only the server's hash names a list; it never takes one from a device. A device computes one for a list it rebuilt from its own catalog, and uses it only until the server names the list ([§7](#7-where-it-is-built-and-what-is-not-yet)).
   - It names the list everywhere: in queues, on the wire, in storage and in device caches. It must resist collisions, since devices trust it as the list's name.
-- **The recipe** is how the list was made. It is not what plays; the hash is. It is kept so a device can rebuild the list from its own catalog once it keeps one ([§7](#7-where-it-is-built-and-what-is-not-yet)), and so the interface can say what is playing.
+- **The recipe** is how the list was made. It is not what plays; the hash is. It is kept so a device can rebuild the list from its own catalog ([§7](#7-where-it-is-built-and-what-is-not-yet)), and so the interface can say what is playing.
 
   | Recipe | Fields |
   |---|---|
@@ -47,7 +47,7 @@ A **list** is `{libraryId, hash, length, recipe?}`. A source names its list by t
 
   The `playlist` recipe names the caller's own playlist. Its `sort` and `order` come together (a `sort` without an `order`, or the reverse, is refused, `422`) or are both left out for the playlist's own order. Its `sort` is `listTracks`' sort of the same name (`name`, `artist`, `album`, `releaseDate`, `duration`) or `addedToPlaylist`, when the playlist took the track, which only a playlist has, and its `order` is the other recipes' `order`. The server resolves the playlist at its current version and records that `version` in the stored recipe; a device never sends one. Only the caller's own playlist resolves: another account's, and one that does not exist, are the same `404`.
   Every recipe resolves exactly the rows its view pages in to the end under the same filter, so what a client starts or queues is what its page shows. A playlist's items resolve in key order, one row for each time it holds a track and one in place for a missing track, kept if they carry the filter's tags, then sorted by the core's comparator over the keys its page sorts by.
-- **A queue's sources** are `{key, libraryId, list?: hash, length, recipe?}`. `list` is missing only on a device, from its own start or add until the server's answer names the list. Item `<key>.<p>` is position `p` of that list. A track listed twice is two positions, so two items ([`requirements/queue.md` §8](../requirements/queue.md#8-resilience)).
+- **A queue's sources** are `{key, libraryId, list?: hash, length, recipe?}`. `list` is missing on a device only for a source with no recipe, until the server's answer names it. For a recipe the device fills `list` with the hash of the list it built, until the server confirms it or names another. Item `<key>.<p>` is position `p` of that list. A track listed twice is two positions, so two items ([`requirements/queue.md` §8](../requirements/queue.md#8-resilience)).
 
 **The sort is part of the recipe.** Each combination of collection, filters, sort and direction is its own list.
 
@@ -204,11 +204,12 @@ The rules above are `crates/core/src/queue`. The rest is built in these places:
 - **The API** is [`api/openapi.yaml`](../api/openapi.yaml): the snapshot (`GET /me/queue`, with an `ETag` of `"<run>.<queueId>.<version>"`), starts and edits, lists by hash, pages of rows, and kept queues (`/me/queues`). The snapshot's shape is a stable public contract: it carries the state and each list's `list` hash and `length`, never tracks. The hash is `list` everywhere on the wire. Restoring or deleting the active queue is `409 queue_active`, the opposite of `queue_changed`, which means the edit named a queue that is not active.
 - **Player state and plays follow the queue.** The player state and a progress report name the item, `<key>.<position>`, which the server accepts only if the account's active queue holds it. The item ID is stable. A play's `context` and `origin` are the device's, as sent: the server cannot tell the Manual Queue from the context for a play reported after the queue changed. A device reports `manual` for an item playing from the Manual Queue, which is one not in the context.
 - **The web client** is a worker around the core ([`web.md`](web.md#queue-worker)).
+- **The device builds lists itself.** A start or add of a recipe resolves on the device with the server's SQL (`crates/catalog`), is hashed by the core and attaches at once, and the server's list is downloaded only when its hash differs ([`web.md`](web.md#catalog-worker)). The device does not set the source's `recipe`: the server's snapshot does. A search recipe resolves on the device only when the app counts itself offline, since its ranking is the server's and building the index just to compare a hash would cost more than downloading the list. A source that is a list with no recipe stays missing on a device until the server answers.
 
 Not built yet:
 
 - **Kept queues are online-only until devices store them** (the second part of Stage 10, [`PLAN.md`](../PLAN.md)). Their lists and restores need the server until devices store kept states, which falls short of [`requirements/offline.md` §6](../requirements/offline.md#6-what-works-offline) until then ([`requirements/general.md` §3.5](../requirements/general.md#35-offline-parity)).
-- **The device catalog lets a device build a list itself** (the first part of Stage 10). A start or add of a recipe resolves on the device with the server's SQL, hashes with the core and attaches at once, and the server's list is downloaded only when its hash differs ([`web.md`](web.md#catalog-worker)). A source that is a list with no recipe stays missing on a device until the server answers. Until it is built, devices download every list.
+- **A start or edit made offline is not durable.** It is retried only while the page is open, so it is lost if the app closes before it reconnects. The second part of Stage 10 stores them and sends the recipe and the played tracks on reconnect.
 - **Endless play.** Nothing adds tracks yet. When the server does, it mints UUID keys as a device does, and avoids re-selecting a played track by reading History's tracks from the lists it holds.
 - **An index for finding an item** and a **resolve cache** wait until a measurement says they are needed. Finding is a scan of the spans, which stay few.
 

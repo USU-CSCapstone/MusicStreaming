@@ -37,11 +37,12 @@ flowchart LR
 |---|---|---|
 | Server | [`crates/server`](../crates/server/) | Starts everything. Serves the HTTP API and realtime connections, handles accounts and sessions, owns the database, and runs plugin hooks. Built on Tokio and Axum. |
 | Scanner | [`crates/scanner`](../crates/scanner/) | Walks the music folders, reads tags and files beside the music (cover art, lyrics), watches for changes, and analyzes audio for loudness and waveforms in the background. |
-| Core | [`crates/core`](../crates/core/) | Rules that must give the same answer everywhere, such as search matching and sort order. No I/O, so the same code can later run in the browser and on Android. |
+| Core | [`crates/core`](../crates/core/) | Rules that must give the same answer everywhere, such as search matching and sort order. No I/O, so the same code runs on the server and in the browser, and can run on Android. |
 | ffmpeg | [`crates/ffmpeg`](../crates/ffmpeg/) | Runs ffmpeg as a separate process to decode audio and images, so a broken file can't crash the server. |
 | Plugin host | [`crates/plugins`](../crates/plugins/) | Runs plugins in Wasmtime, checks their manifests, and enforces their permissions and limits. |
-| Catalog | [`crates/catalog`](../crates/catalog/) | The device catalog's table definitions. The SQL that reads the catalog is to move here, shared by the server and the browser, which will keep its own copy of each library to work offline. |
-| Web app | [`web`](../web/) | Svelte 5 and SvelteKit, built as static files with no server of its own. |
+| Catalog | [`crates/catalog`](../crates/catalog/) | The device catalog's table definitions and the SQL that reads the catalog (listings, search documents, queue recipes), run by the server and by the browser. It also turns a changed entity into the rows a device stores and back, and builds the snapshot file of a library. |
+| Catalog in the browser | [`crates/catalog-wasm`](../crates/catalog-wasm/) | The catalog crate and SQLite compiled to WebAssembly, so the web app keeps its own copy of each library in the browser and answers from it offline. |
+| Web app | [`web`](../web/) | Svelte 5 and SvelteKit, built as static files with no server of its own. It installs as an app and opens offline. |
 
 ## How data moves
 
@@ -55,22 +56,28 @@ later, on a separate queue, so they never slow down indexing. See
 
 **The change feed.** Every change the scanner makes to a library is also written to that
 library's change feed, in the same transaction. Plugin hooks read the feed from a saved
-position, so a plugin never misses a change, even across restarts. Clients will sync from the
-same feed for offline use: a device starts from a snapshot file of the library, then follows
-the feed, told to pull by a realtime hint. See [`design/database.md`](../design/database.md).
+position, so a plugin never misses a change, even across restarts. The web app syncs from the
+same feed for offline use. Its first sync is a snapshot file of the library, a SQLite database
+the server builds once per library and every account that reaches the library shares. After
+that the app pulls the feed from the snapshot's position, told to pull by a realtime hint when
+something changes and when it reconnects. Each account has a feed of its own for its playlists.
+See [`design/database.md`](../design/database.md).
 
 **Browsing and search.** API requests read from SQLite. Search runs against
 an index each library keeps in memory, using the matching rules in `crates/core`.
-The web app will keep its own copy of each library in SQLite in the browser, read by the same
-queries, so browsing, search and queue building work offline. See
-[ADR 0008](../adr/0008-sqlite-device-catalog.md).
+The web app keeps its own copy of each library in SQLite in the browser, read by the same
+queries. Once a library is on the device the app reads it from there, so browsing, search and
+queue building work offline, and a page updates in place when a change arrives. One tab at a
+time owns that copy and the others ask it. The app also keeps its own files and the art it has
+shown, so it opens offline. See [ADR 0008](../adr/0008-sqlite-device-catalog.md) and
+[`design/web.md`](../design/web.md#catalog-worker).
 
 **Playback.** Audio is streamed straight from the original file, with range requests for
 seeking. When a client reports a finished play (`POST /me/plays`), it's saved along with the
 event plugins receive, so the two can't disagree.
 
 **Realtime.** Each signed-in device holds one WebSocket. The server keeps each account's player
-state, decides which device is playing, and routes remote-control commands to it.
+state, decides which device is playing, and routes remote-control commands to it. It also tells each device when a library it reaches, or the account's own data, has changed, so the device pulls the feed.
 
 ## Rules the code keeps
 
