@@ -10,7 +10,7 @@ use jewelcase_catalog::albums::source;
 use jewelcase_catalog::albums::{self, AlbumSort};
 use serde::Deserialize;
 
-pub use jewelcase_catalog::albums::{Album, AlbumSummary, TAGGED};
+pub use jewelcase_catalog::albums::{Album, AlbumSummary};
 
 use super::credit::ArtistCredit;
 use super::extract::{Path, Query};

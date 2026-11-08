@@ -3,6 +3,8 @@
 //! (`jewelcase_core::Index`), which the server keeps in memory and a device builds from the same
 //! documents.
 
+use std::collections::HashSet;
+
 use jewelcase_core::{Document, Kind, Section as Found};
 use rusqlite::Connection;
 use serde::Serialize;
@@ -12,6 +14,7 @@ use crate::albums::{self, AlbumSummary};
 use crate::artists::{self, ArtistSummary};
 use crate::by_ids::by_ids;
 use crate::page::library_number;
+use crate::tag_filter::{TagFilter, Tagged, Tags};
 use crate::tracks::{self, TrackSummary};
 
 /// The spec's `SearchResponse`.
@@ -88,6 +91,29 @@ pub fn kinds(types: &str) -> Result<Vec<Kind>, Invalid> {
         }
     }
     Ok(kinds)
+}
+
+/// For each kind in `Kind::ALL` order, the IDs of the rows of `library` of it that carry the
+/// tags `filter` names, as each list's own filter links them ([`Tags::ids`]): none for a kind not
+/// in `kinds`. The caller asks only for a filter that names tags; for one that names none every
+/// set is empty.
+pub fn tagged(
+    conn: &Connection,
+    library: i64,
+    filter: &TagFilter,
+    kinds: &[Kind],
+) -> rusqlite::Result<[HashSet<i64>; 3]> {
+    let mut sets: [HashSet<i64>; 3] = Default::default();
+    for &kind in kinds {
+        let tagged: &Tagged = match kind {
+            Kind::Track => &tracks::TAGGED,
+            Kind::Album => &albums::TAGGED,
+            Kind::Artist => &artists::TAGGED,
+        };
+        let ids = Tags::read(conn, library, tagged, filter)?.ids(conn, tagged)?;
+        sets[kind as usize] = ids.unwrap_or_default();
+    }
+    Ok(sets)
 }
 
 /// The spec's name for the section of `kind`.

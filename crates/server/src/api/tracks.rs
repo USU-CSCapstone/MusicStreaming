@@ -8,14 +8,13 @@ use axum::extract::State;
 use jewelcase_catalog::tracks;
 use serde::Deserialize;
 
-#[cfg(test)]
-pub use jewelcase_catalog::tracks::TRACKS;
 pub use jewelcase_catalog::tracks::{
-    CREDITS, LOUDNESS, Loudness, TAGGED, TRACK_NUMBER, Track, TrackOrder, TrackSort, TrackSummary,
-    loudness,
+    CREDITS, LOUDNESS, Loudness, TRACK_NUMBER, Track, TrackOrder, TrackSort, TrackSummary, loudness,
 };
 #[cfg(test)]
 pub use jewelcase_catalog::tracks::{SELECT, list_summary};
+#[cfg(test)]
+pub use jewelcase_catalog::tracks::{TAGGED, TRACKS};
 #[cfg(test)]
 use jewelcase_catalog::tracks::{WITHIN_ALBUM, source};
 

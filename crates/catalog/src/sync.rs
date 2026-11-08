@@ -26,6 +26,8 @@ use rusqlite::{Connection, params_from_iter};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::Id;
+
 /// A row as it travels: its cells by column name.
 pub type Row = Map<String, Value>;
 
@@ -188,11 +190,6 @@ fn is_id(column: &str) -> bool {
     column == "id" || column.ends_with("_id")
 }
 
-/// Reads an ID in its one canonical spelling, as the API does.
-fn parse_id(id: &str) -> Option<i64> {
-    id.parse::<i64>().ok().filter(|n| n.to_string() == id)
-}
-
 /// Reads the rows of the entity `id` of `kind` in `library`, or `None` if there is no such
 /// entity there; `key` is a playlist item's and 0 for every other kind. `conn` may be the
 /// server's database or a device's: both have the device columns, and only those are read. A
@@ -205,7 +202,7 @@ pub fn export(
     id: &str,
     key: i64,
 ) -> rusqlite::Result<Option<Rows>> {
-    let Some(entity) = parse_id(id) else { return Ok(None) };
+    let Some(Id(entity)) = Id::canonical(id) else { return Ok(None) };
     let params = [entity, library, key];
     let mut tables = BTreeMap::new();
     for Part { table, by, order, .. } in kind.parts() {
@@ -258,7 +255,7 @@ fn to_sql(col: &Column, cell: &Value) -> Result<Sql, Error> {
     Ok(match (col.ty.as_str(), cell) {
         (_, Value::Null) => Sql::Null,
         ("INTEGER", Value::String(s)) if is_id(&col.name) => {
-            Sql::Integer(parse_id(s).ok_or(Error::Invalid("an ID is not an ID"))?)
+            Sql::Integer(Id::canonical(s).ok_or(Error::Invalid("an ID is not an ID"))?.0)
         }
         ("INTEGER", Value::Number(n)) if !is_id(&col.name) => {
             Sql::Integer(n.as_i64().ok_or(Error::Invalid("a number is not an integer"))?)
@@ -281,7 +278,7 @@ pub fn apply(conn: &Connection, rows: &Rows) -> Result<(), Error> {
     if rows.tables.keys().any(|name| parts.iter().all(|part| part.table != name)) {
         return Err(Error::Invalid("a table is not one of the entity's"));
     }
-    let id = parse_id(&rows.id).ok_or(Error::Invalid("the entity's ID is not an ID"))?;
+    let Id(id) = Id::canonical(&rows.id).ok_or(Error::Invalid("the entity's ID is not an ID"))?;
     clear(conn, rows.kind, id, rows.key)?;
     for Part { table, shared, .. } in parts {
         let Some(list) = rows.tables.get(*table) else { continue };

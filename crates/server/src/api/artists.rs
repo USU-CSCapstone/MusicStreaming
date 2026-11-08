@@ -10,7 +10,7 @@ use jewelcase_catalog::artists::source;
 use jewelcase_catalog::artists::{self, ArtistSort};
 use serde::Deserialize;
 
-pub use jewelcase_catalog::artists::{Artist, ArtistSummary, TAGGED};
+pub use jewelcase_catalog::artists::{Artist, ArtistSummary};
 
 use super::extract::{Path, Query};
 use super::page::{Order, Page, Request};

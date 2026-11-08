@@ -3,8 +3,6 @@
 //! dedicated worker or in memory (node, the unit tests). Natively this crate is empty.
 #![cfg(target_family = "wasm")]
 
-use std::collections::HashMap;
-
 use jewelcase_catalog::{SCHEMA_VERSION, create_schema};
 use jewelcase_core::Index;
 use rusqlite::{Connection, OpenFlags};
@@ -20,9 +18,10 @@ mod query;
 const VFS: &str = "opfs-sahpool";
 
 /// The device database, held in WebAssembly memory and (for `open`) on OPFS, with the search
-/// index built from it for each library. Call `free()` when done with one.
+/// index built from it once `buildIndex` has run. A file holds one library. Call `free()` when
+/// done with one.
 #[wasm_bindgen]
-pub struct Catalog(Connection, HashMap<i64, Index>);
+pub struct Catalog(Connection, Option<Index>);
 
 #[wasm_bindgen]
 impl Catalog {
@@ -57,7 +56,7 @@ impl Catalog {
     /// Creates the schema in a new database, and checks the version of an existing one. Either way
     /// the feed state tables exist afterwards.
     fn ready(conn: Connection) -> Result<Catalog, JsError> {
-        let catalog = Catalog(conn, HashMap::new());
+        let catalog = Catalog(conn, None);
         match catalog.schema_version()? {
             0 => create_schema(&catalog.0)?,
             SCHEMA_VERSION => {}

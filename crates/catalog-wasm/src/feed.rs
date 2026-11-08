@@ -1,7 +1,7 @@
-//! Writing the device database from the feeds: rows applied at once, or changes staged a page at a
-//! time and applied in one transaction at the head (`design/general.md` §3), with the position
-//! each feed has reached. The staging and the positions are tables of the database file but not
-//! of the device schema, which a downloaded snapshot replaces whole.
+//! Writing the device database from the feeds: changes staged a page at a time and applied in one
+//! transaction at the head (`design/general.md` §3), with the position each feed has reached. The
+//! staging and the positions are tables of the database file but not of the device schema, which
+//! a downloaded snapshot replaces whole.
 
 use std::collections::BTreeMap;
 
@@ -45,17 +45,6 @@ enum Op {
 
 #[wasm_bindgen]
 impl Catalog {
-    /// Applies `rows` (a JSON array of an entity's rows, as the feed carries them) in one
-    /// transaction, so a failure leaves none of them applied.
-    pub fn apply(&self, rows: &str) -> Result<(), JsError> {
-        let rows: Vec<Rows> = serde_json::from_str(rows)?;
-        let tx = self.0.unchecked_transaction()?;
-        for rows in &rows {
-            sync::apply(&tx, rows)?;
-        }
-        Ok(tx.commit()?)
-    }
-
     /// Keeps `changes` (a JSON array of a feed's changes, such as a page of the feed's response)
     /// for `feed` to apply later, replacing any already kept at the same positions. Nothing a
     /// reader sees changes until `commit`.

@@ -27,6 +27,36 @@ const parity = (name: string) =>
 		readFileSync(new URL(`../../../crates/catalog/parity/${name}`, import.meta.url), 'utf8')
 	);
 
+/** An entity's rows in `library.json`, as the parity test exported them from the server. */
+type Rows = { kind: string; id: string; key: number; tables: Record<string, unknown[]> };
+
+/**
+ * A device database built from `library.json` as a device syncs it: each entity's rows become an
+ * upsert in its feed's response, staged and committed, the playlists from the account feed and
+ * the rest from the library's. The search index is built.
+ */
+function device(): Catalog {
+	const catalog = Catalog.openInMemory();
+	const feeds: Record<string, Rows[]> = { 'library:1': [], account: [] };
+	for (const rows of parity('library.json') as Rows[]) {
+		feeds[rows.kind.startsWith('playlist') ? 'account' : 'library:1'].push(rows);
+	}
+	for (const [feed, entities] of Object.entries(feeds)) {
+		const changes = entities.map(({ kind, id, key, tables }, at) => ({
+			seq: at + 1,
+			op: 'upsert',
+			kind,
+			id,
+			key,
+			rows: tables
+		}));
+		catalog.stage(feed, JSON.stringify(changes));
+		catalog.commit(feed, BigInt(changes.length));
+	}
+	catalog.buildIndex('1');
+	return catalog;
+}
+
 /** One golden case: a query, its parameters and the JSON the server answered. */
 type Case = { query: string; params: Record<string, unknown>; answer: unknown };
 
@@ -43,9 +73,7 @@ function ask(catalog: Catalog, { query, params }: Case): unknown {
 }
 
 test('catalog-wasm reproduces the golden parity file', () => {
-	const catalog = Catalog.openInMemory();
-	catalog.apply(JSON.stringify(parity('library.json')));
-	catalog.buildIndex('1');
+	const catalog = device();
 	let cases = 0;
 	for (const file of ['tracks', 'browse', 'playlists', 'search', 'recipes']) {
 		for (const golden of parity(`${file}.json`) as Case[]) {
@@ -72,7 +100,7 @@ test('catalog-wasm refuses what it cannot answer with an error', () => {
 	expect(query('resolveRecipe', { recipe: { type: 'search', q: 'a', filters: {} } })).toThrow(
 		'search index is not built'
 	);
-	expect(() => catalog.apply('[{"kind":"track"}]')).toThrow();
+	expect(() => catalog.stage('library:1', '[{"kind":"track"}]')).toThrow();
 	catalog.free();
 });
 
@@ -138,9 +166,7 @@ test('catalog-wasm applies staged changes only at commit, with the feed position
 });
 
 test('catalog-wasm takes the API defaults for the parameters a request leaves out', () => {
-	const catalog = Catalog.openInMemory();
-	catalog.apply(JSON.stringify(parity('library.json')));
-	catalog.buildIndex('1');
+	const catalog = device();
 	const ask = (name: string, params: object) =>
 		JSON.parse(catalog.query('1', '1', name, JSON.stringify(params)));
 	const golden = (name: string, params: object) =>
@@ -160,9 +186,7 @@ test('catalog-wasm takes the API defaults for the parameters a request leaves ou
 });
 
 test('catalog-wasm search keeps only what carries the tags', () => {
-	const catalog = Catalog.openInMemory();
-	catalog.apply(JSON.stringify(parity('library.json')));
-	catalog.buildIndex('1');
+	const catalog = device();
 	const ids = (params: object) =>
 		JSON.parse(
 			catalog.query('1', '1', 'search', JSON.stringify({ q: 'a', ...params }))

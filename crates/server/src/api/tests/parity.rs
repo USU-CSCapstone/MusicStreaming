@@ -6,24 +6,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use jewelcase_catalog::albums::{self, AlbumSort};
-use jewelcase_catalog::artists::{self, ArtistSort};
-use jewelcase_catalog::playlists::{self, PlaylistSort};
-use jewelcase_catalog::recipes::{self, Recipe};
-use jewelcase_catalog::search;
 use jewelcase_catalog::sync::{Kind, Rows, apply, export};
-use jewelcase_catalog::tag_filter::Tags;
-use jewelcase_catalog::tags::{self, TagSort};
-use jewelcase_catalog::tracks::{self, TrackOrder, TrackSort};
-use jewelcase_catalog::{AnyId, Id, create_schema};
-use jewelcase_core::{Index, Kind as Found, list_hash};
+use jewelcase_catalog::{create_schema, query, search};
+use jewelcase_core::Index;
 use rusqlite::Connection;
-use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::super::credit::ArtistCredit;
-use super::super::page::{Order, Request};
-use super::super::tag_filter::TagFilter;
 use super::super::testing::catalog;
 use crate::db::Database;
 use crate::db::testing::User;
@@ -32,208 +20,13 @@ use crate::db::testing::User;
 const LIBRARY: i64 = 1;
 const USER: i64 = 1;
 
-/// A `listTracks` request's parameters, as the API spells them in a query.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Params {
-    sort: TrackSort,
-    order: Order,
-    album_id: Option<AnyId>,
-    artist_id: Option<AnyId>,
-    artist_credit: Option<ArtistCredit>,
-    tag_all: Option<String>,
-    tag_any: Option<String>,
-    cursor: Option<String>,
-    limit: u32,
-}
-
-/// A `listAlbums` request's parameters, as the API spells them in a query.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct AlbumParams {
-    sort: AlbumSort,
-    order: Order,
-    artist_id: Option<AnyId>,
-    artist_credit: Option<ArtistCredit>,
-    tag_all: Option<String>,
-    tag_any: Option<String>,
-    cursor: Option<String>,
-    limit: u32,
-}
-
-/// A `listArtists` request's parameters, as the API spells them in a query.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ArtistParams {
-    sort: ArtistSort,
-    order: Order,
-    tag_all: Option<String>,
-    tag_any: Option<String>,
-    cursor: Option<String>,
-    limit: u32,
-}
-
-/// A `listTags` request's parameters, as the API spells them in a query.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct TagParams {
-    sort: TagSort,
-    order: Order,
-    r#type: Option<String>,
-    q: Option<String>,
-    cursor: Option<String>,
-    limit: u32,
-}
-
-/// A `listPlaylists` request's parameters, as the API spells them in a query.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PlaylistParams {
-    sort: PlaylistSort,
-    order: Order,
-    q: Option<String>,
-    cursor: Option<String>,
-    limit: u32,
-}
-
-/// A `search` request's parameters, as the API spells them in a query.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SearchParams {
-    q: String,
-    types: Option<String>,
-    section_limit: usize,
-}
-
-/// The index the library's documents make, which the server and a device each build for
-/// themselves.
-fn index(conn: &Connection) -> Index {
-    Index::build(search::documents(conn, LIBRARY).unwrap())
-}
-
-/// The ID `params` holds under `key`, as the API's path would carry it.
-fn path_id(params: &Value, key: &str) -> i64 {
-    Id::canonical(params[key].as_str().unwrap()).unwrap().0
-}
-
-/// Answers the query `name` with `params` from `conn`, as the API would send it.
+/// Answers the query `name` with `params` from `conn`, as the API would send it, or `{error}`
+/// where it is refused. The server and a device each build their search index from their own
+/// documents.
 fn answer(conn: &Connection, name: &str, params: &Value) -> Value {
-    match name {
-        "listTracks" => {
-            let p: Params = serde_json::from_value(params.clone()).unwrap();
-            let (sort, order) =
-                TrackOrder { sort: p.sort, order: p.order }.keyset(p.album_id.is_some());
-            let request = Request::new(sort, order, p.cursor, Some(p.limit)).unwrap();
-            let tags = TagFilter::new(p.tag_all.as_deref(), p.tag_any.as_deref()).unwrap();
-            let page = tracks::list(
-                conn,
-                LIBRARY,
-                request,
-                p.album_id,
-                p.artist_id,
-                p.artist_credit.unwrap_or_default(),
-                &tags,
-            )
-            .unwrap();
-            serde_json::to_value(page).unwrap()
-        }
-        "listTracksByIds" => {
-            let ids: Vec<i64> = params["ids"]
-                .as_str()
-                .unwrap()
-                .split(',')
-                .filter_map(|id| AnyId::from(id).0)
-                .collect();
-            serde_json::to_value(tracks::by_ids(conn, LIBRARY, &ids).unwrap()).unwrap()
-        }
-        "getTrack" => {
-            serde_json::to_value(tracks::track(conn, LIBRARY, path_id(params, "trackId")).unwrap())
-                .unwrap()
-        }
-        "listAlbums" => {
-            let p: AlbumParams = serde_json::from_value(params.clone()).unwrap();
-            let request = Request::new(p.sort.sort(), p.order, p.cursor, Some(p.limit)).unwrap();
-            let tags = TagFilter::new(p.tag_all.as_deref(), p.tag_any.as_deref()).unwrap();
-            let credit = p.artist_credit.unwrap_or_default();
-            let page = albums::list(conn, LIBRARY, request, p.artist_id, credit, &tags).unwrap();
-            serde_json::to_value(page).unwrap()
-        }
-        "getAlbum" => {
-            serde_json::to_value(albums::album(conn, LIBRARY, path_id(params, "albumId")).unwrap())
-                .unwrap()
-        }
-        "listArtists" => {
-            let p: ArtistParams = serde_json::from_value(params.clone()).unwrap();
-            let request = Request::new(p.sort.sort(), p.order, p.cursor, Some(p.limit)).unwrap();
-            let tags = TagFilter::new(p.tag_all.as_deref(), p.tag_any.as_deref()).unwrap();
-            serde_json::to_value(artists::list(conn, LIBRARY, request, &tags).unwrap()).unwrap()
-        }
-        "getArtist" => serde_json::to_value(
-            artists::artist(conn, LIBRARY, path_id(params, "artistId")).unwrap(),
-        )
-        .unwrap(),
-        "listTagTypes" => serde_json::to_value(tags::types(conn, LIBRARY).unwrap()).unwrap(),
-        "listTags" => {
-            let p: TagParams = serde_json::from_value(params.clone()).unwrap();
-            let request = Request::new(p.sort.sort(), p.order, p.cursor, Some(p.limit)).unwrap();
-            let page = tags::list(conn, LIBRARY, request, p.r#type, p.q.as_deref()).unwrap();
-            serde_json::to_value(page).unwrap()
-        }
-        "getTag" => {
-            serde_json::to_value(tags::find(conn, LIBRARY, path_id(params, "tagId")).unwrap())
-                .unwrap()
-        }
-        "listPlaylists" => {
-            let p: PlaylistParams = serde_json::from_value(params.clone()).unwrap();
-            let request = Request::new(p.sort.sort(), p.order, p.cursor, Some(p.limit)).unwrap();
-            let page = playlists::list(conn, USER, LIBRARY, request, p.q.as_deref()).unwrap();
-            serde_json::to_value(page).unwrap()
-        }
-        "getPlaylist" => {
-            let id = path_id(params, "playlistId");
-            serde_json::to_value(playlists::get(conn, USER, LIBRARY, id).unwrap()).unwrap()
-        }
-        "listPlaylistItems" => {
-            let id = path_id(params, "playlistId");
-            let cursor = params["cursor"].as_str();
-            let limit = params["limit"].as_u64().map(|limit| u32::try_from(limit).unwrap());
-            match playlists::items(conn, USER, LIBRARY, id, cursor, limit) {
-                Ok(page) => serde_json::to_value(page).unwrap(),
-                Err(error) => json!({ "error": error.to_string() }),
-            }
-        }
-        "search" => {
-            let p: SearchParams = serde_json::from_value(params.clone()).unwrap();
-            let kinds = p.types.as_deref().map_or_else(|| Ok(Found::ALL.to_vec()), search::kinds);
-            let found =
-                index(conn).search_within(&p.q, &kinds.unwrap(), p.section_limit, |_, _| true);
-            serde_json::to_value(search::response(conn, LIBRARY, p.q, found).unwrap()).unwrap()
-        }
-        "resolveRecipe" => {
-            let recipe: Recipe = serde_json::from_value(params["recipe"].clone()).unwrap();
-            let tags = recipe.check().unwrap();
-            // What the server's search index and tag sets give for a search recipe.
-            let ranked = |q: &str| {
-                let tagged = Tags::read(conn, LIBRARY, &tracks::TAGGED, &tags)
-                    .unwrap()
-                    .ids(conn, &tracks::TAGGED)
-                    .unwrap();
-                let found = index(conn).search_within(q, &[Found::Track], usize::MAX, |_, id| {
-                    tagged.as_ref().is_none_or(|tagged| tagged.contains(&id))
-                });
-                found.into_iter().next().map(|section| section.ids).unwrap_or_default()
-            };
-            match recipes::resolve(conn, USER, LIBRARY, &recipe, &tags, ranked).unwrap() {
-                Some((ids, stored)) => json!({
-                    "ids": ids.iter().map(u64::to_string).collect::<Vec<_>>(),
-                    "hash": list_hash(&ids),
-                    "recipe": stored,
-                }),
-                None => Value::Null,
-            }
-        }
-        _ => panic!("unknown query {name}"),
-    }
+    let index = Index::build(search::documents(conn, LIBRARY).unwrap());
+    query::answer(conn, USER, LIBRARY, name, params.clone(), Some(&index))
+        .unwrap_or_else(|error| json!({ "error": error.to_string() }))
 }
 
 /// Every device row of `LIBRARY`, as the library feed carries each entity.

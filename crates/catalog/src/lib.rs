@@ -13,6 +13,7 @@ mod id;
 mod json;
 pub mod page;
 pub mod playlists;
+pub mod query;
 pub mod recipes;
 pub mod refs;
 pub mod search;
