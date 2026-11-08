@@ -53,7 +53,11 @@ function listTracks(page: Page) {
 				};
 				// Until the owner has opened the files nobody answers; an owner says so when it does.
 				const timer = setInterval(send, 250);
-				setTimeout(() => clearInterval(timer), 20_000);
+				setTimeout(() => {
+					clearInterval(timer);
+					channel.close();
+					reject(new Error('no catalog owner answered'));
+				}, 20_000);
 				send();
 			})
 	);
