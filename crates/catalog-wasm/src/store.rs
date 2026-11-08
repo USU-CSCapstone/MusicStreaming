@@ -47,6 +47,17 @@ pub async fn store_reserve(files: usize) -> Result<(), JsError> {
     Ok(pool().await?.ensure_capacity(files).await?)
 }
 
+/// Releases the pool's OPFS handles so another tab's worker can take them at once. The worker
+/// must not use the pool afterwards. Close every `Catalog` first. Does nothing if the pool was
+/// never installed.
+#[wasm_bindgen(js_name = storePause)]
+pub fn store_pause() -> Result<(), JsError> {
+    if let Some(pool) = POOL.get() {
+        pool.pause()?;
+    }
+    Ok(())
+}
+
 /// A database file being streamed onto OPFS, which `finish` publishes and dropping aborts.
 #[wasm_bindgen]
 pub struct Import(DbImport<OpfsSAHImportTarget<'static>>, Sha256);

@@ -62,6 +62,11 @@ export class Harness {
 		await this.#sync?.signOut();
 	}
 
+	/** Whether a snapshot is being downloaded or installed. */
+	busy() {
+		return this.#sync!.busy();
+	}
+
 	/** The IDs of the libraries on the device. */
 	libraries() {
 		return [...(this.#sync?.catalogs.keys() ?? [])].sort();

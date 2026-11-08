@@ -12,6 +12,16 @@ export const load: LayoutLoad = async ({ fetch, route, untrack }) => {
 	const { setupRequired } = await getServerInfo(fetch);
 	const at = untrack(() => route.id);
 	if (setupRequired !== (at === '/setup')) redirect(307, resolve(setupRequired ? '/setup' : '/'));
+	// The login page is for someone with no session: where the session is still good, going on
+	// would otherwise delete the device's catalog under it.
+	if (
+		at === '/login' &&
+		(await getMe(fetch).then(
+			() => true,
+			() => false
+		))
+	)
+		redirect(307, resolve('/'));
 	if (setupRequired || at === '/login') return { me: null, library: null, tagTypes: [] };
 
 	// Without a session, either answers `401`, which redirects to the login page.

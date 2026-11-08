@@ -21,20 +21,44 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 					api: data.api,
 					user: data.user,
 					report: (r) => post({ type: 'error', ...r })
-				})
+				}),
+			(error) => {
+				post({ type: 'error', ...describe(error) });
+				return undefined;
+			}
 		);
 		return;
 	}
 	work = work.then(async (sync) => {
+		// Without a module, requests fail and `started` is never sent, so the page gives the lock up.
+		if (!sync) {
+			if ('id' in data) post({ type: 'answer', id: data.id, error: 'the catalog is not running' });
+			else if (data.type === 'pause') post({ type: 'paused' });
+			return sync;
+		}
 		try {
-			if (data.type === 'start') await sync?.start();
-			else if (data.type === 'message') sync?.message(data.message);
-			else {
-				await sync?.signOut();
-				post({ type: 'signedOut' });
+			if (data.type === 'start') {
+				await sync.start().catch((error) => post({ type: 'error', ...describe(error) }));
+				post({ type: 'started' });
+			} else if (data.type === 'message') sync.message(data.message);
+			else if (data.type === 'pause') {
+				await sync.pause();
+				post({ type: 'paused' });
+			} else if (data.type === 'busy') {
+				post({ type: 'answer', id: data.id, result: sync.busy() ? '1' : '' });
+			} else if (data.type === 'query') {
+				post({
+					type: 'answer',
+					id: data.id,
+					result: await sync.query(data.library, data.name, data.params, data.offline)
+				});
+			} else {
+				await sync.signOut();
+				post({ type: 'answer', id: data.id, result: '' });
 			}
 		} catch (error) {
-			post({ type: 'error', ...describe(error) });
+			if ('id' in data) post({ type: 'answer', id: data.id, error: describe(error).message });
+			else post({ type: 'error', ...describe(error) });
 		}
 		return sync;
 	});

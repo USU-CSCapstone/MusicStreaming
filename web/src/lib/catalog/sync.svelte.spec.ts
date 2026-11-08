@@ -503,6 +503,7 @@ describe('catalog sync', () => {
 		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
 		await expect.poll(() => h.api.bodyHeld()).toBe(true);
 
+		expect(await h.busy()).toBe(true);
 		expect(await total('listTracks')).toBe(6);
 		expect(await h.files()).toHaveLength(1);
 		await h.api.setFeed('1', [tag(11, '90', 'Rock')], 11);
@@ -512,6 +513,7 @@ describe('catalog sync', () => {
 
 		await h.api.releaseBody();
 		await h.idle();
+		expect(await h.busy()).toBe(false);
 		expect(await h.libraries()).toEqual(['1', '2']);
 		expect(await h.files()).toHaveLength(2);
 	});

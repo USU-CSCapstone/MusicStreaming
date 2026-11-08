@@ -3,6 +3,7 @@
 // page's side; `protocol.ts` is what they say.
 
 import init from '$lib/core-wasm/jewelcase_core_wasm.js';
+import { CatalogRouter } from '$lib/catalog/router';
 import { QueueStore } from './store';
 import type { FromWorker, ToWorker } from './protocol';
 
@@ -19,6 +20,7 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 			() =>
 				new QueueStore({
 					api: data.api,
+					catalog: new CatalogRouter(),
 					changed: (summary) => post({ type: 'state', summary }),
 					refused: (refusal) => post({ type: 'refused', refusal })
 				})

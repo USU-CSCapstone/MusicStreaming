@@ -10,6 +10,7 @@ import {
 	Import,
 	schemaVersion,
 	storeNames,
+	storePause,
 	storeRemove,
 	storeReserve
 } from '$lib/catalog-wasm/jewelcase_catalog_wasm.js';
@@ -157,6 +158,8 @@ export class CatalogSync {
 	#applying = new Map<Catalog, Promise<void>>();
 	/** The files whose apply failed part-way, which answer nothing until they are replaced. */
 	#broken = new WeakSet<Catalog>();
+	/** Bootstraps under way: snapshot downloads that a stop would throw away. */
+	#booting = 0;
 	/** Pool operations queued one behind another: a transfer holds the whole pool. */
 	#queue: Promise<unknown> = Promise.resolve();
 
@@ -253,6 +256,7 @@ export class CatalogSync {
 	 * error is still thrown.
 	 */
 	async query(library: string, name: string, params: object, offline = false) {
+		await this.#queue;
 		let catalog = this.catalogs.get(library);
 		if (catalog && !offline && (this.#applying.has(catalog) || this.#outdated.has(library))) {
 			throw new Error('the library is being updated on this device');
@@ -291,6 +295,15 @@ export class CatalogSync {
 		await this.idle();
 		for (const catalog of this.catalogs.values()) catalog.free();
 		this.catalogs.clear();
+	}
+
+	/**
+	 * Closes and releases the pool to another tab's worker, which this one must not outlive. The
+	 * files stay.
+	 */
+	async pause() {
+		await this.close();
+		storePause();
 	}
 
 	/**
@@ -411,6 +424,7 @@ export class CatalogSync {
 						rows.every((row) => String(row.library_id) === id)
 					)
 			);
+			await this.#queue;
 			catalog.stage(ACCOUNT, JSON.stringify(mine));
 			if (page.next >= page.head) {
 				await this.#apply(catalog, ACCOUNT, BigInt(page.next), stale);
@@ -501,6 +515,7 @@ export class CatalogSync {
 			const page = await this.#page(response);
 			if (stale()) return 'current';
 			pulled += page.changes.length;
+			await this.#queue;
 			if (!fresh && pulled > this.#entities(id, catalog) * REDOWNLOAD_SHARE) return 'far';
 			catalog.stage(LIBRARY, JSON.stringify(page.changes));
 			if (page.next >= page.head) {
@@ -609,6 +624,21 @@ export class CatalogSync {
 		return undefined;
 	}
 
+	/** Whether a snapshot is being downloaded or installed, which stopping now would waste. */
+	busy() {
+		return this.#booting > 0;
+	}
+
+	/** Bootstraps `id`, counting it as under way; see [`#install`](#install). */
+	async #bootstrap(id: string, forced: boolean) {
+		this.#booting++;
+		try {
+			return await this.#install(id, forced);
+		} finally {
+			this.#booting--;
+		}
+	}
+
 	/**
 	 * Downloads a library's snapshot, imports it as a new file, adds the library's playlists to
 	 * it, and swaps it in for any copy the library has. Nothing shows until the swap. Undefined
@@ -616,7 +646,7 @@ export class CatalogSync {
 	 * copy's own position is not imported: it is asked for again while the server builds a newer
 	 * one, and the copy is returned if none comes.
 	 */
-	async #bootstrap(id: string, forced: boolean) {
+	async #install(id: string, forced: boolean) {
 		const existing = this.catalogs.get(id);
 		const generation = (await this.#names()).reduce((latest, name) => {
 			const match = FILE.exec(name);
@@ -655,6 +685,7 @@ export class CatalogSync {
 			if (!(await this.#catchUpAccount(id, catalog, () => this.#closed))) {
 				throw new Error('the account feed refused a start from the beginning');
 			}
+			await this.#queue;
 			// A new file stages nothing for these, so each is done in one call.
 			catalog.commit(LIBRARY, BigInt(seq), APPLY_CHUNK);
 			catalog.commit(OWNER, BigInt(this.#user), APPLY_CHUNK);
