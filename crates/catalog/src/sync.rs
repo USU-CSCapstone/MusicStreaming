@@ -33,6 +33,8 @@ pub type Row = Map<String, Value>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Kind {
+    /// The library's own counts.
+    Library,
     Artist,
     Album,
     Track,
@@ -88,6 +90,8 @@ const TRACK: &[Part] = &[
     shared("images", "id = (SELECT image_id FROM tracks WHERE id = ?1 AND library_id = ?2)"),
 ];
 
+const LIBRARY: &[Part] = &[own("libraries", "id = ?1", "id")];
+
 const PLAYLIST: &[Part] = &[own("playlists", "id = ?1", "id")];
 
 const PLAYLIST_ITEM: &[Part] = &[own("playlist_items", "playlist_id = ?1 AND key = ?3", "key")];
@@ -102,6 +106,7 @@ impl Kind {
     /// and a tag's type travel with it.
     fn parts(self) -> &'static [Part] {
         match self {
+            Kind::Library => LIBRARY,
             Kind::Artist => ARTIST,
             Kind::Album => ALBUM,
             Kind::Track => TRACK,
@@ -206,7 +211,12 @@ pub fn export(
     for Part { table, by, order, .. } in kind.parts() {
         let cols = columns(table);
         let names: Vec<&str> = cols.iter().map(|c| c.name.as_str()).collect();
-        let scope = if *table == "tag_types" { "" } else { " AND library_id = ?2" };
+        let scope = match *table {
+            "tag_types" => "",
+            // A library's row is its own entity: the entity must be the library asked for.
+            "libraries" => " AND id = ?2",
+            _ => " AND library_id = ?2",
+        };
         let sql =
             format!("SELECT {} FROM {table} WHERE {by}{scope} ORDER BY {order}", names.join(", "));
         let mut stmt = conn.prepare_cached(&sql)?;

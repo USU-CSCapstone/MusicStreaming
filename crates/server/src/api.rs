@@ -8,8 +8,6 @@ mod authenticate;
 mod catalog_snapshot;
 mod changes;
 mod connections;
-mod credit;
-mod cursor;
 mod devices;
 mod extract;
 mod health;
@@ -31,13 +29,11 @@ mod problem;
 mod queue;
 mod realtime;
 mod recent_searches;
-mod refs;
 mod routes;
 mod scope;
 mod search;
 mod session;
 mod setup;
-mod tag_filter;
 mod tags;
 #[cfg(test)]
 pub(crate) mod testing;
@@ -52,6 +48,7 @@ use axum::Router;
 use axum::extract::{DefaultBodyLimit, FromRef};
 use axum::middleware;
 use axum::routing::{MethodRouter, any, get, post};
+use jewelcase_catalog::{credit, cursor, refs, tag_filter};
 use tower_http::timeout::RequestBodyDeadlineLayer;
 
 pub use catalog_snapshot::Snapshots;
@@ -174,6 +171,7 @@ mod tests {
 
     mod benchmark;
     mod end_to_end;
+    mod parity;
     mod spec;
 
     #[tokio::test]

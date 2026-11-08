@@ -78,6 +78,14 @@ impl Table {
             filter += &format!(" AND {condition}");
             params.extend(more);
         }
-        Ok(Source { select: self.select, from, joins: self.joins, filter, params, total })
+        Ok(Source {
+            select: self.select,
+            from,
+            joins: self.joins,
+            filter,
+            params,
+            total,
+            counting: None,
+        })
     }
 }

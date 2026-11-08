@@ -94,7 +94,7 @@ fn tag_filter(filters: &Map<String, Value>) -> Result<TagFilter, Problem> {
     let Filters { tag_all, tag_any } = serde_json::from_value(Value::Object(filters.clone()))
         .map_err(|e| Problem::invalid(format!("A recipe's filters can only be tags: {e}")))?;
     let join = |ids: Vec<String>| (!ids.is_empty()).then(|| ids.join(","));
-    TagFilter::new(join(tag_all).as_deref(), join(tag_any).as_deref())
+    Ok(TagFilter::new(join(tag_all).as_deref(), join(tag_any).as_deref())?)
 }
 
 impl Recipe {

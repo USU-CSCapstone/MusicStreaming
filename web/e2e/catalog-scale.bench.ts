@@ -71,7 +71,8 @@ for (const { name, label, throttled } of runs) {
 				'console',
 				(message) => message.text().startsWith('progress') && console.log(message.text())
 			);
-			await page.goto(`http://localhost:${PORT}/${throttled ? '?json=0' : ''}`);
+			const skipJson = throttled || process.env.SCALE_JSON === '0';
+			await page.goto(`http://localhost:${PORT}/${skipJson ? '?json=0' : ''}`);
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			const results = await page.evaluate(() => (window as any).runBench());
 			console.log(`\n=== ${label} ===\n${results}\n`);

@@ -178,6 +178,13 @@ impl From<DbError> for Problem {
     }
 }
 
+impl From<jewelcase_catalog::Invalid> for Problem {
+    /// A `422 validation_failed` with the catalog's explanation.
+    fn from(invalid: jewelcase_catalog::Invalid) -> Problem {
+        Problem::invalid(invalid.0)
+    }
+}
+
 impl From<rusqlite::Error> for Problem {
     /// A database error, logged and answered as a `500 internal`, as a [`DbError`] is.
     fn from(error: rusqlite::Error) -> Problem {

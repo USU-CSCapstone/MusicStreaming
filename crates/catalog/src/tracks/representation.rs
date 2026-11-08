@@ -11,12 +11,11 @@ use jewelcase_core::SortRow;
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
-use crate::api::Id;
-use crate::api::refs::{
+use crate::refs::{
     AlbumRef, Credit, ImageRef, TagsByType, artists_json, availability, placeholder, tags_json,
 };
-use crate::api::time::serialize_rfc3339;
-use crate::db::{Json, by_ids};
+use crate::time::serialize_rfc3339;
+use crate::{Id, Json, by_ids::by_ids};
 
 /// The spec's `TrackSummary`, without `personal`. A full `Track` has the same fields with more
 /// `audio`, so the audio type is a parameter.

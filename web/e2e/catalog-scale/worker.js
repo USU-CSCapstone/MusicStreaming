@@ -273,6 +273,74 @@ async function queryPhase(rows, db, spawned) {
 		]);
 	}
 
+	// The shared catalog SQL's totals (`crates/catalog`): a single tag filtering alone has its
+	// stored count, an unfiltered list the library's, and a filter of several groups counts from its
+	// smallest group instead of walking the library.
+	const [genre, mood] = tags
+		.filter(([, name]) => name.startsWith('Genre') || name === 'Mood 100000ppm')
+		.sort(([, a], [, b]) => (a < b ? 1 : -1))
+		.map(([id]) => id);
+	const exists =
+		'EXISTS (SELECT 1 FROM track_tags WHERE track_id = t.id AND tag_id = CAST(? AS INTEGER))';
+	rows.push(
+		[
+			section,
+			'total, unfiltered list (stored)',
+			timed(
+				() => catalog.query('SELECT CAST(track_count AS TEXT) FROM libraries WHERE id = 1', []),
+				20
+			)
+		],
+		[
+			section,
+			'total, one tag alone (stored): genre 0',
+			timed(
+				() =>
+					catalog.query(
+						'SELECT CAST(track_count AS TEXT) FROM tags WHERE library_id = 1 AND id = CAST(? AS INTEGER)',
+						[genre]
+					),
+				20
+			)
+		],
+		[
+			section,
+			'total, one tag alone (stored): mood 100000ppm',
+			timed(
+				() =>
+					catalog.query(
+						'SELECT CAST(track_count AS TEXT) FROM tags WHERE library_id = 1 AND id = CAST(? AS INTEGER)',
+						[mood]
+					),
+				20
+			)
+		],
+		[
+			section,
+			'total, genre 0 + mood 100000ppm, counted from the smaller group',
+			timed(
+				() =>
+					catalog.query(
+						`SELECT CAST(count(*) AS TEXT) FROM (SELECT track_id AS id FROM track_tags WHERE tag_id = CAST(? AS INTEGER)) lead CROSS JOIN tracks t ON t.id = lead.id WHERE t.library_id = 1 AND ${exists}`,
+						[mood, genre]
+					),
+				10
+			)
+		],
+		[
+			section,
+			'  same, walking the library and checking each track (before counting from the smallest group)',
+			timed(
+				() =>
+					catalog.query(
+						`SELECT CAST(count(*) AS TEXT) FROM tracks t WHERE t.library_id = 1 AND ${exists} AND ${exists}`,
+						[genre, mood]
+					),
+				3
+			)
+		]
+	);
+
 	const albumTracks = `SELECT json_group_array(${TRACK}) FROM (SELECT * FROM tracks WHERE album_id = CAST(? AS INTEGER) ORDER BY ${ALBUM_ORDER})`;
 	const albums = JSON.parse(
 		catalog.query(

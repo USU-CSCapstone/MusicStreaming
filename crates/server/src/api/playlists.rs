@@ -117,6 +117,7 @@ fn source(user: i64, library: i64, q: Option<&str>) -> Source {
         filter,
         params,
         total: Total::Counted,
+        counting: None,
     }
 }
 

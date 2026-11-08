@@ -11,7 +11,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL;
 use rusqlite::types::Value;
 
-use super::Problem;
+use crate::Invalid;
 
 const NULL: u8 = 0;
 const INTEGER: u8 = 1;
@@ -49,9 +49,10 @@ pub fn encode(label: &str, after: &[Value]) -> String {
 }
 
 /// Reads a cursor made by [`encode`] with the same `label` and `columns` sort values. Anything
-/// else is `422 validation_failed`.
-pub fn decode(text: &str, label: &str, columns: usize) -> Result<Vec<Value>, Problem> {
-    read(text, label, columns).ok_or_else(|| Problem::invalid("cursor is not valid for this list"))
+/// else is [`Invalid`].
+pub fn decode(text: &str, label: &str, columns: usize) -> Result<Vec<Value>, Invalid> {
+    read(text, label, columns)
+        .ok_or_else(|| Invalid("cursor is not valid for this list".to_owned()))
 }
 
 /// [`decode`], with `None` for anything that is not such a cursor.
@@ -131,10 +132,7 @@ mod tests {
         ]
     }
 
-    /// The `code` field of `problem`'s body.
-    fn code(problem: Problem) -> serde_json::Value {
-        serde_json::to_value(problem).unwrap()["code"].clone()
-    }
+    const REFUSED: &str = "cursor is not valid for this list";
 
     #[test]
     fn round_trips_every_sort_value() {
@@ -158,8 +156,8 @@ mod tests {
         for (label, columns) in
             [("albums.name.desc", 5), ("tracks.name.asc", 5), (LABEL, 4), (LABEL, 6)]
         {
-            let problem = decode(&cursor, label, columns).unwrap_err();
-            assert_eq!(code(problem), "validation_failed", "{label} {columns}");
+            let invalid = decode(&cursor, label, columns).unwrap_err();
+            assert_eq!(invalid.0, REFUSED, "{label} {columns}");
         }
     }
 
@@ -183,8 +181,8 @@ mod tests {
             (label_then(&[4, 0xff, 0xff, 0xff, 0xff]), 1), // a length past the end
         ];
         for (text, columns) in cases {
-            let problem = decode(&text, LABEL, columns).unwrap_err();
-            assert_eq!(code(problem), "validation_failed", "{text:?}");
+            let invalid = decode(&text, LABEL, columns).unwrap_err();
+            assert_eq!(invalid.0, REFUSED, "{text:?}");
         }
     }
 }

@@ -5,6 +5,15 @@
 -- row carrying its library_id. Counts the server keeps by trigger arrive as plain columns, and
 -- foreign keys are left to the server, which has checked them.
 
+-- The library's own counts, which the unfiltered lists' totals and the tag filters' plans read.
+-- One row per library, kept by the library feed's `library` changes; no name, root or path.
+CREATE TABLE libraries (
+    id           INTEGER PRIMARY KEY,
+    track_count  INTEGER NOT NULL DEFAULT 0,
+    album_count  INTEGER NOT NULL DEFAULT 0,
+    artist_count INTEGER NOT NULL DEFAULT 0
+) STRICT;
+
 CREATE TABLE images (
     id          INTEGER PRIMARY KEY,
     library_id  INTEGER NOT NULL,

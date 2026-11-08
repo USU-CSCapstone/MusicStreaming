@@ -1467,9 +1467,11 @@ name = "jewelcase-catalog"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "jewelcase-core",
  "rusqlite",
  "serde",
  "serde_json",
+ "time",
 ]
 
 [[package]]

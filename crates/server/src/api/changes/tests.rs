@@ -60,14 +60,18 @@ async fn after_zero_pages_through_every_entity_exactly_once() {
     .await;
     for limit in [1, 2, 3, 500] {
         let seen = walk(&app, 1, limit).await;
-        let kinds = ["artist", "album", "track", "track", "tag"];
-        let ids = ["10", "101", "1001", "1002", "30"];
+        let kinds = ["library", "artist", "album", "track", "track", "tag"];
+        let ids = ["1", "10", "101", "1001", "1002", "30"];
         let expected: Vec<(String, String)> =
             kinds.iter().zip(ids).map(|(k, i)| ((*k).to_owned(), i.to_owned())).collect();
-        assert_eq!(seen, expected, "limit {limit}: the library change is stepped over");
+        assert_eq!(seen, expected, "limit {limit}");
     }
     let (_, page) = json(&app, "/api/v1/libraries/1/changes").await;
-    let track = &page["changes"][2];
+    let library = &page["changes"][0];
+    assert_eq!(library["kind"], "library");
+    assert_eq!(library["rows"]["libraries"][0]["id"], "1");
+    assert!(library["rows"]["libraries"][0].get("name").is_none(), "no server-only column");
+    let track = &page["changes"][3];
     assert_eq!(track["op"], "upsert");
     assert_eq!(track["rows"]["tracks"][0]["id"], "1001");
     assert_eq!(track["rows"]["tracks"][0]["library_id"], "1");

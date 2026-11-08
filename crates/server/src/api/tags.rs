@@ -152,6 +152,7 @@ fn source(library: i64, tag_type: Option<String>, q: Option<&str>) -> Source {
         filter: "g.library_id = ?".to_owned(),
         params: vec![library.into()],
         total: Total::Counted,
+        counting: None,
     };
     if let Some(tag_type) = tag_type {
         source.filter += " AND g.type = ?";

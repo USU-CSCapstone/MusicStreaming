@@ -11,7 +11,7 @@ use rusqlite::types::Value;
 use rusqlite::{Connection, Row, params_from_iter};
 
 use super::{Order, Request};
-use crate::api::{Problem, cursor};
+use crate::{Invalid, cursor};
 
 /// How the first column of a sort marks a row with no sortable value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +53,17 @@ pub struct Source {
     pub filter: String,
     pub params: Vec<Value>,
     pub total: Total,
+    /// Where a count reads when it should not start from these rows.
+    pub counting: Option<Counting>,
+}
+
+/// What a count of a source reads in place of the source's own `from`, `filter` and `params`:
+/// the same rows, reached from the smallest of the filter's tag groups, where the page itself
+/// walks an index and checks each row.
+pub struct Counting {
+    pub from: String,
+    pub filter: String,
+    pub params: Vec<Value>,
 }
 
 /// Where a page's `total` comes from.
@@ -74,7 +85,7 @@ impl Sort {
     }
 
     /// Reads a request's cursor, before the query runs.
-    pub fn after(&self, cursor: Option<&str>, order: Order) -> Result<Option<Vec<Value>>, Problem> {
+    pub fn after(&self, cursor: Option<&str>, order: Order) -> Result<Option<Vec<Value>>, Invalid> {
         cursor.map(|text| cursor::decode(text, &self.label(order), self.columns.len())).transpose()
     }
 
@@ -226,7 +237,7 @@ pub fn ids(
 /// planner weighs statistics and the cursor's own values, so `source` should hold enough rows
 /// for `ANALYZE` to matter, and the cursors are real ones: at the top, among the unknowns, and
 /// a tenth, half, and nine tenths of the way in, in both orders.
-#[cfg(test)]
+#[cfg(feature = "testing")]
 pub fn assert_indexed(conn: &Connection, source: &Source, sort: &Sort) -> rusqlite::Result<()> {
     let columns = sort.columns.join(", ");
     let rows: i64 = conn.query_row(
@@ -279,6 +290,36 @@ pub fn assert_indexed(conn: &Connection, source: &Source, sort: &Sort) -> rusqli
 
 /// How many rows `source` holds, for a page's `total`.
 pub fn count(conn: &Connection, source: &Source) -> rusqlite::Result<i64> {
-    let sql = format!("SELECT count(*) FROM {} WHERE {}", source.from, source.filter);
-    conn.prepare_cached(&sql)?.query_row(params_from_iter(source.params.iter()), |row| row.get(0))
+    let (from, filter, params) = match &source.counting {
+        Some(Counting { from, filter, params }) => (from, filter, params),
+        None => (&source.from, &source.filter, &source.params),
+    };
+    let sql = format!("SELECT count(*) FROM {from} WHERE {filter}");
+    conn.prepare_cached(&sql)?.query_row(params_from_iter(params.iter()), |row| row.get(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_count_reads_from_the_counting_source_when_there_is_one() {
+        let conn = Connection::open_in_memory().unwrap();
+        let source = |counting| Source {
+            select: &["n"],
+            from: "(SELECT 1 AS n UNION ALL SELECT 2 UNION ALL SELECT 3) t".to_owned(),
+            joins: "",
+            filter: "n > ?".to_owned(),
+            params: vec![Value::from(0)],
+            total: Total::Counted,
+            counting,
+        };
+        assert_eq!(count(&conn, &source(None)).unwrap(), 3);
+        let counting = Counting {
+            from: "(SELECT 1 AS n UNION ALL SELECT 2) t".to_owned(),
+            filter: "n > ?".to_owned(),
+            params: vec![Value::from(1)],
+        };
+        assert_eq!(count(&conn, &source(Some(counting))).unwrap(), 1);
+    }
 }

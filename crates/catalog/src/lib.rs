@@ -4,12 +4,30 @@
 
 use rusqlite::Connection;
 
+pub mod by_ids;
+pub mod credit;
+pub mod cursor;
+mod id;
+mod json;
+pub mod page;
+pub mod refs;
 pub mod snapshot;
 pub mod sync;
+pub mod tag_filter;
+pub mod time;
+pub mod tracks;
+
+pub use id::{AnyId, Id};
+pub use json::Json;
+
+/// A request's parameter the catalog cannot accept, such as a cursor from another list. The
+/// message is safe to show a client.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Invalid(pub String);
 
 /// The device schema's version. Raise it whenever [`SCHEMA`] changes: a device whose database
 /// carries another version deletes it and syncs again, since it is only a copy of the server's.
-pub const SCHEMA_VERSION: i32 = 2;
+pub const SCHEMA_VERSION: i32 = 3;
 
 /// The device schema's DDL: a subset of the server's catalog tables with the same table and
 /// column names and types, minus what never leaves the server.
@@ -34,6 +52,6 @@ mod tests {
             .query_row("SELECT count(*) FROM sqlite_schema WHERE type = 'table'", [], |r| r.get(0))
             .unwrap();
         let version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-        assert_eq!((tables, version), (15, SCHEMA_VERSION));
+        assert_eq!((tables, version), (16, SCHEMA_VERSION));
     }
 }
