@@ -4,6 +4,8 @@
 
 use rusqlite::Connection;
 
+pub mod sync;
+
 /// The device schema's version. Raise it whenever [`SCHEMA`] changes: a device whose database
 /// carries another version deletes it and syncs again, since it is only a copy of the server's.
 pub const SCHEMA_VERSION: i32 = 1;

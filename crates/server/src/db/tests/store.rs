@@ -68,6 +68,7 @@ mod results;
 mod scans;
 mod sidecars;
 mod statistics;
+mod sync_rows;
 mod totals;
 mod track_sort;
 mod track_totals;
