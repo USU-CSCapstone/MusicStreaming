@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Device } from '$lib/api/types';
+	import { connectivity } from '$lib/connectivity.svelte';
 	import { controls } from '$lib/controls.svelte';
 	import { playback } from '$lib/playback.svelte';
 	import { realtime } from '$lib/realtime.svelte';
@@ -15,7 +16,7 @@
 	/** This device first, then those connected, each as the server orders them: last seen first. */
 	const rank = (device: Device) => (device.id === realtime.deviceId ? 0 : device.connected ? 1 : 2);
 	const devices = $derived([...playback.devices].sort((a, b) => rank(a) - rank(b)));
-	const stale = $derived(realtime.offline);
+	const stale = $derived(connectivity.stale);
 	/** The device holding playback, said aloud as playback moves, as the buttons here move it. */
 	const holder = $derived(devices.find((device) => device.id === playback.state?.activeDeviceId));
 	let list = $state<HTMLUListElement>();

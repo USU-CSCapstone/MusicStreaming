@@ -4,6 +4,7 @@
 // hears, and shows what the worker cannot fix itself.
 
 import { API } from '$lib/api/root';
+import { connectivity } from '$lib/connectivity.svelte';
 import { clearImageCache } from '$lib/image-cache';
 import { clearQueueLists } from '$lib/queue/lists';
 import { forget } from '$lib/last-known';
@@ -26,6 +27,10 @@ const SIGN_OUT_MS = 3000;
 const START_MS = 20_000;
 /** How long a read waits to learn where a library stands before the server answers it instead. */
 const STATE_MS = 1500;
+/** How long a read waits for this tab's own election and worker, when it is about to own the catalog. */
+const OWNER_MS = 5000;
+/** How often that wait looks for the lock. */
+const LOOK_MS = 25;
 
 /** Whether the browser can elect an owner at all; without Web Locks (plain HTTP, old iOS) the catalog is unavailable. */
 const available = () => !!navigator.locks;
@@ -43,6 +48,10 @@ export class CatalogClient {
 	#unsubscribe: (() => void) | null = null;
 	#persisted = false;
 	#listening = false;
+	/** This tab is in the election, or about to be: it will own the catalog or another tab will. */
+	#wants = false;
+	/** The device is working offline, which a worker is told as it starts and when it changes. */
+	#workingOffline = connectivity.workOffline;
 	/** The sign-out under way, which this tab's next election waits for. */
 	#signingOut: Promise<unknown> = Promise.resolve();
 	/** This tab answers requests as the owner. */
@@ -72,7 +81,28 @@ export class CatalogClient {
 	 * [`disconnect`](#disconnect).
 	 */
 	connect(realtime: Pick<Realtime, 'on'>, user: string) {
-		this.disconnect();
+		// Already in the election for this account, from `preconnect`: it carries on.
+		const electing = this.#wants && this.#user === user;
+		if (!electing) this.disconnect();
+		this.#unsubscribe?.();
+		this.#unsubscribe = realtime.on((message: RealtimeServerMessage) => {
+			if (PULLING.has(message.type)) this.#send({ type: 'message', message });
+		});
+		if (!electing) this.#begin(user);
+	}
+
+	/**
+	 * Joins the election for `user` before the app has loaded its first page, so a page that
+	 * loads at once, as an app launched offline does, finds an owner coming. Without
+	 * [`connect`](#connect) it hears no realtime messages.
+	 */
+	preconnect(user: string) {
+		if (!this.#wants) this.#begin(user);
+	}
+
+	/** Enters the election for `user`. */
+	#begin(user: string) {
+		this.#wants = true;
 		this.#persist();
 		this.#user = user;
 		if (!this.#listening) {
@@ -84,9 +114,6 @@ export class CatalogClient {
 			// another tab is waiting; desktop tab switches with no one waiting change nothing.
 			document.addEventListener('visibilitychange', () => this.#visibility());
 		}
-		this.#unsubscribe = realtime.on((message: RealtimeServerMessage) => {
-			if (PULLING.has(message.type)) this.#send({ type: 'message', message });
-		});
 		// A tab hearing a sign-out leaves, so a signed-out tab never owns the next account's files.
 		this.#route();
 		if (available()) this.#join();
@@ -103,8 +130,15 @@ export class CatalogClient {
 		);
 	}
 
+	/** Tells the worker, if this tab owns one, whether the device is working offline, so it makes no request. */
+	setWorkingOffline(value: boolean) {
+		this.#workingOffline = value;
+		this.#send({ type: 'offline', value });
+	}
+
 	/** Leaves the election, and stops the worker if this tab owns the catalog. The device's files stay. */
 	disconnect() {
+		this.#wants = false;
 		this.#unsubscribe?.();
 		this.#unsubscribe = null;
 		this.#yield();
@@ -136,13 +170,23 @@ export class CatalogClient {
 	 * answer.
 	 */
 	async onDevice(library: string) {
-		const { held } = (await navigator.locks?.query()) ?? {};
-		if (!held?.some((lock) => lock.name === this.#name)) return false;
-		return (
-			(await this.#route()
-				.ask({ type: 'onDevice', library }, STATE_MS)
-				.catch(() => '')) === '1'
-		);
+		/** Whether some tab holds the lock, which says an owner is at least starting. */
+		const owned = async () =>
+			((await navigator.locks?.query()) ?? {}).held?.some((lock) => lock.name === this.#name);
+		// A tab about to elect gives the election a moment rather than answering none: a page
+		// that loads first thing, as a launch offline does, would otherwise miss the device.
+		let waited = false;
+		const end = Date.now() + OWNER_MS;
+		while (!(await owned())) {
+			// Only a tab still in the election is worth waiting for: one that gave up is not coming.
+			if (!this.#abort || Date.now() >= end) return false;
+			waited = true;
+			await new Promise((resolve) => setTimeout(resolve, LOOK_MS));
+		}
+		const answer = await this.#route()
+			.ask({ type: 'onDevice', library }, waited ? OWNER_MS : STATE_MS)
+			.catch(() => '');
+		return answer === '1';
 	}
 
 	/**
@@ -152,6 +196,8 @@ export class CatalogClient {
 	 * tab starts a worker for it.
 	 */
 	signOut() {
+		// A tab owning the catalog lets go of it first, or the wipe would wait on its own lock.
+		this.disconnect();
 		forget();
 		return (this.#signingOut = Promise.all([
 			clearImageCache(),
@@ -301,6 +347,7 @@ export class CatalogClient {
 		const worker = (this.#worker = this.#spawn());
 		worker.onmessage = ({ data }: MessageEvent<FromWorker>) => this.#heard(data);
 		this.#send({ type: 'init', api: API, wasm: wasmUrl, user });
+		if (this.#workingOffline) this.#send({ type: 'offline', value: true });
 	}
 
 	/** Terminates the worker. Requests it had not answered are left for the next owner. */

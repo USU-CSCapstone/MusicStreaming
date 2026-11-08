@@ -13,6 +13,8 @@ export type ToWorker =
 	| { type: 'start' }
 	/** A message from the realtime connection. */
 	| { type: 'message'; message: RealtimeServerMessage }
+	/** Whether the device is working offline, when the worker makes no request; off until said. */
+	| { type: 'offline'; value: boolean }
 	/** Closes the files and releases the pool to the next owner; answered with `paused`. */
 	| { type: 'pause' }
 	/** A request for the owner to answer, such as a query; answered with `answer` of `id`. */

@@ -141,6 +141,18 @@ describe('QueueClient', () => {
 		expect(start).toMatchObject({ type: 'start', request: { offline: true } });
 	});
 
+	it('tells the worker whether the device is working offline, as it starts and when it changes', () => {
+		const { worker, client } = setup();
+		client.setWorkingOffline(true);
+		expect(worker.sent.at(-1)).toEqual({ type: 'offline', value: true });
+		client.disconnect();
+		const again = new FakeWorker();
+		const second = new QueueClient(() => again as unknown as Worker);
+		second.setWorkingOffline(true);
+		second.connect({ on: () => () => {} }, '7');
+		expect(again.sent.map((m) => m.type)).toEqual(['init', 'offline']);
+	});
+
 	it('settles each restore with the worker answer to it', async () => {
 		const { worker, client } = setup();
 		const first = client.restore('q1');

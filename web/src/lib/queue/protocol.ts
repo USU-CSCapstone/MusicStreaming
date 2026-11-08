@@ -104,6 +104,8 @@ export type ToWorker =
 	/** First: where the API is, and the account signed in. */
 	| { type: 'init'; api: string; wasm: string; user: string }
 	| { type: 'message'; message: RealtimeServerMessage }
+	/** Whether the device is working offline, when the worker makes no request; off until said. */
+	| { type: 'offline'; value: boolean }
 	| { type: 'edit'; edit: SentEdit; length?: number; offline?: boolean }
 	/** Starts a queue; answered with `started` carrying the same `id`. */
 	| { type: 'start'; id: number; request: StartRequest }

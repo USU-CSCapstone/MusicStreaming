@@ -48,6 +48,19 @@ export async function imageCacheSize(): Promise<{ count: number; bytes: number }
 	}
 }
 
+/**
+ * A URL for the kept image at `url`, or null if it is not kept: the way to show art without a
+ * request while the device works offline. The caller revokes the URL when done with it.
+ */
+export async function keptImageUrl(url: string): Promise<string | null> {
+	try {
+		const hit = await (await caches.open(IMAGE_CACHE)).match(url);
+		return hit ? URL.createObjectURL(await hit.blob()) : null;
+	} catch {
+		return null;
+	}
+}
+
 /** Deletes every kept image: the next person to sign in must not see the last one's art. */
 export async function clearImageCache() {
 	try {

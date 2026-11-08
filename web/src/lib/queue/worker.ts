@@ -4,6 +4,7 @@
 
 import init from '$lib/core-wasm/jewelcase_core_wasm.js';
 import { CatalogRouter } from '$lib/catalog/router';
+import { gated } from '$lib/gated-fetch';
 import { QueueStore } from './store';
 import type { FromWorker, ToWorker } from './protocol';
 
@@ -13,13 +14,19 @@ const post = (message: FromWorker) => postMessage(message);
 /** Loading the core takes a moment; what the page sends meanwhile waits behind it, in order. */
 let store: Promise<QueueStore> | undefined;
 
-/** Starts the store on `init`; every other message waits for it, then goes to it. */
+/** The device is working offline: no request leaves, and edits wait until it is not. */
+let workingOffline = false;
+
+/** Starts the store on `init`; `offline` takes effect at once, and every other message waits for the store, then goes to it. */
 onmessage = ({ data }: MessageEvent<ToWorker>) => {
-	if (data.type === 'init') {
+	if (data.type === 'offline') {
+		workingOffline = data.value;
+	} else if (data.type === 'init') {
 		store = init({ module_or_path: data.wasm }).then(
 			() =>
 				new QueueStore({
 					api: data.api,
+					fetch: gated(() => workingOffline),
 					catalog: new CatalogRouter(),
 					user: data.user,
 					changed: (summary) => post({ type: 'state', summary }),

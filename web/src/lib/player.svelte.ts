@@ -493,6 +493,20 @@ class Player {
 		this.#audio?.pause();
 	}
 
+	/**
+	 * Pauses and lets go of the audio's stream, so no request goes on: Work offline needs none.
+	 * The track stays current where it was; playing again loads it anew from there.
+	 */
+	stopStreaming() {
+		const audio = this.#audio;
+		if (!audio?.getAttribute('src')) return;
+		this.pause();
+		this.position = audio.currentTime;
+		this.#stale = true;
+		audio.removeAttribute('src');
+		audio.load();
+	}
+
 	/** The user's Next: moves the queue on, taking playback over here, or stops at its end. */
 	next() {
 		if (this.#hasNext()) this.#started();

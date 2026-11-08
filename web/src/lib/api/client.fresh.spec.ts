@@ -2,11 +2,19 @@ import { describe, expect, it, vi } from 'vitest';
 
 const device = vi.hoisted(() => ({ onDevice: vi.fn(), query: vi.fn() }));
 vi.mock('$lib/catalog/client.svelte', () => ({ catalog: device }));
+const link = vi.hoisted(() => ({ working: false }));
 vi.mock('$lib/realtime.svelte', () => ({ realtime: { offline: false } }));
+vi.mock('$lib/connectivity.svelte', () => ({
+	connectivity: {
+		get workOffline() {
+			return link.working;
+		}
+	}
+}));
 vi.mock('$app/paths', () => ({ base: '', resolve: (path: string) => path }));
 
 import { realtime } from '$lib/realtime.svelte';
-import { getPlaylist, getTracksByIds, listPlaylistItems } from './client';
+import { getPlaylist, getTracksByIds, listKeptQueues, listPlaylistItems, logout } from './client';
 
 /** A server whose playlist is at version 6 while the device, not yet caught up, holds version 5. */
 function stale() {
@@ -70,5 +78,21 @@ describe('tracks looked up by ID', () => {
 		} finally {
 			realtime.offline = false;
 		}
+	});
+});
+
+describe('working offline', () => {
+	it('sends no request: a read is unavailable offline, a write fails as with no network', async () => {
+		link.working = true;
+		const f = vi.fn(async () => Response.json({}));
+		await expect(listKeptQueues(f)).rejects.toMatchObject({
+			status: 503,
+			code: 'unavailable_offline'
+		});
+		await expect(logout(f)).rejects.toBeInstanceOf(TypeError);
+		expect(f).not.toHaveBeenCalled();
+		link.working = false;
+		await listKeptQueues(f);
+		expect(f).toHaveBeenCalledOnce();
 	});
 });

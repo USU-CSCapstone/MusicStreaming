@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
+	import { connectivity } from '$lib/connectivity.svelte';
 	import { plural } from '$lib/format';
 	import { inSection, sections } from '$lib/sections';
 	import { tagTypePlural } from '$lib/tags';
@@ -65,7 +66,14 @@
 		{#if library}
 			<div class="library muted">
 				<span class="name">{library.name}</span>
-				<span>{plural(library.trackCount, 'song')}{library.scanning ? ' · scanning' : ''}</span>
+				<!-- The scan is the server's to say, so a device that cannot ask says so. -->
+				<span>
+					{plural(library.trackCount, 'song')}{connectivity.stale
+						? ' · scan status unavailable offline'
+						: library.scanning
+							? ' · scanning'
+							: ''}
+				</span>
 			</div>
 		{/if}
 		<AccountLink showName />

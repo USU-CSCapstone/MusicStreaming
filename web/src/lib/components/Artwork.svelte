@@ -42,6 +42,8 @@
 	import { page } from '$app/state';
 	import { imageUrl } from '$lib/api/client';
 	import type { ImageRef } from '$lib/api/types';
+	import { connectivity } from '$lib/connectivity.svelte';
+	import { keptImageUrl } from '$lib/image-cache';
 	import { placeholderUrl } from '$lib/placeholder';
 	import Icon, { type IconName } from './Icon.svelte';
 
@@ -66,9 +68,27 @@
 	let loaded = $state(false);
 	let failed = $state(false);
 	const libraryId = $derived(page.data.library?.id ?? '');
-	const src = $derived(image && libraryId ? imageUrl(libraryId, image, size) : null);
+	const wanted = $derived(image && libraryId ? imageUrl(libraryId, image, size) : null);
 	// Decoded only near the viewport and until the real image loads; a row far off screen is not decoded.
 	let near = $state(false);
+	// Working offline, only a kept image shows, read from the cache: the page makes no request.
+	let kept = $state<string | null>(null);
+	$effect(() => {
+		kept = null;
+		if (!connectivity.workOffline || !wanted || !near) return;
+		let current = true;
+		let url: string | null = null;
+		keptImageUrl(wanted).then((made) => {
+			url = made;
+			if (current) kept = made;
+			else if (made) URL.revokeObjectURL(made);
+		});
+		return () => {
+			current = false;
+			if (url) URL.revokeObjectURL(url);
+		};
+	});
+	const src = $derived(connectivity.workOffline ? kept : wanted);
 	const blurred = $derived(near && !loaded ? placeholderUrl(image?.placeholder) : null);
 	const hue = $derived([...seed].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 360);
 

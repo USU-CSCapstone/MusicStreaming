@@ -114,6 +114,72 @@ describe('CatalogClient', () => {
 		client.disconnect();
 	});
 
+	it('tells the owner’s worker whether the device is working offline, as it starts and when it changes', async () => {
+		const b = browser();
+		const { client, workers } = b.tab('a');
+		client.setWorkingOffline(true);
+		client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(workers[0])).toContain('start'));
+		expect(types(workers[0]).slice(0, 3)).toEqual(['init', 'offline', 'start']);
+		client.setWorkingOffline(false);
+		expect(workers[0].sent.at(-1)).toEqual({ type: 'offline', value: false });
+		client.disconnect();
+	});
+
+	it('a tab that joined the election early answers a read once its owner is up, and connect keeps that owner', async () => {
+		const b = browser();
+		const { client, workers } = b.tab('a');
+		client.preconnect('7');
+		// Asked at once, before the election has the lock: it waits rather than saying no.
+		expect(await client.onDevice('1')).toBe(true);
+		client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(workers[0])).toContain('start'));
+		expect(workers).toHaveLength(1);
+		b.hear({ type: 'hello', deviceId: '1', serverTime: '' });
+		expect(types(workers[0])).toContain('message');
+		// The same account keeps its owner: nothing was paused or stopped.
+		expect(types(workers[0])).not.toContain('pause');
+		expect(workers[0].terminated).toBe(false);
+		client.disconnect();
+	});
+
+	it('another account never reads the files of the account that preconnected: its owner is replaced', async () => {
+		const b = browser();
+		const { client, workers } = b.tab('a');
+		client.preconnect('7');
+		await vi.waitFor(() => expect(types(workers[0])).toContain('start'));
+		client.connect(b.realtime, '8');
+		await vi.waitFor(() => expect(workers).toHaveLength(2));
+		expect(types(workers[0])).toContain('pause');
+		expect(workers[0].terminated).toBe(true);
+		expect(workers[1].sent[0]).toMatchObject({ type: 'init', user: '8' });
+		client.disconnect();
+	});
+
+	it('a tab whose worker failed answers none at once, not after waiting for an owner', async () => {
+		const b = browser();
+		const { client, workers } = b.tab('a');
+		client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(workers[0])).toContain('start'));
+		workers[0].onerror?.();
+		// The lock is given back once the failed worker is stopped.
+		await vi.waitFor(async () =>
+			expect((await navigator.locks.query()).held?.some((lock) => lock.name === b.name)).toBe(false)
+		);
+		const began = Date.now();
+		expect(await client.onDevice('1')).toBe(false);
+		expect(Date.now() - began).toBeLessThan(1000);
+	});
+
+	it('a tab that joined early can still sign out', async () => {
+		const b = browser();
+		const { client, workers } = b.tab('a');
+		client.preconnect('7');
+		await vi.waitFor(() => expect(types(workers[0])).toContain('start'));
+		await client.signOut();
+		expect(types(workers.at(-1)!)).toContain('signOut');
+	});
+
 	it('a library is not on the device with no owner, and the owner’s answer from any tab', async () => {
 		const b = browser();
 		const first = b.tab('first');

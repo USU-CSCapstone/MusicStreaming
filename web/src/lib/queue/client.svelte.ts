@@ -4,6 +4,7 @@
 
 import { API } from '$lib/api/client';
 import { offline } from '$lib/catalog/read';
+import { connectivity } from '$lib/connectivity.svelte';
 import wasmUrl from '$lib/core-wasm/jewelcase_core_wasm_bg.wasm?url';
 import type { RealtimeServerMessage, SentEdit } from '$lib/api/types';
 import type { Realtime } from '$lib/realtime.svelte';
@@ -54,6 +55,8 @@ export class QueueClient {
 	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- waiting askers are not state to render
 	#waiting = new Map<number, (answer: never) => void>();
 	#askId = 0;
+	/** The device is working offline, which the worker is told as it starts and when it changes. */
+	#workingOffline = connectivity.workOffline;
 
 	/** Makes a client that starts its worker with `create` on `connect`; tests pass a fake. */
 	constructor(create: () => Worker = spawn) {
@@ -66,9 +69,16 @@ export class QueueClient {
 		const worker = (this.#worker = this.#spawn());
 		worker.onmessage = ({ data }: MessageEvent<FromWorker>) => this.#heard(data);
 		this.#send({ type: 'init', api: API, wasm: wasmUrl, user });
+		if (this.#workingOffline) this.#send({ type: 'offline', value: true });
 		this.#unsubscribe = realtime.on((message: RealtimeServerMessage) => {
 			if (QUEUE_MESSAGES.has(message.type)) this.#send({ type: 'message', message });
 		});
+	}
+
+	/** Tells the worker whether the device is working offline, so it makes no request until it is not. */
+	setWorkingOffline(value: boolean) {
+		this.#workingOffline = value;
+		this.#send({ type: 'offline', value });
 	}
 
 	/** Stops the worker, and with it the queue held on this device. */

@@ -3,6 +3,8 @@
 // (`design/general.md` §7.1).
 
 import { redirect } from '@sveltejs/kit';
+import { connectivity } from '$lib/connectivity.svelte';
+import { gated } from '$lib/gated-fetch';
 import { type LastKnown, lastKnown, remember } from '$lib/last-known';
 import {
 	knownOffline,
@@ -83,9 +85,13 @@ async function body<T>(res: Response): Promise<T> {
 	return res.json();
 }
 
+/** `fetch`, or a failure as with no network while the device is working offline. */
+const request = (fetch: Fetch, input: string, init?: RequestInit) =>
+	gated(() => connectivity.workOffline, fetch)(input, init);
+
 /** A GET of `path` at the server, rejecting as unavailable offline when the request cannot be sent. */
 const get = async <T>(fetch: Fetch, path: string, query?: Query): Promise<T> =>
-	body(await fetch(url(path, query)).catch(unavailableIfOffline));
+	body(await request(fetch, url(path, query)).catch(unavailableIfOffline));
 
 /**
  * A state-changing request, with a JSON body or a file. Cookie-authenticated writes must
@@ -109,7 +115,7 @@ async function send<T>(
 		headers['Content-Type'] = 'application/json';
 		payload = JSON.stringify(json);
 	}
-	return body(await fetch(url(path), { method, headers, body: payload }));
+	return body(await request(fetch, url(path), { method, headers, body: payload }));
 }
 
 /**
@@ -372,7 +378,10 @@ export async function getWaveform(
 	libraryId: string,
 	trackId: string
 ): Promise<Waveform | null> {
-	const res = await f(url(`${lib(libraryId)}/tracks/${encodeURIComponent(trackId)}/waveform`));
+	const res = await request(
+		f,
+		url(`${lib(libraryId)}/tracks/${encodeURIComponent(trackId)}/waveform`)
+	);
 	if (res.status === 204 || !res.ok) return null;
 	return res.json();
 }

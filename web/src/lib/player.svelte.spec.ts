@@ -633,6 +633,24 @@ describe('player and the queue', () => {
 		return { play, audio: play.mock.contexts[0] as HTMLAudioElement };
 	}
 
+	it('stopStreaming pauses and lets go of the stream, and playing again asks for the audio anew', async () => {
+		const { audio } = await playing('71');
+		expect(audio.getAttribute('src')).not.toBeNull();
+		const load = vi.spyOn(audio, 'load');
+
+		player.stopStreaming();
+		expect(player.playing).toBe(false);
+		expect(audio.getAttribute('src')).toBeNull();
+		expect(load).toHaveBeenCalled();
+
+		const info = vi.fn(() => Promise.resolve({ variant: 'original' }));
+		fake.info = info;
+		void player.resume().catch(() => {});
+		await settle();
+		expect(info).toHaveBeenCalled();
+		expect(audio.getAttribute('src')).not.toBeNull();
+	});
+
 	it('start plays immediately, and reports its item once the server has the queue', async () => {
 		queueWorker.holdStart = true;
 		player.play([track('61', 60), track('62', 60), track('63', 60)] as never, 1, album);

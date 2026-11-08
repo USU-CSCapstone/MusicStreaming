@@ -16,6 +16,7 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import SettingsDialog from '$lib/components/SettingsDialog.svelte';
 	import { catalog } from '$lib/catalog/client.svelte';
+	import { connectivity } from '$lib/connectivity.svelte';
 	import { imageCacheSize } from '$lib/image-cache';
 	import { prefs } from '$lib/prefs.svelte';
 	import { tagTypeName } from '$lib/tags';
@@ -24,7 +25,7 @@
 
 	const me = $derived(page.data.me);
 	// Svelte 5 lets a derived be overwritten locally; it resets when the page reloads its data.
-	let connectable = $derived(data.connectable);
+	let connectable = $derived(data.connectable ?? []);
 	let connecting = $state<PersonalPlugin | null>(null);
 	let connectionError = $state('');
 	const roles: Record<User['role'], string> = { owner: 'Owner', admin: 'Admin', user: 'User' };
@@ -129,6 +130,26 @@
 {/if}
 
 {#if me}
+	<section aria-labelledby="offline">
+		<h2 id="offline">Offline</h2>
+		<p class="muted">
+			Browse what's on this device without using the network, to protect a metered connection.
+			Nothing is sent to or fetched from the server until you turn this off, and then this device
+			catches up. It applies to this device only.
+		</p>
+		<label class="column">
+			<input
+				type="checkbox"
+				role="switch"
+				checked={connectivity.workOffline}
+				onchange={(e) => connectivity.setWorkOffline(e.currentTarget.checked)}
+			/>
+			Work offline
+		</label>
+	</section>
+{/if}
+
+{#if me}
 	<section aria-labelledby="columns">
 		<h2 id="columns">Song columns</h2>
 		<p class="muted">
@@ -169,7 +190,12 @@
 	</section>
 {/if}
 
-{#if connectable.length}
+{#if data.connectable === null}
+	<section aria-labelledby="connections">
+		<h2 id="connections">Connections</h2>
+		<p class="muted">Unavailable offline. This needs the server, which this device can't reach.</p>
+	</section>
+{:else if connectable.length}
 	<section aria-labelledby="connections">
 		<h2 id="connections">Connections</h2>
 		<!-- Told where the user shares, not after they clear (`requirements/users.md` §7). -->

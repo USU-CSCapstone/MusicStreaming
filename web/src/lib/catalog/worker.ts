@@ -3,6 +3,7 @@
 // is the page's side; `protocol.ts` is what they say.
 
 import init from '$lib/catalog-wasm/jewelcase_catalog_wasm.js';
+import { gated } from '$lib/gated-fetch';
 import { CatalogSync, describe } from './sync';
 import type { FromWorker, ToWorker } from './protocol';
 
@@ -12,14 +13,24 @@ const post = (message: FromWorker) => postMessage(message);
 /** What the page sent, one message after another: starting and signing out take a while. */
 let work: Promise<CatalogSync | undefined> = Promise.resolve(undefined);
 
-/** Loads the module on `init`; every other message waits for it, then goes to the sync. */
+/** The device is working offline: no request leaves, and nothing pulls. */
+let workingOffline = false;
+
+/** Loads the module on `init`; `offline` takes effect at once, and every other message waits for it, then goes to the sync. */
 onmessage = ({ data }: MessageEvent<ToWorker>) => {
+	// At once, ahead of the work already queued: a switch must stop what comes next.
+	if (data.type === 'offline') {
+		workingOffline = data.value;
+		return;
+	}
 	if (data.type === 'init') {
 		work = init({ module_or_path: data.wasm }).then(
 			() =>
 				new CatalogSync({
 					api: data.api,
 					user: data.user,
+					fetch: gated(() => workingOffline),
+					online: () => navigator.onLine && !workingOffline,
 					report: (r) => post({ type: 'error', ...r }),
 					changed: (libraryId) => post({ type: 'changed', libraryId })
 				}),

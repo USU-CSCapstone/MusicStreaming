@@ -10,6 +10,7 @@
 	import TabBar from '$lib/components/TabBar.svelte';
 	import Toast from '$lib/components/Toast.svelte';
 	import { catalog } from '$lib/catalog/client.svelte';
+	import { connectivity } from '$lib/connectivity.svelte';
 	import { controls } from '$lib/controls.svelte';
 	import { player } from '$lib/player.svelte';
 	import { queue } from '$lib/queue/client.svelte';
@@ -32,7 +33,6 @@
 			catalog.signOut();
 			return;
 		}
-		realtime.start();
 		// A restarted server may be a new version: its connection saying hello is the cue to look.
 		const unsubscribe = realtime.on((message) => message.type === 'hello' && checkForUpdate());
 		queue.connect(realtime, data.me.id);
@@ -41,8 +41,19 @@
 			unsubscribe();
 			catalog.disconnect();
 			queue.disconnect();
-			realtime.stop();
 		};
+	});
+
+	// Working offline closes the realtime connection and keeps the workers from any request;
+	// turning it off connects again, and the `hello` that follows makes them catch up.
+	$effect(() => {
+		const working = connectivity.workOffline;
+		queue.setWorkingOffline(working);
+		catalog.setWorkingOffline(working);
+		if (working) player.stopStreaming();
+		if (bare || !data.me || working) return;
+		realtime.start();
+		return () => realtime.stop();
 	});
 
 	/**
