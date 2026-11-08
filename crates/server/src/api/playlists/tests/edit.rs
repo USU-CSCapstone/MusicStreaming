@@ -570,12 +570,13 @@ async fn an_edit_of_a_large_playlist_writes_only_the_rows_it_changes() {
     call(&app, TOKEN, "GET", &uri, None).await;
 
     // Three items moved far apart: each is a delete and an insert, and the playlist one update.
+    // Each row written to the account feed is one more write, the playlist's included.
     let ops = json!([{ "op": "move", "positions": [10, 20_000, 49_999], "at": 30_000 }]);
     let start = changes(&db).await;
     let (status, moved) =
         send(&app, TOKEN, "PATCH", &uri, None, json!({ "baseVersion": 1, "ops": ops })).await;
     assert_eq!(status, StatusCode::OK, "{moved}");
-    assert_eq!(changes(&db).await - start, 3 + 3 + 1);
+    assert_eq!(changes(&db).await - start, (3 + 3) * 2 + 2);
     model = apply_ops(model, vec![Op::Move { positions: vec![10, 20_000, 49_999], at: 30_000 }])
         .unwrap();
     let after = rows(&db, "900").await;
@@ -589,20 +590,20 @@ async fn an_edit_of_a_large_playlist_writes_only_the_rows_it_changes() {
     let add = json!({ "baseVersion": 2, "ops": [{ "op": "add", "items": [track(1), track(2)], "at": 100 }] });
     let (status, added) = send(&app, TOKEN, "PATCH", &uri, None, add).await;
     assert_eq!(status, StatusCode::OK, "{added}");
-    assert_eq!(changes(&db).await - start, 2 + 1);
+    assert_eq!(changes(&db).await - start, (2 + 1) * 2);
     let start = changes(&db).await;
     let remove = json!({ "baseVersion": 3, "ops": [{ "op": "remove", "positions": [5, 40_000] }] });
     let (status, removed) = send(&app, TOKEN, "PATCH", &uri, None, remove).await;
     assert_eq!(status, StatusCode::OK, "{removed}");
-    assert_eq!(changes(&db).await - start, 2 + 1);
+    assert_eq!(changes(&db).await - start, (2 + 1) * 2);
     assert_eq!(
         (&removed["trackCount"], &removed["durationUs"], &removed["version"]),
         (&json!(n), &json!(n * 1_000_000), &json!(4))
     );
-    // A change of details alone writes only the playlist.
+    // A change of details alone writes only the playlist, and its feed row.
     let start = changes(&db).await;
     send(&app, TOKEN, "PATCH", &uri, None, json!({ "baseVersion": 4, "title": "Bigger" })).await;
-    assert_eq!(changes(&db).await - start, 1);
+    assert_eq!(changes(&db).await - start, 2);
 }
 
 #[tokio::test]

@@ -42,6 +42,7 @@ use super::playables::{self, Playable};
 use super::realtime::{Hub, ServerMessage};
 use super::scope::Scope;
 use super::{Code, Id, Images, Problem};
+use crate::db::feed::{self, Kind, Op as FeedOp};
 use crate::db::{Database, catalog, new_id, now_ms};
 
 /// How far apart the keys of a playlist's items start, so an item put between two takes the
@@ -210,6 +211,7 @@ pub async fn create(
                     params![id, count, duration],
                 )?;
                 catalog::playlist_artwork(tx, id)?;
+                feed::record_account(tx, user, library, Kind::Playlist, id, 0, FeedOp::Upsert)?;
                 // The row was just inserted in this transaction.
                 let created =
                     representation::get(tx, user, library, id)?.ok_or_else(Problem::not_found)?;
@@ -270,12 +272,17 @@ pub async fn delete(
     settle(async move {
         let version = db
             .write(move |tx| {
-                tx.prepare_cached(
-                    "DELETE FROM playlists WHERE id = ?1 AND user_id = ?2 AND library_id = ?3 \
-                 RETURNING version",
-                )?
-                .query_row(params![id, user, library], |row| row.get::<_, i64>(0))
-                .optional()
+                let version = tx
+                    .prepare_cached(
+                        "DELETE FROM playlists WHERE id = ?1 AND user_id = ?2 \
+                         AND library_id = ?3 RETURNING version",
+                    )?
+                    .query_row(params![id, user, library], |row| row.get::<_, i64>(0))
+                    .optional()?;
+                if version.is_some() {
+                    feed::record_playlist_deleted(tx, user, library, id)?;
+                }
+                Ok(version)
             })
             .await?
             .ok_or_else(Problem::not_found)?;

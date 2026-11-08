@@ -52,3 +52,45 @@ pub fn record(
     .execute(params![library_id, Text(entity), id, Text(op), now, view])?;
     Ok(())
 }
+
+/// What changed in a user's own data, stored by its name in `account_changes.kind`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Kind {
+    Playlist,
+    PlaylistItem,
+}
+
+/// Records that `user`'s playlist `playlist` changed in `library_id`: `item_key` names the
+/// item's key for `Kind::PlaylistItem` and is `0` for `Kind::Playlist`. Its earlier row, if any,
+/// is replaced, so the account feed carries only the latest position for each. Call it in the
+/// transaction of the change itself.
+pub fn record_account(
+    conn: &Connection,
+    user: i64,
+    library_id: i64,
+    kind: Kind,
+    playlist: i64,
+    item_key: i64,
+    op: Op,
+) -> Result<()> {
+    conn.prepare_cached(
+        "INSERT OR REPLACE INTO account_changes (user_id, library_id, kind, playlist_id, \
+         item_key, op) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )?
+    .execute(params![user, library_id, Text(kind), playlist, item_key, Text(op)])?;
+    Ok(())
+}
+
+/// Records that `user`'s playlist `playlist` was deleted: its item rows leave the feed and the
+/// playlist's own row becomes the one tombstone.
+pub fn record_playlist_deleted(
+    conn: &Connection,
+    user: i64,
+    library_id: i64,
+    playlist: i64,
+) -> Result<()> {
+    conn.prepare_cached("DELETE FROM account_changes WHERE user_id = ?1 AND playlist_id = ?2")?
+        .execute(params![user, playlist])?;
+    record_account(conn, user, library_id, Kind::Playlist, playlist, 0, Op::Delete)
+}

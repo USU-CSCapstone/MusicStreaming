@@ -769,6 +769,7 @@ async fn items_and_duplicates_read_from_an_index() {
     .unwrap();
 }
 
+mod account_feed;
 mod artwork;
 mod edit;
 mod realtime;

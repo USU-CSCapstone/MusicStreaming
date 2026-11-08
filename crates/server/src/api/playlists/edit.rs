@@ -29,6 +29,7 @@ use crate::api::playables::{self, Playable};
 use crate::api::realtime::Hub;
 use crate::api::scope::Scope;
 use crate::api::{Id, Problem};
+use crate::db::feed::{self, Kind, Op as FeedOp};
 use crate::db::{Database, catalog, now_ms};
 
 /// The spec's `PlaylistEdit`.
@@ -179,6 +180,7 @@ pub async fn edit(
                         count,
                         duration,
                     ])?;
+                    feed::record_account(tx, user, library, Kind::Playlist, id, 0, FeedOp::Upsert)?;
                     let edited = representation::get(tx, user, library, id)?
                         .ok_or_else(Problem::not_found)?;
                     let answer = Answer::new(StatusCode::OK, &edited)?;
@@ -378,7 +380,8 @@ pub(super) fn fresh(tx: &Connection, library: i64, plan: &Plan) -> rusqlite::Res
 
 /// Writes `plan`, made from playlist `id` at version `base`, if the playlist is still `user`'s
 /// in `library` and at `base`: otherwise `404` or `409 version_conflict`, and nothing is
-/// written. The details, totals and version are the caller's to write.
+/// written. Records each item row it deletes or inserts in the account feed. The details,
+/// totals and version, and the playlist's own feed row, are the caller's to write.
 pub(super) fn write(
     tx: &Connection,
     user: i64,
@@ -391,18 +394,25 @@ pub(super) fn write(
     // was made from.
     at(tx, user, library, id, base)?;
     // Deleted before anything is inserted, so no new key meets an old one on its way out.
-    match &plan.delete {
+    let gone: Vec<i64> = match &plan.delete {
         Some(keys) => {
             let mut delete = tx
                 .prepare_cached("DELETE FROM playlist_items WHERE playlist_id = ?1 AND key = ?2")?;
             for key in keys {
                 delete.execute(params![id, key])?;
             }
+            keys.clone()
         }
-        None => {
-            tx.prepare_cached("DELETE FROM playlist_items WHERE playlist_id = ?1")?
-                .execute([id])?;
-        }
+        None => tx
+            .prepare_cached("DELETE FROM playlist_items WHERE playlist_id = ?1 RETURNING key")?
+            .query_map([id], |row| row.get(0))?
+            .collect::<Result<_, _>>()?,
+    };
+    // Recorded after the deletes and before the inserts, so a key an insert takes again ends as
+    // an upsert and not a tombstone.
+    let item = |key, op| feed::record_account(tx, user, library, Kind::PlaylistItem, id, key, op);
+    for key in gone {
+        item(key, FeedOp::Delete)?;
     }
     let mut insert = tx.prepare_cached(
         "INSERT INTO playlist_items (playlist_id, key, library_id, track_id, added_at) \
@@ -410,6 +420,7 @@ pub(super) fn write(
     )?;
     for (key, track, added_at) in &plan.insert {
         insert.execute(params![id, key, library, track, added_at])?;
+        item(*key, FeedOp::Upsert)?;
     }
     Ok(())
 }
