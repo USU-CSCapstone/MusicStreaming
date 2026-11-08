@@ -5,8 +5,8 @@ use axum::routing::{delete, get, post};
 use tower_http::compression::CompressionLayer;
 
 use crate::api::{
-    AppState, albums, artists, audio, changes, images, libraries, lyrics, playlists,
-    recent_searches, search, tags, tracks, waveform,
+    AppState, albums, artists, audio, catalog_snapshot, changes, images, libraries, lyrics,
+    playlists, recent_searches, search, tags, tracks, waveform,
 };
 
 /// Every route under `/libraries`.
@@ -17,6 +17,7 @@ pub fn router() -> Router<AppState> {
         // A full catalog is many rows of the same few names, so a page is gzipped to a client
         // that asks.
         .route("/libraries/{library_id}/changes", get(changes::list).layer(CompressionLayer::new()))
+        .route("/libraries/{library_id}/catalog", get(catalog_snapshot::get))
         .route("/libraries/{library_id}/albums", get(albums::list))
         .route("/libraries/{library_id}/artists", get(artists::list))
         .route("/libraries/{library_id}/playlists", get(playlists::list).post(playlists::create))

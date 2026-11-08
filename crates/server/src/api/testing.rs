@@ -13,7 +13,7 @@ use serde_json::Value;
 use tower::ServiceExt;
 
 use super::session::token_hash;
-use super::{AppState, Images, prefix, router};
+use super::{AppState, Images, Snapshots, prefix, router};
 use crate::db::Database;
 use crate::db::testing::{Album, Device, Track, User, library};
 use crate::plugins::testing::plugins;
@@ -85,6 +85,10 @@ pub fn router_over(state: AppState) -> Router {
 pub(crate) fn state(temp: &tempfile::TempDir, db: Arc<Database>) -> AppState {
     AppState {
         images: Arc::new(Images::new(temp.path().join("cache"), Config::default())),
+        snapshots: Arc::new(Snapshots::new(
+            temp.path().join("cache/catalog"),
+            temp.path().join("jewelcase.db"),
+        )),
         indexes: Arc::default(),
         setup: Arc::default(),
         plugins: plugins(temp, &db),

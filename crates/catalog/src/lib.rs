@@ -4,6 +4,7 @@
 
 use rusqlite::Connection;
 
+pub mod snapshot;
 pub mod sync;
 
 /// The device schema's version. Raise it whenever [`SCHEMA`] changes: a device whose database

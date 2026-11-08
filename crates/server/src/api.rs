@@ -4,6 +4,7 @@ mod albums;
 mod artists;
 mod audio;
 mod authenticate;
+mod catalog_snapshot;
 mod changes;
 mod connections;
 mod credit;
@@ -52,6 +53,7 @@ use axum::middleware;
 use axum::routing::{MethodRouter, any, get, post};
 use tower_http::timeout::RequestBodyDeadlineLayer;
 
+pub use catalog_snapshot::Snapshots;
 pub use id::{AnyId, Id, Uuid};
 pub use images::Images;
 pub use player::Players;
@@ -78,6 +80,8 @@ const SIGNED_OUT_BODY_DEADLINE: Duration = Duration::from_secs(30);
 pub struct AppState {
     pub db: Arc<Database>,
     pub images: Arc<Images>,
+    /// The catalog files devices download.
+    pub snapshots: Arc<Snapshots>,
     pub indexes: Arc<Indexes>,
     /// Whether setup is seen done; a default one has not seen it yet.
     pub setup: Arc<Setup>,

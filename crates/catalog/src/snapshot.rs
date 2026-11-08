@@ -1,0 +1,45 @@
+//! The catalog snapshot: a library's device rows copied out of the server's database into a
+//! device-schema file (`design/general.md` §3), which a device downloads instead of replaying the
+//! feed.
+
+use rusqlite::{Connection, params};
+
+/// Copies `library`'s rows into `conn`'s own, empty, device-schema database from the server's
+/// database, which the caller attached as `server` beforehand (SQLite cannot attach inside a
+/// transaction). Only the device schema's tables and columns are read, so nothing server-only
+/// can reach the copy; a tag type is copied only if one of the library's tags has it.
+///
+/// Returns the library's feed position. It and the rows are read in one transaction, so the
+/// copy is exactly the library as of that position.
+pub fn copy(conn: &mut Connection, library: i64) -> rusqlite::Result<i64> {
+    let tx = conn.transaction()?;
+    // Read first: this opens the server database's snapshot, which every copy below shares.
+    let seq = tx.query_row(
+        "SELECT coalesce(max(seq), 0) FROM server.library_changes WHERE library_id = ?1",
+        [library],
+        |row| row.get(0),
+    )?;
+    let tables: Vec<(String, String)> = tx
+        .prepare(
+            "SELECT m.name, group_concat(p.name, ', ') FROM sqlite_schema AS m, \
+             pragma_table_info(m.name) AS p WHERE m.type = 'table' GROUP BY m.name",
+        )?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (table, columns) in tables {
+        let scope = if table == "tag_types" {
+            "key IN (SELECT type FROM server.tags WHERE library_id = ?1)"
+        } else {
+            "library_id = ?1"
+        };
+        tx.execute(
+            &format!(
+                "INSERT INTO main.{table} ({columns}) SELECT {columns} FROM server.{table} \
+                 WHERE {scope}"
+            ),
+            params![library],
+        )?;
+    }
+    tx.commit()?;
+    Ok(seq)
+}

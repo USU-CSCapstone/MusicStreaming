@@ -308,6 +308,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/libraries/{libraryId}/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Download the library's catalog
+         * @description The library's catalog as one SQLite database in the device schema
+         *     (`crates/catalog/src/schema.sql`), for a device that has none of it yet. It holds the
+         *     rows `listLibraryChanges` carries, as of `X-Jewelcase-Seq`: the device then pulls the
+         *     feed with `after` set to that value. The file is built once and shared by everyone who
+         *     reaches the library. It is rebuilt in the background once the library's feed holds more
+         *     changes since the file than a tenth of its tracks, albums and artists, and the old file is
+         *     served meanwhile. It is gzipped for a client that accepts it.
+         *
+         *     `ETag` is the SHA-256 of the database itself, as a quoted lowercase hex string,
+         *     whether or not the response is compressed: a client checks it against the file it ends
+         *     up with. A file is served only after SQLite's `quick_check` passed on it.
+         *
+         *     Until the first build has finished there is no file, and the answer is `503`. The client
+         *     reads the catalog from the other endpoints in the meantime and asks again after
+         *     `Retry-After`.
+         */
+        get: operations["getLibraryCatalog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/libraries/{libraryId}/tracks": {
         parameters: {
             query?: never;
@@ -1449,7 +1485,7 @@ export interface components {
              * @description `unsupported_media` comes only from planned operations.
              * @enum {string}
              */
-            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "queue_changed" | "queue_active" | "anchor_gone" | "play_gone" | "duplicate_key" | "version_conflict" | "cursor_expired" | "setup_required" | "unsupported_media" | "device_unavailable" | "plugin_settings_invalid" | "internal";
+            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "queue_changed" | "queue_active" | "anchor_gone" | "play_gone" | "duplicate_key" | "version_conflict" | "cursor_expired" | "setup_required" | "catalog_building" | "unsupported_media" | "device_unavailable" | "plugin_settings_invalid" | "internal";
             /**
              * @description With `session_revoked`. `credentials_changed` — the device keeps its downloads and
              *     logs in again with its `deviceId`; `logged_out` — the device removes them
@@ -3663,6 +3699,66 @@ export interface operations {
              */
             410: {
                 headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getLibraryCatalog: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    /** @description The SHA-256 of the uncompressed database, in quotes. */
+                    ETag?: string;
+                    /** @description The feed position the file is current to, for `listLibraryChanges`'s `after`. */
+                    "X-Jewelcase-Seq"?: number;
+                    /** @description `gzip` when the client accepts it. */
+                    "Content-Encoding"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.sqlite3": string;
+                };
+            };
+            /** @description Partial content (`Range`). A range applies to the encoding sent, so an interrupted download can resume. */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not modified (`If-Modified-Since`). */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Range not satisfiable. */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `catalog_building` — the first build has not finished; try again after `Retry-After`. */
+            503: {
+                headers: {
+                    "Retry-After"?: number;
                     [name: string]: unknown;
                 };
                 content: {

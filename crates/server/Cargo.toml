@@ -8,6 +8,7 @@ anyhow = "1.0.104"
 argon2 = "0.6"
 axum = { version = "0.8.9", features = ["macros", "ws"] }
 base64 = "0.23.1"
+flate2 = "1.1"
 getrandom = "0.4"
 hyper = { version = "1.11.1", features = ["server", "http1"] }
 hyper-util = { version = "0.1.20", features = ["tokio", "service"] }
@@ -30,7 +31,6 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 zxcvbn = { version = "3.1", default-features = false }
 
 [dev-dependencies]
-flate2 = "1.1"
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 tokio = { version = "1.53.1", features = ["test-util"] }
 tower = { version = "0.5.3", features = ["util"] }

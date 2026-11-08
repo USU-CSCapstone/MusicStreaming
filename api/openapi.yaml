@@ -457,6 +457,58 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /libraries/{libraryId}/catalog:
+    parameters:
+      - $ref: '#/components/parameters/LibraryId'
+    get:
+      tags: [Libraries]
+      summary: Download the library's catalog
+      description: |
+        The library's catalog as one SQLite database in the device schema
+        (`crates/catalog/src/schema.sql`), for a device that has none of it yet. It holds the
+        rows `listLibraryChanges` carries, as of `X-Jewelcase-Seq`: the device then pulls the
+        feed with `after` set to that value. The file is built once and shared by everyone who
+        reaches the library. It is rebuilt in the background once the library's feed holds more
+        changes since the file than a tenth of its tracks, albums and artists, and the old file is
+        served meanwhile. It is gzipped for a client that accepts it.
+
+        `ETag` is the SHA-256 of the database itself, as a quoted lowercase hex string,
+        whether or not the response is compressed: a client checks it against the file it ends
+        up with. A file is served only after SQLite's `quick_check` passed on it.
+
+        Until the first build has finished there is no file, and the answer is `503`. The client
+        reads the catalog from the other endpoints in the meantime and asks again after
+        `Retry-After`.
+      operationId: getLibraryCatalog
+      responses:
+        '200':
+          description: OK
+          headers:
+            ETag:
+              description: The SHA-256 of the uncompressed database, in quotes.
+              schema: { type: string }
+            X-Jewelcase-Seq:
+              description: The feed position the file is current to, for `listLibraryChanges`'s `after`.
+              schema: { type: integer, format: int64 }
+            Content-Encoding:
+              description: '`gzip` when the client accepts it.'
+              schema: { type: string }
+          content:
+            application/vnd.sqlite3:
+              schema: { type: string, format: binary }
+        '206': { description: 'Partial content (`Range`). A range applies to the encoding sent, so an interrupted download can resume.' }
+        '304': { description: Not modified (`If-Modified-Since`). }
+        '416': { description: Range not satisfiable. }
+        '503':
+          description: '`catalog_building` — the first build has not finished; try again after `Retry-After`.'
+          headers:
+            Retry-After:
+              schema: { type: integer }
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
   # ───────────────────────────── Browse ─────────────────────────────
   /libraries/{libraryId}/tracks:
     parameters:
@@ -2167,6 +2219,7 @@ components:
             - version_conflict
             - cursor_expired
             - setup_required
+            - catalog_building
             - unsupported_media
             - device_unavailable
             - plugin_settings_invalid

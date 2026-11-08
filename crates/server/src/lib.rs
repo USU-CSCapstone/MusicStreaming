@@ -79,6 +79,13 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
     if let Err(error) = images.sweep(&db).await {
         warn!(error = %format!("{error:#}"), "cannot sweep the image cache");
     }
+    let snapshots = api::Snapshots::new(
+        data_dir.cache().join("catalog"),
+        data_dir.state().join("jewelcase.db"),
+    );
+    if let Err(error) = snapshots.sweep(&db).await {
+        warn!(error = %format!("{error:#}"), "cannot sweep the catalog files");
+    }
     let installed = data_dir.state().join("plugins");
     let plugins = Arc::new(Plugins::new(db.clone(), installed, scanning.scanners()));
     plugins.start_hooks();
@@ -93,6 +100,7 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
     let mut app = api::router(api::AppState {
         db: db.clone(),
         images: Arc::new(images),
+        snapshots: Arc::new(snapshots),
         indexes,
         setup: Arc::default(),
         plugins: plugins.clone(),

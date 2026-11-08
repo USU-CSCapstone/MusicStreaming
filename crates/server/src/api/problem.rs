@@ -36,6 +36,7 @@ pub enum Code {
     PermissionsRequired,
     VersionConflict,
     CursorExpired,
+    CatalogBuilding,
     DeviceUnavailable,
     SetupRequired,
     Internal,
@@ -65,7 +66,7 @@ impl Code {
             | Self::QueueActive
             | Self::AnchorGone
             | Self::PlayGone => StatusCode::CONFLICT,
-            Self::SetupRequired => StatusCode::SERVICE_UNAVAILABLE,
+            Self::SetupRequired | Self::CatalogBuilding => StatusCode::SERVICE_UNAVAILABLE,
             Self::CursorExpired => StatusCode::GONE,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -88,7 +89,7 @@ pub struct Problem {
     /// The version the resource is at now, with `version_conflict`.
     #[serde(rename = "currentVersion", skip_serializing_if = "Option::is_none")]
     current_version: Option<i64>,
-    /// When to try again, in whole seconds, with `rate_limited`: sent as `Retry-After`.
+    /// When to try again, in whole seconds, with `rate_limited` or `catalog_building`: sent as `Retry-After`.
     #[serde(skip)]
     retry_after: Option<i64>,
 }
@@ -143,6 +144,11 @@ impl Problem {
     pub fn rate_limited(wait_ms: i64) -> Problem {
         let seconds = (wait_ms + 999) / 1000;
         Problem { retry_after: Some(seconds), ..Problem::new(Code::RateLimited) }
+    }
+
+    /// A `503 catalog_building` that says, in whole seconds, when to try again.
+    pub fn catalog_building(retry_after: i64) -> Problem {
+        Problem { retry_after: Some(retry_after), ..Problem::new(Code::CatalogBuilding) }
     }
 
     /// Its explanation, if it has one.
