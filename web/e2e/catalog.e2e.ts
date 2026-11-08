@@ -264,6 +264,9 @@ test('an offline device that never synced says the library is not on it yet', as
 	await expect(page.getByRole('heading', { name: 'Not on this device yet' })).toBeVisible();
 });
 
+/** A one pixel picture, for the images the worker keeps. */
+const PIXEL = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+
 /** An album's upsert at `seq`, as the library feed carries it. */
 const album = (seq: number, id: string, title: string) => ({
 	seq,
@@ -469,5 +472,48 @@ test.describe('the offline shell', () => {
 		await expect(page.getByRole('link', { name: 'Albums', exact: true }).first()).toBeVisible();
 		await page.getByRole('link', { name: 'Albums', exact: true }).first().click();
 		await expect(page.getByText(items[0].title, { exact: true }).first()).toBeVisible();
+	});
+
+	test('an album seen online shows its art offline', async ({ page, context }) => {
+		const withArt = album(5, '105', 'Pictured');
+		withArt.rows.albums[0].image_id = '900';
+		(withArt.rows as Record<string, object[]>).images = [
+			{ id: '900', library_id: '1', width: 1, height: 1, placeholder: '' }
+		];
+		const feed = { changes: [withArt], next: 5, head: 5 };
+		await serveGolden(page, [], true, feed);
+		// The worker's own requests bypass the page's routes, so the context answers the images.
+		const served: string[] = [];
+		await context.route('**/api/v1/libraries/1/images/*', (route) => {
+			served.push(route.request().url());
+			return route.fulfill({ body: PIXEL, contentType: 'image/gif' });
+		});
+		await page.goto('/');
+		await synced(page);
+		await expect
+			.poll(async () =>
+				(await query<Albums>(page, 'listAlbums')).items.some(({ title }) => title === 'Pictured')
+			)
+			.toBe(true);
+		// The worker takes over pages on their next load.
+		await page.evaluate(() => navigator.serviceWorker.ready);
+		await page.reload();
+		await page.getByRole('link', { name: 'Albums', exact: true }).first().click();
+		await expect(page.locator('img.loaded').first()).toBeVisible();
+		await expect
+			.poll(() => page.evaluate(async () => (await (await caches.open('images')).keys()).length))
+			.toBeGreaterThan(0);
+		await go(page, '/account');
+		await expect(page.getByText(/^\d+ images? · /)).toBeVisible();
+		await go(page, '/albums');
+
+		await context.setOffline(true);
+		await page.route('**/api/v1/**', (route) => route.abort());
+		const before = served.length;
+		await page.reload();
+		await page.getByRole('link', { name: 'Albums', exact: true }).first().click();
+		await expect(page.getByText('Pictured', { exact: true }).first()).toBeVisible();
+		await expect(page.locator('img.loaded').first()).toBeVisible();
+		expect(served).toHaveLength(before);
 	});
 });

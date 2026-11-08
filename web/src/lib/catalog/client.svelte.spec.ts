@@ -388,6 +388,14 @@ describe('CatalogClient', () => {
 		expect(workers[0].terminated).toBe(true);
 	});
 
+	it('sign-out empties the image cache', async () => {
+		const images = await caches.open('images');
+		await images.put('/api/v1/libraries/1/images/9?size=96', new Response('jpeg'));
+		const b = browser();
+		await b.tab('a').client.signOut();
+		expect(await caches.has('images')).toBe(false);
+	});
+
 	it('signing out in one tab is done by the tab that owns the files, which then lets them go', async () => {
 		const b = browser();
 		const owner = b.tab('owner');

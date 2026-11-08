@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { isRedirect } from '@sveltejs/kit';
+	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import {
@@ -14,6 +15,7 @@
 	import DeviceList from '$lib/components/DeviceList.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import SettingsDialog from '$lib/components/SettingsDialog.svelte';
+	import { imageCacheSize } from '$lib/image-cache';
 	import { prefs } from '$lib/prefs.svelte';
 	import { tagTypeName } from '$lib/tags';
 
@@ -26,6 +28,18 @@
 	let connectionError = $state('');
 	const roles: Record<User['role'], string> = { owner: 'Owner', admin: 'Admin', user: 'User' };
 	const tagTypes = $derived(page.data.tagTypes ?? []);
+
+	/** What the device keeps of the art seen online, once counted. */
+	let images = $state<{ count: number; bytes: number } | null>(null);
+	const megabytes = new Intl.NumberFormat(undefined, {
+		style: 'unit',
+		unit: 'megabyte',
+		maximumFractionDigits: 1
+	});
+	/** The count and size of the kept images, as one line of text. */
+	const imageSummary = ({ count, bytes }: { count: number; bytes: number }) =>
+		`${count} ${count === 1 ? 'image' : 'images'} · ${megabytes.format(bytes / 1_000_000)}`;
+	onMount(() => void imageCacheSize().then((size) => (images = size)));
 
 	let error = $state('');
 	let busy = $state(false);
@@ -132,6 +146,19 @@
 			</ul>
 		{:else}
 			<p class="muted">Your music carries no genres or moods yet.</p>
+		{/if}
+	</section>
+{/if}
+
+{#if me}
+	<section aria-labelledby="stored-images">
+		<h2 id="stored-images">Stored images</h2>
+		<p class="muted">
+			Art you've seen is kept on this device so it still shows offline. The oldest is dropped when
+			there's too much, and all of it is deleted when you log out.
+		</p>
+		{#if images}
+			<p>{imageSummary(images)}</p>
 		{/if}
 	</section>
 {/if}
