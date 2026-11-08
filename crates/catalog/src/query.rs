@@ -15,7 +15,7 @@ use crate::artists::{self, ArtistSort};
 use crate::credit::ArtistCredit;
 use crate::page::{Order, Request};
 use crate::playlists::{self, PlaylistSort};
-use crate::recipes::{self, Recipe, ResolveError};
+use crate::recipes::{self, Recipe};
 use crate::tag_filter::{TagFilter, Tags};
 use crate::tags::{self, TagSort};
 use crate::tracks::{self, TrackOrder, TrackSort};
@@ -59,13 +59,6 @@ impl From<playlists::ItemsError> for Error {
     /// Reports a refused playlist cursor, a missing playlist or an incomplete page by the error's
     /// own message.
     fn from(error: playlists::ItemsError) -> Error {
-        Error(error.to_string())
-    }
-}
-
-impl From<ResolveError> for Error {
-    /// Reports a recipe that cannot be resolved by the error's own message.
-    fn from(error: ResolveError) -> Error {
         Error(error.to_string())
     }
 }
