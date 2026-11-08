@@ -108,8 +108,6 @@ cargo test --release -p jewelcase-server write_device_scale_files -- --ignored -
 cd web && pnpm wasm && pnpm exec playwright test catalog-scale
 ```
 
-The data generator currently fails on the device schema's `libraries` table, so the benchmark
-cannot be regenerated until that is fixed.
 
 Code outside tests may not use `unwrap()`. Use `expect("why it can't fail")` only where failure
 is impossible, and handle anything that depends on input, files, configuration, or the
