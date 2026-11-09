@@ -1,6 +1,6 @@
 //! Writing the device database from the feeds: changes staged a page at a time and applied at the
-//! head a chunk at a time (`design/general.md` §3), with the position each feed has reached and
-//! a mark while an apply is part-way. The staging, the positions and the marks are tables of the
+//! head a chunk at a time (`design/general.md` §3), with the position each feed has reached, the
+//! epoch of the server's run it was given in, and a mark while an apply is part-way. The staging, the positions and the marks are tables of the
 //! database file but not of the device schema, which a downloaded snapshot replaces whole.
 
 use std::collections::BTreeMap;
@@ -12,12 +12,13 @@ use wasm_bindgen::prelude::*;
 
 use super::Catalog;
 
-/// What a database file keeps besides the device schema: each feed's last applied position, the
-/// changes pulled past it that are not applied yet, and the position an apply that is part-way
-/// goes to.
+/// What a database file keeps besides the device schema: each feed's last applied position and
+/// the epoch of its latest page, the changes pulled past it that are not applied yet, and the
+/// position an apply that is part-way goes to. A change to these raises the schema version too.
 pub(crate) const FEED_STATE: &str = "\
-    CREATE TABLE IF NOT EXISTS feed_cursors (feed TEXT PRIMARY KEY, seq INTEGER NOT NULL) \
-        WITHOUT ROWID; \
+    CREATE TABLE IF NOT EXISTS feed_cursors ( \
+        feed TEXT PRIMARY KEY, seq INTEGER NOT NULL, epoch TEXT \
+    ) WITHOUT ROWID; \
     CREATE TABLE IF NOT EXISTS staged_changes ( \
         feed TEXT NOT NULL, seq INTEGER NOT NULL, change TEXT NOT NULL, PRIMARY KEY (feed, seq) \
     ) WITHOUT ROWID; \
@@ -49,11 +50,19 @@ enum Op {
 #[wasm_bindgen]
 impl Catalog {
     /// Keeps `changes` (a JSON array of a feed's changes, such as a page of the feed's response)
-    /// for `feed` to apply later, replacing any already kept at the same positions. Nothing a
-    /// reader sees changes until `commit`.
-    pub fn stage(&self, feed: &str, changes: &str) -> Result<(), JsError> {
+    /// for `feed` to apply later, replacing any already kept at the same positions, and keeps
+    /// `epoch`, the page's, as the epoch the feed's positions are now asked in (see `epoch`).
+    /// Nothing a reader sees changes until `commit`.
+    pub fn stage(&self, feed: &str, epoch: &str, changes: &str) -> Result<(), JsError> {
         let changes: Vec<Change> = serde_json::from_str(changes)?;
         let tx = self.0.unchecked_transaction()?;
+        // The server answered in `epoch` from this file's position, so its earlier positions go
+        // on in it too.
+        tx.prepare_cached(
+            "INSERT INTO feed_cursors (feed, seq, epoch) VALUES (?1, 0, ?2) \
+             ON CONFLICT (feed) DO UPDATE SET epoch = excluded.epoch",
+        )?
+        .execute(params![feed, epoch])?;
         for change in &changes {
             tx.prepare_cached(
                 "INSERT OR REPLACE INTO staged_changes (feed, seq, change) VALUES (?1, ?2, ?3)",
@@ -110,7 +119,8 @@ impl Catalog {
         if done {
             tx.execute("DELETE FROM feed_applying WHERE feed = ?1", [feed])?;
             tx.execute(
-                "INSERT OR REPLACE INTO feed_cursors (feed, seq) VALUES (?1, ?2)",
+                "INSERT INTO feed_cursors (feed, seq) VALUES (?1, ?2) \
+                 ON CONFLICT (feed) DO UPDATE SET seq = excluded.seq",
                 params![feed, through],
             )?;
         } else {
@@ -141,6 +151,16 @@ impl Catalog {
             .query_row("SELECT seq FROM feed_cursors WHERE feed = ?1", [feed], |row| row.get(0))
             .optional()?;
         Ok(seq.unwrap_or(0))
+    }
+
+    /// The epoch of the server's run that `feed`'s positions were last given in, which a pull
+    /// sends with its position. Undefined before the first page is staged.
+    pub fn epoch(&self, feed: &str) -> Result<Option<String>, JsError> {
+        Ok(self
+            .0
+            .query_row("SELECT epoch FROM feed_cursors WHERE feed = ?1", [feed], |row| row.get(0))
+            .optional()?
+            .flatten())
     }
 
     /// The position a pull of `feed` resumes after: its last staged change, or its cursor when

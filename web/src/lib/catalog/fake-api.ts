@@ -34,6 +34,9 @@ export class FakeApi {
 	#feeds = new Map<string, Feed>();
 	#account: Feed = { changes: [], head: 0 };
 	#pageSize = 1000;
+	/** The server's run, and the runs it can go on from. */
+	#epoch = '1';
+	#epochs = new Set(['1']);
 	#failures: { match: string; after: number; status: number }[] = [];
 	#building = 0;
 	#wrongEtags = 0;
@@ -83,6 +86,16 @@ export class FakeApi {
 	/** The account's change feed. */
 	setAccount(changes: Change[], head: number) {
 		this.#account = { changes, head };
+	}
+
+	/**
+	 * Starts a new run `epoch`. A restart goes on from the positions of every earlier run; a
+	 * `restored` backup knows none of the runs before, as if they had come after the backup.
+	 */
+	restart(epoch: string, restored = false) {
+		if (restored) this.#epochs.clear();
+		this.#epochs.add(epoch);
+		this.#epoch = epoch;
 	}
 
 	/** Returns at most this many changes a page, whatever limit is asked. */
@@ -215,6 +228,7 @@ export class FakeApi {
 			headers: {
 				etag: `"${wrong ? '0'.repeat(64) : this.#etag}"`,
 				'x-jewelcase-seq': String(seq),
+				'x-jewelcase-epoch': this.#epoch,
 				'x-jewelcase-schema': String(this.#schema ?? schemaVersion()),
 				// A stale snapshot is asked for again at once rather than after the sync's wait.
 				'retry-after': '0',
@@ -223,14 +237,18 @@ export class FakeApi {
 		});
 	}
 
-	/** A page of `feed` after the `after` of the request, or `410` for a position past its head. */
+	/**
+	 * A page of `feed` after the `after` of the request, or `410` for a position past its head or
+	 * of a run the server does not know.
+	 */
 	#page(feed: Feed, url: URL): Response {
 		const after = Number(url.searchParams.get('after'));
 		const limit = Math.min(Number(url.searchParams.get('limit')), this.#pageSize);
 		if (after > feed.head) return problem(410);
+		if (after > 0 && !this.#epochs.has(url.searchParams.get('epoch') ?? '')) return problem(410);
 		const later = feed.changes.filter((change) => change.seq > after);
 		const changes = later.slice(0, limit);
 		const next = changes.length === later.length ? feed.head : changes[changes.length - 1].seq;
-		return Response.json({ changes, next, head: feed.head });
+		return Response.json({ changes, next, head: feed.head, epoch: this.#epoch });
 	}
 }

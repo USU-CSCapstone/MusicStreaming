@@ -258,6 +258,45 @@ mod tests {
     }
 
     #[test]
+    fn existing_changes_are_numbered_per_library_and_per_account() {
+        use crate::db::testing::{User, library};
+
+        let mut conn = configured();
+        let before = MIGRATIONS.iter().position(|m| m.name.starts_with("0011")).unwrap();
+        migrate(&mut conn, &MIGRATIONS[..before]).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        for id in [1, 2] {
+            User::new(id, if id == 1 { "owner" } else { "user" }).insert(&conn).unwrap();
+            library(&conn, id, "Music", root.path()).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO library_changes (library_id, entity_type, entity_id, op, changed_at)
+             VALUES (1, 'track', 1, 'upsert', 0), (2, 'track', 2, 'upsert', 0),
+                    (2, 'track', 3, 'upsert', 0), (1, 'track', 4, 'upsert', 0);
+             INSERT INTO account_changes (user_id, library_id, kind, playlist_id, op)
+             VALUES (2, 1, 'playlist', 5, 'upsert'), (1, 1, 'playlist', 6, 'upsert');",
+        )
+        .unwrap();
+
+        migrate(&mut conn, MIGRATIONS).unwrap();
+
+        let rows = |sql: &str| -> Vec<(i64, i64)> {
+            conn.prepare(sql)
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        let library = "SELECT library_id, position FROM library_changes ORDER BY seq";
+        assert_eq!(rows(library), [(1, 1), (2, 1), (2, 2), (1, 2)]);
+        let account = "SELECT user_id, position FROM account_changes ORDER BY seq";
+        assert_eq!(rows(account), [(2, 1), (1, 1)]);
+        assert_eq!(rows("SELECT id, feed_head FROM libraries ORDER BY id"), [(1, 2), (2, 2)]);
+        assert_eq!(rows("SELECT id, feed_head FROM users ORDER BY id"), [(1, 1), (2, 1)]);
+    }
+
+    #[test]
     fn refuses_a_database_from_a_newer_version() {
         let mut conn = Connection::open_in_memory().unwrap();
         conn.pragma_update(None, "user_version", 99).unwrap();

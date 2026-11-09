@@ -144,6 +144,11 @@ export class Harness {
 		return Number(this.#sync!.catalogs.get(library)!.cursor(feed));
 	}
 
+	/** The epoch the library's file holds for `feed`. */
+	epoch(library: string, feed: string) {
+		return this.#sync!.catalogs.get(library)!.epoch(feed);
+	}
+
 	/** The position the library's next pull of `feed` resumes after. */
 	pulled(library: string, feed: string) {
 		return Number(this.#sync!.catalogs.get(library)!.pulled(feed));

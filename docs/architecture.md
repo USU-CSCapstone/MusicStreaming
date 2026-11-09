@@ -60,7 +60,9 @@ position, so a plugin never misses a change, even across restarts. The web app s
 same feed for offline use. Its first sync is a snapshot file of the library, a SQLite database
 the server builds once per library and every account that reaches the library shares. After
 that the app pulls the feed from the snapshot's position, told to pull by a realtime hint when
-something changes and when it reconnects. Each account has a feed of its own for its playlists.
+something changes and when it reconnects. Each feed counts positions of its own, and each start
+of the server is a new epoch, which the app sends with its position, so a server restored from a
+backup makes a device ahead of the backup download the library again. Each account has a feed of its own for its playlists.
 See [`design/database.md`](../design/database.md).
 
 **Browsing and search.** API requests read from SQLite. Search runs against

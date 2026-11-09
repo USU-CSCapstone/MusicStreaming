@@ -37,9 +37,12 @@ async fn edit(app: &Router, id: &str, version: i64, ops: Value) {
     assert_eq!(status, StatusCode::OK, "{answer}");
 }
 
-/// The feed `uri` of `token`.
+/// The feed of `token` with `query`, which is asked in the server's current epoch.
 async fn feed(app: &Router, token: &str, query: &str) -> (StatusCode, Value) {
-    call(app, token, "GET", &format!("/api/v1/me/changes{query}"), None).await
+    let (_, first) = call(app, token, "GET", "/api/v1/me/changes?limit=1", None).await;
+    let epoch = first["epoch"].as_str().unwrap();
+    let query = if query.is_empty() { "?after=0".to_owned() } else { query.to_owned() };
+    call(app, token, "GET", &format!("/api/v1/me/changes{query}&epoch={epoch}"), None).await
 }
 
 /// The `(kind, id, key)` of each change in `page`.
@@ -156,6 +159,9 @@ async fn pages_end_at_head_and_a_cursor_past_it_is_gone() {
     assert_eq!((status, &gone["code"]), (StatusCode::GONE, &json!("cursor_expired")), "{gone}");
     let (status, _) = feed(&app, "user-token", "?after=1").await;
     assert_eq!(status, StatusCode::GONE, "another account's positions are not this one's");
+    let (status, _) =
+        call(&app, TOKEN, "GET", &format!("/api/v1/me/changes?after={head}"), None).await;
+    assert_eq!(status, StatusCode::GONE, "a position without its epoch");
     let (status, _) = feed(&app, TOKEN, "?after=-1").await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }
@@ -221,4 +227,20 @@ async fn the_feed_brings_a_device_current_and_a_tombstone_clears_a_playlist() {
     assert_eq!(page["changes"][0]["op"], "delete");
     catch_up(head).await;
     assert_eq!((dump(&device, "playlists").len(), dump(&device, "playlist_items").len()), (0, 0));
+}
+
+#[tokio::test]
+async fn each_account_counts_its_own_positions() {
+    let (_temp, app) = world().await;
+    create(&app, "user-token", "Theirs", &[1, 2, 1]).await;
+    create(&app, TOKEN, "Mine", &[1]).await;
+    let (_, page) = feed(&app, TOKEN, "").await;
+    let seqs: Vec<_> = page["changes"].as_array().unwrap().iter().map(|c| &c["seq"]).collect();
+    assert_eq!(seqs, [1, 2], "the other account's four changes leave no gap: {page}");
+    assert_eq!(page["head"], 2);
+
+    // A device at the account's position 1 is sent only what came after it there.
+    let (_, later) = feed(&app, TOKEN, "?after=1").await;
+    let seqs: Vec<_> = later["changes"].as_array().unwrap().iter().map(|c| &c["seq"]).collect();
+    assert_eq!(seqs, [2], "{later}");
 }

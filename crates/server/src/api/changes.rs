@@ -13,9 +13,9 @@ use serde::{Deserialize, Serialize};
 use super::extract::Query;
 use super::page;
 use super::scope::Scope;
-use super::{Code, Id, Problem};
+use super::{AnyId, Code, Id, Problem};
 use crate::db::Database;
-use crate::db::feed::Op;
+use crate::db::feed::{self, Feed, Op};
 
 /// The parameters of `listLibraryChanges`.
 #[derive(Deserialize)]
@@ -23,6 +23,8 @@ use crate::db::feed::Op;
 pub struct ChangesQuery {
     #[serde(default)]
     after: i64,
+    /// The epoch `after` was given in; one that is not an ID names no epoch.
+    epoch: Option<AnyId>,
     limit: Option<u32>,
 }
 
@@ -32,18 +34,28 @@ pub struct Changes<C> {
     pub changes: Vec<C>,
     pub next: i64,
     pub head: i64,
+    pub epoch: Id,
 }
 
 impl ChangesQuery {
-    /// The checked `(after, limit)`: `after` at least 0, `limit` in bounds, else
+    /// The checked `(after, epoch, limit)`: `after` at least 0, `limit` in bounds, else
     /// `422 validation_failed`.
-    pub fn check(self) -> Result<(i64, u32), Problem> {
+    pub fn check(self) -> Result<(i64, Option<i64>, u32), Problem> {
         let limit = page::limit(self.limit)?;
         if self.after < 0 {
             return Err(Problem::invalid("after must be at least 0"));
         }
-        Ok((self.after, limit))
+        Ok((self.after, self.epoch.and_then(|AnyId(id)| id), limit))
     }
+}
+
+/// `feed`'s head, or `410 cursor_expired` unless a client at `after` in `epoch` can go on from
+/// there ([`feed::continues`]).
+pub fn head(conn: &Connection, feed: Feed, epoch: Option<i64>, after: i64) -> Result<i64, Problem> {
+    if !feed::continues(conn, feed, epoch, after)? {
+        return Err(Problem::new(Code::CursorExpired));
+    }
+    Ok(feed::head(conn, feed)?)
 }
 
 /// Where a feed page ends: at the last row read when the page is full, else at the feed's `head`.
@@ -66,35 +78,33 @@ pub struct Change {
 }
 
 /// `listLibraryChanges`: the library's changes after `after`, at most `limit`, each upsert with
-/// its entity's current rows, read from one snapshot. `after` beyond the library's latest change
-/// is `410 cursor_expired`.
+/// its entity's current rows, read from one snapshot. A position this run cannot go on from
+/// ([`head`]) is `410 cursor_expired`.
 pub async fn list(
     State(db): State<Arc<Database>>,
     Scope { library, .. }: Scope,
     Query(query): Query<ChangesQuery>,
 ) -> Result<Json<Changes<Change>>, Problem> {
-    let (after, limit) = query.check()?;
-    db.try_read(move |conn| read(conn, library, after, limit)).await.map(Json)
+    let (after, epoch, limit) = query.check()?;
+    let current = db.epoch();
+    db.try_read(move |conn| read(conn, library, (after, epoch), limit, current)).await.map(Json)
 }
 
-/// The changes of `library` after `after` as [`list`] answers them.
+/// The changes of `library` after the cursor `(after, epoch)` as [`list`] answers them, in run
+/// `current`.
 fn read(
     conn: &Connection,
     library: i64,
-    after: i64,
+    (after, epoch): (i64, Option<i64>),
     limit: u32,
+    current: i64,
 ) -> Result<Changes<Change>, Problem> {
-    let head: i64 = conn
-        .prepare_cached("SELECT coalesce(max(seq), 0) FROM library_changes WHERE library_id = ?1")?
-        .query_row([library], |row| row.get(0))?;
-    if after > head {
-        return Err(Problem::new(Code::CursorExpired));
-    }
+    let head = head(conn, Feed::Library(library), epoch, after)?;
     let listed: Vec<(i64, String, i64, String)> = conn
         .prepare_cached(
-            "SELECT seq, entity_type, entity_id, op FROM library_changes \
-             WHERE library_id = ?1 AND seq > ?2 \
-             ORDER BY seq LIMIT ?3",
+            "SELECT position, entity_type, entity_id, op FROM library_changes \
+             WHERE library_id = ?1 AND position > ?2 \
+             ORDER BY position LIMIT ?3",
         )?
         .query_map(params![library, after, limit], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
@@ -120,7 +130,7 @@ fn read(
         };
         changes.push(Change { seq, op, kind, id: Id(id), rows });
     }
-    Ok(Changes { changes, next, head })
+    Ok(Changes { changes, next, head, epoch: Id(current) })
 }
 
 #[cfg(test)]

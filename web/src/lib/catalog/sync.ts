@@ -62,8 +62,11 @@ const FILE = /^lib-(\d+)-(\d+)\.db(-journal)?$/;
 type Change = { seq: number; op: string; kind: string; id: string; rows?: Rows };
 /** Rows by table name. */
 type Rows = Record<string, Record<string, unknown>[]>;
-/** A page of a feed: `next` is the position of its last change, `head` that of the feed. */
-type Page = { changes: Change[]; next: number; head: number };
+/**
+ * A page of a feed: `next` is the position of its last change, `head` that of the feed, and
+ * `epoch` the server's run they belong to, which the next page is asked with.
+ */
+type Page = { changes: Change[]; next: number; head: number; epoch: string };
 
 /** The messages of the realtime connection that make the worker pull. */
 type Heard = Extract<
@@ -493,7 +496,7 @@ export class CatalogSync {
 		let after = Number(catalog.pulled(ACCOUNT));
 		let touched = false;
 		for (;;) {
-			const response = await this.#get(`/me/changes?after=${after}&limit=${PAGE}`);
+			const response = await this.#get(`/me/changes?${this.#cursor(catalog, ACCOUNT, after)}`);
 			if (stale()) return true;
 			if (response.status === 410) return false;
 			const page = await this.#page(response);
@@ -506,7 +509,7 @@ export class CatalogSync {
 					)
 			);
 			await this.#queue;
-			catalog.stage(ACCOUNT, JSON.stringify(mine));
+			catalog.stage(ACCOUNT, page.epoch, JSON.stringify(mine));
 			touched ||= mine.length > 0;
 			if (page.next >= page.head) {
 				await this.#apply(catalog, ACCOUNT, BigInt(page.next), stale);
@@ -589,7 +592,9 @@ export class CatalogSync {
 		let after = Number(catalog.pulled(LIBRARY));
 		let pulled = 0;
 		for (;;) {
-			const response = await this.#get(`/libraries/${id}/changes?after=${after}&limit=${PAGE}`);
+			const response = await this.#get(
+				`/libraries/${id}/changes?${this.#cursor(catalog, LIBRARY, after)}`
+			);
 			if (stale()) return 'current';
 			if (response.status === 410) return 'expired';
 			if (response.status === 404) {
@@ -601,7 +606,7 @@ export class CatalogSync {
 			pulled += page.changes.length;
 			await this.#queue;
 			if (!fresh && pulled > this.#entities(id, catalog) * REDOWNLOAD_SHARE) return 'far';
-			catalog.stage(LIBRARY, JSON.stringify(page.changes));
+			catalog.stage(LIBRARY, page.epoch, JSON.stringify(page.changes));
 			if (page.next >= page.head) {
 				await this.#apply(catalog, LIBRARY, BigInt(page.next), stale);
 				if (pulled > 0 && !stale()) this.#announce(id);
@@ -658,6 +663,15 @@ export class CatalogSync {
 			const through = stale() ? undefined : catalog.applying(feed);
 			if (through !== undefined) await this.#apply(catalog, feed, through, stale);
 		}
+	}
+
+	/**
+	 * The query of a page of `feed` after position `after`: with the epoch `catalog` holds for it,
+	 * since the server goes on only from a position of a run it knows.
+	 */
+	#cursor(catalog: Catalog, feed: string, after: number) {
+		const epoch = after > 0 ? catalog.epoch(feed) : undefined;
+		return `after=${after}${epoch ? `&epoch=${epoch}` : ''}&limit=${PAGE}`;
 	}
 
 	/** The number of tracks, albums and artists in a library, from the totals of its listings. */
@@ -749,6 +763,7 @@ export class CatalogSync {
 		const file = `lib-${id}-${generation + 1}.db`;
 		await this.#reserve(2 * (this.catalogs.size + 3));
 		let seq: number;
+		let epoch: string;
 		for (let mismatches = 0, older = 0; ;) {
 			const response = await this.#snapshot(id);
 			if (!response) {
@@ -756,6 +771,7 @@ export class CatalogSync {
 				return undefined;
 			}
 			seq = Number(response.headers.get('x-jewelcase-seq'));
+			epoch = response.headers.get('x-jewelcase-epoch') ?? '';
 			if (existing && !forced && seq <= Number(existing.cursor(LIBRARY))) {
 				if (this.catalogs.get(id) === existing) {
 					void response.body?.cancel();
@@ -781,6 +797,7 @@ export class CatalogSync {
 			}
 			await this.#queue;
 			// A new file stages nothing for these, so each is done in one call.
+			catalog.stage(LIBRARY, epoch, '[]');
 			catalog.commit(LIBRARY, BigInt(seq), APPLY_CHUNK);
 			catalog.commit(OWNER, BigInt(this.#user), APPLY_CHUNK);
 		} catch (error) {

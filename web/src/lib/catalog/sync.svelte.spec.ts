@@ -230,8 +230,8 @@ describe('catalog sync', () => {
 		await h.message(libraryChanged(BASE + 2));
 		await h.idle();
 		expect((await h.api.asked('/')).slice(asked)).toEqual([
-			`/libraries/1/changes?after=${BASE}&limit=1000`,
-			`/libraries/1/changes?after=${BASE + 1}&limit=1000`
+			`/libraries/1/changes?after=${BASE}&epoch=1&limit=1000`,
+			`/libraries/1/changes?after=${BASE + 1}&epoch=1&limit=1000`
 		]);
 		expect([await tagName('90'), await tagName('91')]).toEqual(['Rock', 'Jazz']);
 		expect(await h.cursor('1', 'library')).toBe(BASE + 2);
@@ -272,7 +272,7 @@ describe('catalog sync', () => {
 		const resumed = (await h.api.asked('/'))
 			.slice(asked)
 			.filter((p) => p.includes('/libraries/1/'));
-		expect(resumed).toEqual([`/libraries/1/changes?after=${BASE + 2}&limit=1000`]);
+		expect(resumed).toEqual([`/libraries/1/changes?after=${BASE + 2}&epoch=1&limit=1000`]);
 		expect([await tagName('90'), await tagName('91'), await tagName('92')]).toEqual([
 			'Rock',
 			'Jazz',
@@ -298,8 +298,8 @@ describe('catalog sync', () => {
 		expect(await tagName('91')).toBe('Jazz');
 		expect(await h.cursor('1', 'library')).toBe(BASE + 2);
 		expect((await h.api.asked('/libraries/1/changes')).slice(2)).toEqual([
-			`/libraries/1/changes?after=${BASE}&limit=1000`,
-			`/libraries/1/changes?after=${BASE + 1}&limit=1000`
+			`/libraries/1/changes?after=${BASE}&epoch=1&limit=1000`,
+			`/libraries/1/changes?after=${BASE + 1}&epoch=1&limit=1000`
 		]);
 	});
 
@@ -529,6 +529,64 @@ describe('catalog sync', () => {
 		expect(await h.libraries()).toEqual(['1']);
 		expect(await total('listTracks')).toBe(6);
 		expect(await h.reported()).toHaveLength(1);
+	});
+
+	it("asks each feed from the epoch of its last page, and takes on a restarted server's", async () => {
+		await started('1');
+		await grown();
+		expect([await h.epoch('1', 'library'), await h.epoch('1', 'account')]).toEqual(['1', '1']);
+
+		await h.api.restart('2');
+		await h.api.setFeed('1', [tag(BASE + 1, '90', 'Rock')], BASE + 1);
+		await h.message(libraryChanged(BASE + 1));
+		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.idle();
+		expect(await h.api.asked(`/libraries/1/changes?after=${BASE}&epoch=1`)).toHaveLength(1);
+		expect(await h.api.asked(`/me/changes?after=${accountHead}&epoch=1`)).toHaveLength(1);
+		expect([await h.epoch('1', 'library'), await h.epoch('1', 'account')]).toEqual(['2', '2']);
+
+		await h.api.setFeed('1', [tag(BASE + 2, '91', 'Jazz')], BASE + 2);
+		await h.message(libraryChanged(BASE + 2));
+		await h.idle();
+		expect(await h.api.asked(`/libraries/1/changes?after=${BASE + 1}&epoch=2`)).toHaveLength(1);
+		expect(await tagName('91')).toBe('Jazz');
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(1);
+	});
+
+	it('a restored server that does not know the epoch is downloaded again', async () => {
+		await started('1');
+		// The restored feed has moved past the device's position, so only the epoch tells.
+		await h.api.restart('9', true);
+		await h.api.setSeq('1', SEQ + 5);
+		await h.api.setFeed('1', [], SEQ + 5);
+		await h.message(libraryChanged(SEQ + 5));
+		await h.idle();
+
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
+		expect([await h.cursor('1', 'library'), await h.epoch('1', 'library')]).toEqual([SEQ + 5, '9']);
+		expect(await h.reported()).toEqual([]);
+	});
+
+	it('a file kept before feeds had epochs is deleted and bootstrapped again', async () => {
+		await started('1');
+		await h.stop();
+		const [file] = await h.files();
+		// Schema version 4 kept a feed's position alone.
+		await h.run(file, [
+			'DROP TABLE feed_cursors',
+			'CREATE TABLE feed_cursors (feed TEXT PRIMARY KEY, seq INTEGER NOT NULL) WITHOUT ROWID',
+			`INSERT INTO feed_cursors VALUES ('library', ${SEQ}), ('account', ${accountHead}), ('owner', 1)`,
+			'PRAGMA user_version = 4'
+		]);
+
+		await h.start();
+		await h.idle();
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
+		await h.api.setFeed('1', [tag(SEQ + 1, '90', 'Rock')], SEQ + 1);
+		await h.message(libraryChanged(SEQ + 1));
+		await h.idle();
+		expect(await tagName('90')).toBe('Rock');
+		expect(await h.reported()).toEqual([]);
 	});
 
 	it('a snapshot whose hash does not match its ETag is discarded and downloaded again', async () => {
@@ -830,7 +888,7 @@ describe('catalog sync', () => {
 			.slice(asked)
 			.filter((p) => p.includes('/libraries/1/changes'));
 		expect(new Set(pulls)).toEqual(
-			new Set([`/libraries/1/changes?after=${BASE + LARGE}&limit=1000`])
+			new Set([`/libraries/1/changes?after=${BASE + LARGE}&epoch=1&limit=1000`])
 		);
 	});
 

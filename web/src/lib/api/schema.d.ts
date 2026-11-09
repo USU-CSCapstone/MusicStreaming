@@ -153,8 +153,10 @@ export interface paths {
          *     while the caller could not reach a library are left out, so a device that installs a
          *     library's catalog file, the first time or again, pulls this feed again from `after=0`.
          *
-         *     Pass `next` as `after` until it equals `head`, when the client is current. `head` is the
-         *     position of the caller's latest change, comparable with `accountChanged`'s `seq`.
+         *     Pass `next` as `after`, with the page's `epoch`, until `next` equals `head`, when the
+         *     client is current. Positions are the caller's own, counted from 1 by their changes alone,
+         *     and `head` is that of the caller's latest change, comparable with `accountChanged`'s
+         *     `seq`.
          */
         get: operations["listAccountChanges"];
         put?: never;
@@ -333,9 +335,17 @@ export interface paths {
          *     album, artist, or tag that shows it, and a change to the image or the type puts them all
          *     on the feed again.
          *
-         *     Pass `next` as `after` until it equals `head`, when the client is current. A client that
-         *     has applied a page has applied every change up to its `next`, and may stop and resume
-         *     from there.
+         *     Pass `next` as `after`, with the page's `epoch`, until `next` equals `head`, when the
+         *     client is current. A client that has applied a page has applied every change up to its
+         *     `next`, and may stop and resume from there. Positions are the library's own, counted from
+         *     1 by its changes alone, and `head` only grows.
+         *
+         *     Each start of the server is a run with an `epoch` of its own. Positions go on across
+         *     runs, so a client keeps the `epoch` of its latest page with its position and sends both;
+         *     the server goes on from a position of any run it knows, up to where that run ended. A
+         *     server restored from a backup does not know the runs after the backup, nor the changes
+         *     its run made after the backup was taken, so it refuses those positions rather than skip
+         *     what it has recorded since.
          */
         get: operations["listLibraryChanges"];
         put?: never;
@@ -360,7 +370,7 @@ export interface paths {
          * @description The library's catalog as one SQLite database in the device schema
          *     (`crates/catalog/src/schema.sql`), for a device that has none of it yet. It holds the
          *     rows `listLibraryChanges` carries, as of `X-Jewelcase-Seq`: the device then pulls the
-         *     feed with `after` set to that value. The file is built once and shared by everyone who
+         *     feed with `after` set to that value and `epoch` to `X-Jewelcase-Epoch`. The file is built once and shared by everyone who
          *     reaches the library. It is rebuilt in the background once the library's feed holds more
          *     changes since the file than a tenth of its tracks, albums and artists, and the old file is
          *     served meanwhile. It is gzipped for a client that accepts it.
@@ -1549,6 +1559,8 @@ export interface components {
              * @description The position of the library's latest change when the page was read.
              */
             head: number;
+            /** @description The server's run that `next` and `head` belong to, to send with `next`. */
+            epoch: string;
         };
         LibraryChange: {
             /** Format: int64 */
@@ -1580,6 +1592,8 @@ export interface components {
              * @description The position of the caller's latest change when the page was read.
              */
             head: number;
+            /** @description The server's run that `next` and `head` belong to, to send with `next`. */
+            epoch: string;
         };
         AccountChange: {
             /** Format: int64 */
@@ -3314,6 +3328,11 @@ export interface components {
         PluginId: string;
         Cursor: string;
         Limit: number;
+        /**
+         * @description The `epoch` of the page whose `next` is `after` (or the catalog file's
+         *     `X-Jewelcase-Epoch`). Required with an `after` above 0: without it the answer is `410`.
+         */
+        FeedEpoch: string;
         /** @description Only items this artist is credited on. See `artistCredit`. */
         ArtistFilter: string;
         /**
@@ -3560,6 +3579,11 @@ export interface operations {
             query?: {
                 /** @description The `next` of the last page applied, or 0 for everything. */
                 after?: number;
+                /**
+                 * @description The `epoch` of the page whose `next` is `after` (or the catalog file's
+                 *     `X-Jewelcase-Epoch`). Required with an `after` above 0: without it the answer is `410`.
+                 */
+                epoch?: components["parameters"]["FeedEpoch"];
                 limit?: components["parameters"]["Limit"];
             };
             header?: never;
@@ -3577,7 +3601,10 @@ export interface operations {
                     "application/json": components["schemas"]["AccountChanges"];
                 };
             };
-            /** @description `cursor_expired` — `after` is past the caller's latest change; start again from `after=0`. */
+            /**
+             * @description `cursor_expired` — the server cannot go on from `after` in `epoch`: see
+             *     `listLibraryChanges`. Start again from `after=0`.
+             */
             410: {
                 headers: {
                     [name: string]: unknown;
@@ -3792,6 +3819,11 @@ export interface operations {
             query?: {
                 /** @description The `next` of the last page applied, or 0 for the whole catalog. */
                 after?: number;
+                /**
+                 * @description The `epoch` of the page whose `next` is `after` (or the catalog file's
+                 *     `X-Jewelcase-Epoch`). Required with an `after` above 0: without it the answer is `410`.
+                 */
+                epoch?: components["parameters"]["FeedEpoch"];
                 limit?: components["parameters"]["Limit"];
             };
             header?: never;
@@ -3812,9 +3844,10 @@ export interface operations {
                 };
             };
             /**
-             * @description `cursor_expired` — the server cannot continue from `after`, because it is past the
-             *     library's latest change or older than the feed reaches back; start again from
-             *     `after=0`.
+             * @description `cursor_expired` — the server cannot go on from `after`: it is past the library's
+             *     latest change or older than the feed reaches back, or `epoch` is missing, is not a run
+             *     of this server, or ended before `after`, as after a restore from a backup. Start again
+             *     from `after=0`, or from the catalog file (`getLibraryCatalog`).
              */
             410: {
                 headers: {
@@ -3843,8 +3876,10 @@ export interface operations {
                 headers: {
                     /** @description The SHA-256 of the uncompressed database, in quotes. */
                     ETag?: string;
-                    /** @description The feed position the file is current to, for `listLibraryChanges`'s `after`. */
+                    /** @description The library's feed position the file is current to, for `listLibraryChanges`'s `after`. */
                     "X-Jewelcase-Seq"?: number;
+                    /** @description The run that position belongs to, for `listLibraryChanges`'s `epoch`. */
+                    "X-Jewelcase-Epoch"?: string;
                     /** @description The device schema version of the file (`PRAGMA user_version`). */
                     "X-Jewelcase-Schema"?: number;
                     /** @description `no-store`. */

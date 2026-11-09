@@ -32,9 +32,10 @@ pub use json::Json;
 #[derive(Debug, PartialEq, Eq)]
 pub struct Invalid(pub String);
 
-/// The device schema's version. Raise it whenever [`SCHEMA`] changes: a device whose database
-/// carries another version deletes it and syncs again, since it is only a copy of the server's.
-pub const SCHEMA_VERSION: i32 = 4;
+/// The device schema's version. Raise it whenever [`SCHEMA`] changes, or what a device keeps of
+/// the feeds beside it, or what the feeds' positions mean: a device whose database carries another
+/// version deletes it and syncs again, since it is only a copy of the server's.
+pub const SCHEMA_VERSION: i32 = 5;
 
 /// The device schema's DDL: a subset of the server's catalog tables with the same table and
 /// column names and types, minus what never leaves the server.

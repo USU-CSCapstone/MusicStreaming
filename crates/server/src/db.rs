@@ -106,6 +106,8 @@ pub struct Database {
     feed_head: watch::Sender<i64>,
     /// The latest position in the account change feed, as of the same write.
     account_head: watch::Sender<i64>,
+    /// This run's epoch, which clients hold with their feed positions.
+    epoch: i64,
     _threads: Threads,
 }
 
@@ -134,6 +136,9 @@ impl Database {
         store::tag_types::count_built_in(&writer)?;
         // Once the libraries are large enough to describe (design/database.md §4).
         gather_statistics(&writer)?;
+        let start = writer.transaction()?;
+        let epoch = feed::start_epoch(&start)?;
+        start.commit()?;
 
         let reader_count = thread::available_parallelism().map_or(4, NonZeroUsize::get).max(2);
         let mut readers = Vec::with_capacity(reader_count);
@@ -203,8 +208,15 @@ impl Database {
             readers: reader_queue,
             feed_head,
             account_head,
+            epoch,
             _threads: Threads(threads),
         })
+    }
+
+    /// This run's epoch, drawn as the database opened: the feeds' positions given now belong to
+    /// it (`feed::continues`).
+    pub fn epoch(&self) -> i64 {
+        self.epoch
     }
 
     /// Follows the latest position in any library's change feed, which moves once the write

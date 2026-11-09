@@ -37,14 +37,14 @@ async fn setup() -> (tempfile::TempDir, Arc<Database>, Arc<Hub>) {
 }
 
 /// Records an upsert of each of `tracks` in `library`'s feed in one transaction, and returns the
-/// feed's position after it.
+/// library's own feed position after it.
 async fn change(db: &Database, library: i64, tracks: &[i64]) -> i64 {
     let tracks = tracks.to_vec();
     db.write(move |tx| {
         for track in tracks {
             feed::record(tx, library, Entity::Track, track, Op::Upsert, 0)?;
         }
-        tx.query_row("SELECT max(seq) FROM library_changes", [], |row| row.get(0))
+        feed::head(tx, feed::Feed::Library(library))
     })
     .await
     .unwrap()
@@ -148,23 +148,20 @@ async fn each_hint_carries_its_own_librarys_seq() {
     let (_temp, db, hub) = setup().await;
     let mut owner = hub.connect(1, 1);
 
-    let (first, second) = db
-        .write(|tx| {
-            feed::record(tx, 1, Entity::Track, 1, Op::Upsert, 0)?;
-            let first: i64 =
-                tx.query_row("SELECT max(seq) FROM library_changes", [], |r| r.get(0))?;
-            feed::record(tx, 2, Entity::Track, 2, Op::Upsert, 0)?;
-            let second: i64 =
-                tx.query_row("SELECT max(seq) FROM library_changes", [], |r| r.get(0))?;
-            Ok((first, second))
-        })
-        .await
-        .unwrap();
+    db.write(|tx| {
+        for track in 1..=3 {
+            feed::record(tx, 2, Entity::Track, track, Op::Upsert, 0)?;
+        }
+        feed::record(tx, 1, Entity::Track, 1, Op::Upsert, 0)
+    })
+    .await
+    .unwrap();
 
+    // Each library's own position: library 2's three changes leave library 1 at its first.
     let mut heard_both = [heard(&mut owner).await, heard(&mut owner).await];
     heard_both.sort_by_key(|hint| hint["libraryId"].as_str().unwrap().to_owned());
-    assert_eq!(heard_both[0], json!({ "type": "libraryChanged", "libraryId": "1", "seq": first }));
-    assert_eq!(heard_both[1], json!({ "type": "libraryChanged", "libraryId": "2", "seq": second }));
+    assert_eq!(heard_both[0], json!({ "type": "libraryChanged", "libraryId": "1", "seq": 1 }));
+    assert_eq!(heard_both[1], json!({ "type": "libraryChanged", "libraryId": "2", "seq": 3 }));
 }
 
 #[tokio::test(start_paused = true)]
@@ -233,11 +230,12 @@ fn a_burst_of_changes_sends_at_most_one_hint_per_second_with_the_latest_seq() {
     assert_eq!(throttle.moved(at(2100), 2, 3), Some(3));
 }
 
-/// Records a change to `user`'s playlist 7 in library 1 and returns the account feed's position.
+/// Records a change to `user`'s playlist 7 in library 1 and returns the account's own feed
+/// position.
 async fn account_change(db: &Database, user: i64) -> i64 {
     db.write(move |tx| {
         feed::record_account(tx, user, 1, Kind::Playlist, 7, 0, Op::Upsert)?;
-        tx.query_row("SELECT max(seq) FROM account_changes", [], |row| row.get(0))
+        feed::head(tx, feed::Feed::Account(user))
     })
     .await
     .unwrap()
@@ -277,4 +275,19 @@ async fn the_last_account_change_of_a_burst_is_always_hinted() {
     tokio::time::advance(WINDOW).await;
 
     assert_eq!(heard_paused(&mut user).await["seq"], json!(last));
+}
+
+#[tokio::test]
+async fn an_account_hint_carries_the_accounts_own_position() {
+    let (_temp, db, hub) = setup().await;
+    let mut user = hub.connect(2, 2);
+    db.write(|tx| {
+        for playlist in 1..=3 {
+            feed::record_account(tx, 1, 1, Kind::Playlist, playlist, 0, Op::Upsert)?;
+        }
+        feed::record_account(tx, 2, 1, Kind::Playlist, 7, 0, Op::Upsert)
+    })
+    .await
+    .unwrap();
+    assert_eq!(heard(&mut user).await, json!({ "type": "accountChanged", "seq": 1 }));
 }

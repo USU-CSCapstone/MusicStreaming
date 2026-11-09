@@ -4,7 +4,7 @@ import { Catalog } from '$lib/catalog-wasm/jewelcase_catalog_wasm.js';
 
 test('catalog-wasm opens an in-memory database and creates the schema', () => {
 	const catalog = Catalog.openInMemory();
-	expect(catalog.schemaVersion()).toBe(4);
+	expect(catalog.schemaVersion()).toBe(5);
 	expect(catalog.tables()).toEqual(
 		expect.arrayContaining([
 			'albums',
@@ -50,7 +50,7 @@ function device(): Catalog {
 			key,
 			rows: tables
 		}));
-		catalog.stage(feed, JSON.stringify(changes));
+		catalog.stage(feed, '1', JSON.stringify(changes));
 		catalog.commit(feed, BigInt(changes.length), changes.length);
 	}
 	catalog.buildIndex('1');
@@ -101,7 +101,7 @@ test('catalog-wasm refuses what it cannot answer with an error', () => {
 	expect(query('resolveRecipe', { recipe: { type: 'search', q: 'a', filters: {} } })).toThrow(
 		'search index is not built'
 	);
-	expect(() => catalog.stage('library:1', '[{"kind":"track"}]')).toThrow();
+	expect(() => catalog.stage('library:1', '1', '[{"kind":"track"}]')).toThrow();
 	catalog.free();
 });
 
@@ -137,8 +137,8 @@ test('catalog-wasm applies staged changes only at commit, with the feed position
 	const name = () => JSON.parse(catalog.query('1', '1', 'getTag', '{"tagId":"9"}'))?.name;
 	expect(catalog.cursor('library:1')).toBe(0n);
 
-	catalog.stage('library:1', JSON.stringify([upsert(3, 'Rock')]));
-	catalog.stage('library:1', JSON.stringify([upsert(4, 'Rock and roll')]));
+	catalog.stage('library:1', '1', JSON.stringify([upsert(3, 'Rock')]));
+	catalog.stage('library:1', '1', JSON.stringify([upsert(4, 'Rock and roll')]));
 	expect([name(), catalog.cursor('library:1'), catalog.pulled('library:1')]).toEqual([
 		undefined,
 		0n,
@@ -154,6 +154,7 @@ test('catalog-wasm applies staged changes only at commit, with the feed position
 
 	catalog.stage(
 		'library:1',
+		'1',
 		JSON.stringify([{ seq: 5, op: 'delete', kind: 'tag', id: '9', rows: null }])
 	);
 	expect(name()).toBe('Rock and roll');
@@ -166,11 +167,26 @@ test('catalog-wasm applies staged changes only at commit, with the feed position
 	catalog.free();
 });
 
+test("catalog-wasm keeps the epoch of a feed's latest page, and its position until a commit", () => {
+	const catalog = Catalog.openInMemory();
+	expect(catalog.epoch('library:1')).toBeUndefined();
+	catalog.stage('library:1', '7', JSON.stringify([upsert(3, 'Rock')]));
+	expect([catalog.epoch('library:1'), catalog.cursor('library:1')]).toEqual(['7', 0n]);
+	catalog.commit('library:1', 3n, 100);
+	catalog.stage('library:1', '8', '[]');
+	expect([catalog.epoch('library:1'), catalog.cursor('library:1')]).toEqual(['8', 3n]);
+	catalog.commit('library:1', 4n, 100);
+	expect([catalog.epoch('library:1'), catalog.cursor('library:1')]).toEqual(['8', 4n]);
+	expect(catalog.epoch('account')).toBeUndefined();
+	catalog.free();
+});
+
 test('catalog-wasm applies staged changes a chunk at a time, marked until the last', () => {
 	const catalog = Catalog.openInMemory();
 	const tags = () => JSON.parse(catalog.query('1', '1', 'listTags', '{"limit":1}')).total;
 	catalog.stage(
 		'library:1',
+		'1',
 		JSON.stringify([upsert(3, 'Rock', '10'), upsert(4, 'Jazz', '11'), upsert(5, 'Soul', '12')])
 	);
 
@@ -238,13 +254,13 @@ test('catalog-wasm commits nothing when a staged change fails, and only the feed
 	const broken = upsert(4, 'Jazz', '10');
 	// A NULL name breaks the table's constraint, after the first change was applied.
 	broken.rows.tags[0].name = null as unknown as string;
-	catalog.stage('library:1', JSON.stringify([upsert(3, 'Rock'), broken]));
+	catalog.stage('library:1', '1', JSON.stringify([upsert(3, 'Rock'), broken]));
 	expect(() => catalog.commit('library:1', 4n, 100)).toThrow();
 	expect(name('9')).toBeUndefined();
 	expect([catalog.cursor('library:1'), catalog.pulled('library:1')]).toEqual([0n, 4n]);
 
-	catalog.stage('library:1', JSON.stringify([upsert(4, 'Jazz', '10')]));
-	catalog.stage('account', JSON.stringify([upsert(1, 'Blues', '11')]));
+	catalog.stage('library:1', '1', JSON.stringify([upsert(4, 'Jazz', '10')]));
+	catalog.stage('account', '1', JSON.stringify([upsert(1, 'Blues', '11')]));
 	catalog.commit('library:1', 7n, 100);
 	expect([name('9'), name('10'), name('11')]).toEqual(['Rock', 'Jazz', undefined]);
 	expect([catalog.cursor('library:1'), catalog.pulled('library:1')]).toEqual([7n, 7n]);

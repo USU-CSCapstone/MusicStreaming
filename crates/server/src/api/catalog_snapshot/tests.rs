@@ -51,6 +51,11 @@ fn seq(headers: &HeaderMap) -> i64 {
     headers["x-jewelcase-seq"].to_str().unwrap().parse().unwrap()
 }
 
+/// The epoch in a response's `X-Jewelcase-Epoch`.
+fn epoch(headers: &HeaderMap) -> &str {
+    headers["x-jewelcase-epoch"].to_str().unwrap()
+}
+
 /// Every table's columns, as `table.column`.
 fn columns(conn: &Connection) -> Vec<String> {
     conn.prepare(
@@ -89,8 +94,8 @@ async fn stale(db: &Database, library: i64) {
 #[tokio::test]
 async fn the_first_request_answers_building_and_a_later_one_the_file() {
     let (_temp, db, app) = catalog::app().await;
+    record(&db, 2, &[(Entity::Track, 2001, Op::Upsert), (Entity::Track, 2002, Op::Upsert)]).await;
     record(&db, 1, &[(Entity::Track, 1001, Op::Upsert)]).await;
-    record(&db, 2, &[(Entity::Track, 2001, Op::Upsert)]).await;
     let (status, headers, body) = fetch(&app, URI, false).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(headers[header::RETRY_AFTER], "30");
@@ -98,15 +103,8 @@ async fn the_first_request_answers_building_and_a_later_one_the_file() {
     assert_eq!(problem["code"], "catalog_building");
 
     let (headers, _) = built(&app).await;
-    let head: i64 = db
-        .read(|c| {
-            c.query_row("SELECT max(seq) FROM library_changes WHERE library_id = 1", [], |r| {
-                r.get(0)
-            })
-        })
-        .await
-        .unwrap();
-    assert_eq!(seq(&headers), head, "the library's head, not the server's");
+    assert_eq!(seq(&headers), 1, "the library's own position, untouched by library 2's");
+    assert_eq!(epoch(&headers), db.epoch().to_string());
     assert_eq!(headers[header::CONTENT_TYPE], "application/vnd.sqlite3");
     assert_eq!(headers[header::CACHE_CONTROL], "no-store", "no copy left in the HTTP cache");
     let schema = jewelcase_catalog::SCHEMA_VERSION.to_string();
@@ -271,8 +269,11 @@ async fn the_feed_after_the_snapshots_seq_brings_a_device_current() {
     .unwrap();
     record(&db, 1, &[(Entity::Track, 1001, Op::Upsert), (Entity::Track, 1002, Op::Delete)]).await;
 
-    let after = seq(&headers);
-    let (_, page) = json(&app, &format!("/api/v1/libraries/1/changes?after={after}")).await;
+    let (after, epoch) = (seq(&headers), epoch(&headers));
+    let uri = format!("/api/v1/libraries/1/changes?after={after}&epoch={epoch}");
+    let (status, page) = json(&app, &uri).await;
+    assert_eq!(status, StatusCode::OK, "the feed goes on from the file's position: {page}");
+    assert_eq!(page["changes"].as_array().unwrap().len(), 2);
     for change in page["changes"].as_array().unwrap() {
         let id = change["id"].as_str().unwrap();
         match change["op"].as_str().unwrap() {
@@ -328,10 +329,10 @@ async fn the_etag_is_the_sha256_of_the_served_file() {
 
 #[tokio::test]
 async fn a_snapshot_failing_quick_check_is_not_served() {
-    let (temp, _db, _app) = catalog::app().await;
+    let (temp, db, _app) = catalog::app().await;
     let dir = temp.path().join("out");
     let failing = |_: &Connection| Err(rusqlite::Error::InvalidQuery);
-    let built = build(&temp.path().join("jewelcase.db"), &dir, 1, failing);
+    let built = build(&temp.path().join("jewelcase.db"), &dir, 1, db.epoch(), failing);
     assert!(built.is_err());
     assert!(newest(&dir).unwrap().is_none());
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "no leftovers either");
@@ -395,20 +396,35 @@ async fn another_librarys_churn_and_one_change_do_not_rebuild() {
 }
 
 #[tokio::test]
-async fn a_file_past_the_librarys_head_is_not_served() {
-    let (temp, _db, app) = catalog::app().await;
+async fn a_file_this_database_cannot_go_on_from_is_not_served() {
+    let (temp, db, app, snapshots) = catalog::app_with_snapshots().await;
+    record(&db, 1, &[(Entity::Track, 1001, Op::Upsert)]).await;
     let (first, _) = built(&app).await;
+    let idle = async || {
+        let idle = || snapshots.building.lock().unwrap().is_empty().then_some(());
+        eventually("the builds to finish", async || idle()).await;
+    };
     let dir = temp.path().join("cache/catalog/1");
-    let old = newest(&dir).unwrap().unwrap();
-    let name =
-        |ext: &str| format!("{SCHEMA_VERSION}-{}-{}.db{ext}", seq(&first) + 1000, old.sha256);
-    std::fs::rename(&old.path, dir.join(name(""))).unwrap();
-    std::fs::rename(old.path.with_extension("db.gz"), dir.join(name(".gz"))).unwrap();
+    // Past the library's head in this run, and at its head in a run this database never had,
+    // as a file newer than a restored backup would be.
+    for (epoch, position) in [(db.epoch(), seq(&first) + 1), (db.epoch() ^ 1, seq(&first))] {
+        idle().await;
+        let old = newest(&dir).unwrap().unwrap();
+        let name =
+            |ext: &str| format!("{SCHEMA_VERSION}-{epoch}-{position}-{}.db{ext}", old.sha256);
+        std::fs::rename(&old.path, dir.join(name(""))).unwrap();
+        std::fs::rename(old.path.with_extension("db.gz"), dir.join(name(".gz"))).unwrap();
 
-    let (status, ..) = fetch(&app, URI, false).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    let (headers, _) = built(&app).await;
-    assert_eq!(seq(&headers), seq(&first));
+        let (status, ..) = fetch(&app, URI, false).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "epoch {epoch} at {position}");
+        let (headers, _) = built(&app).await;
+        assert_eq!((seq(&headers), epoch_of(&headers)), (seq(&first), db.epoch()));
+    }
+}
+
+/// The epoch in a response's `X-Jewelcase-Epoch`, as a number.
+fn epoch_of(headers: &HeaderMap) -> i64 {
+    epoch(headers).parse().unwrap()
 }
 
 #[tokio::test]
@@ -437,9 +453,10 @@ async fn a_file_a_rebuild_deleted_after_it_was_chosen_gives_way_to_its_replaceme
     let (headers, bytes) = built(&app).await;
     let dir = temp.path().join("cache/catalog/1");
     let gone = Current {
-        seq: 1,
+        epoch: 1,
+        position: 1,
         sha256: "gone".to_owned(),
-        path: dir.join(format!("{SCHEMA_VERSION}-1-gone.db")),
+        path: dir.join(format!("{SCHEMA_VERSION}-1-1-gone.db")),
     };
     let request = owner_request("GET", URI).body(Body::empty()).unwrap();
 
@@ -458,7 +475,7 @@ async fn a_failed_build_is_not_started_again_until_the_cooldown_passes() {
     let dir = root.join("1");
     let snapshots = Arc::new(Snapshots::new(root.clone(), temp.path().join("jewelcase.db")));
     let attempt = async || {
-        snapshots.start(1);
+        snapshots.start(1, 1);
         eventually("the build to end", async || {
             snapshots.building.lock().unwrap().is_empty().then_some(())
         })
@@ -493,7 +510,9 @@ async fn a_file_of_another_schema_version_is_not_served_and_a_build_replaces_it(
     idle().await;
     let dir = temp.path().join("cache/catalog/1");
     let old = newest(&dir).unwrap().unwrap();
-    let name = |ext: &str| format!("{}-{}-{}.db{ext}", SCHEMA_VERSION - 1, old.seq, old.sha256);
+    let name = |ext: &str| {
+        format!("{}-{}-{}-{}.db{ext}", SCHEMA_VERSION - 1, old.epoch, old.position, old.sha256)
+    };
     std::fs::rename(&old.path, dir.join(name(""))).unwrap();
     std::fs::rename(old.path.with_extension("db.gz"), dir.join(name(".gz"))).unwrap();
 

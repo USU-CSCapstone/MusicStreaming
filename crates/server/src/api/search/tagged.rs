@@ -95,8 +95,7 @@ fn used(kept: &mut Vec<(Key, i64, Sets)>, key: &Key, head: i64) -> Option<Sets> 
 
 /// The position of `library`'s latest change, 0 when it has none.
 fn head(conn: &Connection, library: i64) -> rusqlite::Result<i64> {
-    conn.prepare_cached("SELECT ifnull(max(seq), 0) FROM library_changes WHERE library_id = ?1")?
-        .query_row([library], |row| row.get(0))
+    crate::db::feed::head(conn, crate::db::feed::Feed::Library(library))
 }
 
 #[cfg(test)]

@@ -10,6 +10,9 @@ const etag = createHash('sha256').update(snapshot).digest('hex');
 /** The schema version the golden file was built at: its SQLite header's `user_version`. */
 const schema = String(snapshot.readUInt32BE(60));
 
+/** The server's run, which the feeds and the snapshot are given in. */
+const EPOCH = '1';
+
 /** The dev mock has no feeds or snapshot, so serve the golden library's, as library 1, after `serveLibrary`'s routes, which come first otherwise. */
 async function serveCatalog(
 	page: Page,
@@ -31,16 +34,22 @@ async function serveCatalog(
 				headers: {
 					etag: `"${etag}"`,
 					'x-jewelcase-seq': '0',
+					'x-jewelcase-epoch': EPOCH,
 					'x-jewelcase-schema': schema,
 					'content-type': 'application/vnd.sqlite3'
 				}
 			});
-		if (path === '/libraries/1/changes') return route.fulfill({ json: feed });
+		if (path === '/libraries/1/changes') return route.fulfill({ json: { ...feed, epoch: EPOCH } });
 		if (path === '/me/changes') {
 			const after = Number(new URL(route.request().url()).searchParams.get('after'));
 			const head = account.at(-1)?.seq ?? 0;
 			return route.fulfill({
-				json: { changes: account.filter(({ seq }) => seq > after), next: head, head }
+				json: {
+					changes: account.filter(({ seq }) => seq > after),
+					next: head,
+					head,
+					epoch: EPOCH
+				}
 			});
 		}
 		return route.fallback();
