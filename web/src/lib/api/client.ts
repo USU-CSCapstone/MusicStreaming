@@ -23,6 +23,7 @@ import type {
 	PlaylistItemPage,
 	PlaylistPage,
 	RecentSearch,
+	Scan,
 	SearchResponse,
 	ServerInfo,
 	Session,
@@ -318,6 +319,17 @@ export function imageUrl(libraryId: string, image: ImageRef, size: number): stri
 		size: Math.round(size * dpr)
 	});
 }
+
+// ───────────────────────────── Scan administration ─────────────────────────────
+
+const scans = (libraryId: string) => `/admin/libraries/${encodeURIComponent(libraryId)}/scans`;
+
+/** The library's queued and running scans, and the last to finish, newest first. */
+export const adminListScans = (f: Fetch, libraryId: string) =>
+	get<{ items: Scan[] }>(f, scans(libraryId));
+
+/** Queues a scan of the whole library; answers the scan that will do it, which may be one already queued. */
+export const startScan = (f: Fetch, libraryId: string) => send<Scan>(f, 'POST', scans(libraryId));
 
 // ───────────────────────────── Plugin administration ─────────────────────────────
 
