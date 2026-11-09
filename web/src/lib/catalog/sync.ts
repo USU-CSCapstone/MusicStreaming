@@ -59,7 +59,7 @@ const OWNER = 'owner';
 const FILE = /^lib-(\d+)-(\d+)\.db(-journal)?$/;
 
 /** One entry of a feed: `rows` are the entity's rows, by table, for anything but a delete. */
-type Change = { seq: number; op: string; kind: string; id: string; rows?: Rows };
+type Change = { position: number; op: string; kind: string; id: string; rows?: Rows };
 /** Rows by table name. */
 type Rows = Record<string, Record<string, unknown>[]>;
 /**
@@ -264,7 +264,7 @@ export class CatalogSync {
 				if (!catalog) {
 					if (!this.#failed.has(heard.libraryId))
 						void this.#run(ACCOUNT, () => this.#pullAccount(), true);
-				} else if (Number(catalog.cursor(LIBRARY)) < heard.seq) {
+				} else if (Number(catalog.cursor(LIBRARY)) < heard.position) {
 					void this.#pullLibrary(heard.libraryId, true);
 				}
 			});
@@ -764,7 +764,7 @@ export class CatalogSync {
 		}, 0);
 		const file = `lib-${id}-${generation + 1}.db`;
 		await this.#reserve(2 * (this.catalogs.size + 3));
-		let seq: number;
+		let position: number;
 		let epoch: string;
 		for (let mismatches = 0, older = 0; ;) {
 			const response = await this.#snapshot(id);
@@ -772,9 +772,9 @@ export class CatalogSync {
 				await this.#discard(id);
 				return undefined;
 			}
-			seq = Number(response.headers.get('x-jewelcase-seq'));
+			position = Number(response.headers.get('x-jewelcase-position'));
 			epoch = response.headers.get('x-jewelcase-epoch') ?? '';
-			if (existing && !forced && seq <= Number(existing.cursor(LIBRARY))) {
+			if (existing && !forced && position <= Number(existing.cursor(LIBRARY))) {
 				if (this.catalogs.get(id) === existing) {
 					void response.body?.cancel();
 					if (++older === BUILD_TRIES) return existing;
@@ -800,7 +800,7 @@ export class CatalogSync {
 			await this.#queue;
 			// A new file stages nothing for these, so each is done in one call.
 			catalog.stage(LIBRARY, epoch, '[]');
-			catalog.commit(LIBRARY, BigInt(seq), APPLY_CHUNK);
+			catalog.commit(LIBRARY, BigInt(position), APPLY_CHUNK);
 			catalog.commit(OWNER, BigInt(this.#user), APPLY_CHUNK);
 		} catch (error) {
 			catalog?.free();

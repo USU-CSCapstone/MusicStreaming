@@ -19,7 +19,7 @@ async function serveCatalog(
 	asked: string[],
 	ids = ['11', '1'],
 	feed: { changes: object[]; next: number; head: number } = { changes: [], next: 0, head: 0 },
-	account: { seq: number }[] = []
+	account: { position: number }[] = []
 ) {
 	await page.route('**/api/v1/**', async (route) => {
 		const path = new URL(route.request().url()).pathname.replace(/^.*\/api\/v1/, '');
@@ -33,7 +33,7 @@ async function serveCatalog(
 				body: snapshot,
 				headers: {
 					etag: `"${etag}"`,
-					'x-jewelcase-seq': '0',
+					'x-jewelcase-position': '0',
 					'x-jewelcase-epoch': EPOCH,
 					'x-jewelcase-schema': schema,
 					'content-type': 'application/vnd.sqlite3'
@@ -42,10 +42,10 @@ async function serveCatalog(
 		if (path === '/libraries/1/changes') return route.fulfill({ json: { ...feed, epoch: EPOCH } });
 		if (path === '/me/changes') {
 			const after = Number(new URL(route.request().url()).searchParams.get('after'));
-			const head = account.at(-1)?.seq ?? 0;
+			const head = account.at(-1)?.position ?? 0;
 			return route.fulfill({
 				json: {
-					changes: account.filter(({ seq }) => seq > after),
+					changes: account.filter(({ position }) => position > after),
 					next: head,
 					head,
 					epoch: EPOCH
@@ -148,8 +148,8 @@ async function serveGolden(
 						ws.send(
 							JSON.stringify(
 								hint === 'account'
-									? { type: 'accountChanged', seq: 99 }
-									: { type: 'libraryChanged', libraryId: '1', seq: 5 }
+									? { type: 'accountChanged', position: 99 }
+									: { type: 'libraryChanged', libraryId: '1', position: 5 }
 							)
 						),
 					300
@@ -214,9 +214,9 @@ const go = (page: Page, path: string) =>
 		link.remove();
 	}, path);
 
-/** A genre tag's upsert at `seq`, as the library feed carries it. */
-const genre = (seq: number, id: string, name: string) => ({
-	seq,
+/** A genre tag's upsert at `position`, as the library feed carries it. */
+const genre = (position: number, id: string, name: string) => ({
+	position,
 	op: 'upsert',
 	kind: 'tag',
 	id,
@@ -285,9 +285,9 @@ test('an offline device that never synced says the library is not on it yet', as
 /** A one pixel picture, for the images the worker keeps. */
 const PIXEL = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
 
-/** An album's upsert at `seq`, as the library feed carries it. */
-const album = (seq: number, id: string, title: string) => ({
-	seq,
+/** An album's upsert at `position`, as the library feed carries it. */
+const album = (position: number, id: string, title: string) => ({
+	position,
 	op: 'upsert',
 	kind: 'album',
 	id,
@@ -351,7 +351,7 @@ test('a playlist edited on another device updates the open playlist', async ({ p
 	const rows = (goldenRows as { kind: string; id: string; key: number; tables: object }[])
 		.filter(({ kind }) => kind === 'playlist' || kind === 'playlistItem')
 		.map(({ kind, id, key, tables }, i) => ({
-			seq: i + 1,
+			position: i + 1,
 			op: 'upsert',
 			kind,
 			id,
@@ -367,10 +367,10 @@ test('a playlist edited on another device updates the open playlist', async ({ p
 
 	// Another device renamed it; the account feed carries that to this one.
 	const renamed = structuredClone(rows.find(({ kind }) => kind === 'playlist')!) as {
-		seq: number;
+		position: number;
 		rows: { playlists: { title: string; version: number }[] };
 	};
-	renamed.seq = account.length + 1;
+	renamed.position = account.length + 1;
 	renamed.rows.playlists[0].title = 'Renamed Elsewhere';
 	renamed.rows.playlists[0].version = 4;
 	account.push(renamed);

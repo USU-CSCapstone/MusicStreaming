@@ -52,11 +52,11 @@ afterAll(() => worker.terminate());
 beforeEach(() => h.reset(snapshot));
 
 /** The feed position the fake server's snapshots are current to. */
-const SEQ = 10;
+const POSITION = 10;
 
-/** A tag's upsert at `seq`, as the library feed carries it. */
-const tag = (seq: number, id: string, name: string) => ({
-	seq,
+/** A tag's upsert at `position`, as the library feed carries it. */
+const tag = (position: number, id: string, name: string) => ({
+	position,
 	op: 'upsert',
 	kind: 'tag',
 	id,
@@ -81,7 +81,7 @@ const tag = (seq: number, id: string, name: string) => ({
 const playlists = library
 	.filter((rows) => rows.kind === 'playlist' || rows.kind === 'playlistItem')
 	.map((rows, i) => ({
-		seq: i + 1,
+		position: i + 1,
 		op: 'upsert',
 		kind: rows.kind,
 		id: rows.id,
@@ -90,7 +90,7 @@ const playlists = library
 	}));
 /** The same account's playlist in another library, which this library's file must not hold. */
 const elsewhere = {
-	seq: playlists.length + 1,
+	position: playlists.length + 1,
 	op: 'upsert',
 	kind: 'playlist',
 	id: '504',
@@ -100,12 +100,12 @@ const elsewhere = {
 };
 const accountHead = playlists.length + 1;
 
-/** A server with libraries `ids`, each at `SEQ` with nothing newer. */
+/** A server with libraries `ids`, each at `POSITION` with nothing newer. */
 async function serve(...ids: string[]) {
 	await h.api.setLibraries(ids);
 	for (const id of ids) {
-		await h.api.setSeq(id, SEQ);
-		await h.api.setFeed(id, [], SEQ);
+		await h.api.setPosition(id, POSITION);
+		await h.api.setFeed(id, [], POSITION);
 	}
 	await h.api.setAccount([...playlists, elsewhere], accountHead);
 }
@@ -118,7 +118,7 @@ async function started(...ids: string[]) {
 }
 
 /** The feed position `grown` moves a library to. */
-const BASE = SEQ + 1;
+const BASE = POSITION + 1;
 
 /**
  * Moves the started library on to `BASE`, a catch-up of one change that gives it `tracks` tracks,
@@ -126,7 +126,7 @@ const BASE = SEQ + 1;
  */
 async function grown(tracks = 1000) {
 	const counts = {
-		seq: BASE,
+		position: BASE,
 		op: 'upsert',
 		kind: 'library',
 		id: '1',
@@ -137,9 +137,9 @@ async function grown(tracks = 1000) {
 	await h.idle();
 }
 
-/** An album's upsert at `seq`, as the library feed carries it. */
-const album = (seq: number, id: string, title: string) => ({
-	seq,
+/** An album's upsert at `position`, as the library feed carries it. */
+const album = (position: number, id: string, title: string) => ({
+	position,
 	op: 'upsert',
 	kind: 'album',
 	id,
@@ -170,11 +170,11 @@ const album = (seq: number, id: string, title: string) => ({
 });
 
 const hello = { type: 'hello', deviceId: '1', serverTime: '' };
-/** The realtime hint that `libraryId`'s feed reached `seq`. */
-const libraryChanged = (seq: number, libraryId = '1') => ({
+/** The realtime hint that `libraryId`'s feed reached `position`. */
+const libraryChanged = (position: number, libraryId = '1') => ({
 	type: 'libraryChanged',
 	libraryId,
-	seq
+	position
 });
 /** The name the device's catalog holds for tag `id`, or undefined when it has none. */
 const tagName = async (id: string) =>
@@ -214,7 +214,7 @@ describe('catalog sync', () => {
 		expect(await h.libraries()).toEqual(['1']);
 		expect(await total('listTracks')).toBe(6);
 		expect([await h.cursor('1', 'library'), await h.cursor('1', 'account')]).toEqual([
-			SEQ,
+			POSITION,
 			accountHead
 		]);
 		expect(await h.reported()).toEqual([]);
@@ -333,19 +333,19 @@ describe('catalog sync', () => {
 		const others = Array.from({ length: 5 }, (_, i) => `${i + 2}`);
 		await h.api.setLibraries(['1', ...others]);
 		for (const id of others) {
-			await h.api.setSeq(id, SEQ);
-			await h.api.setFeed(id, [], SEQ);
+			await h.api.setPosition(id, POSITION);
+			await h.api.setFeed(id, [], POSITION);
 		}
 		await h.api.setPageSize(1);
 		await h.message(hello);
 		// Each hint is a further page of changes, staged and applied while the others bootstrap.
 		for (let i = 0; i < 40; i++) {
-			const seq = BASE + 1 + i;
+			const position = BASE + 1 + i;
 			const changes = Array.from({ length: i + 1 }, (_, j) =>
 				tag(BASE + 1 + j, `${90 + j}`, `Tag ${j}`)
 			);
-			await h.api.setFeed('1', changes, seq);
-			await h.message(libraryChanged(seq));
+			await h.api.setFeed('1', changes, position);
+			await h.message(libraryChanged(position));
 		}
 		await h.idle();
 		expect(await h.reported()).toEqual([]);
@@ -421,7 +421,7 @@ describe('catalog sync', () => {
 		expect(await h.files()).toHaveLength(2);
 
 		await h.api.setLibraries(['1']);
-		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
 		await h.idle();
 		expect(await h.libraries()).toEqual(['1']);
 		expect(await h.files()).toHaveLength(1);
@@ -430,9 +430,9 @@ describe('catalog sync', () => {
 	it('a newly listed library is bootstrapped', async () => {
 		await started('1');
 		await h.api.setLibraries(['1', '2']);
-		await h.api.setSeq('2', 7);
+		await h.api.setPosition('2', 7);
 		await h.api.setFeed('2', [], 7);
-		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
 		await h.idle();
 
 		expect(await h.libraries()).toEqual(['1', '2']);
@@ -473,9 +473,9 @@ describe('catalog sync', () => {
 	it('a worker whose session is now another account’s downloads no library again', async () => {
 		await started('1');
 		await h.api.setSession('2');
-		await h.api.setSeq('1', 5);
+		await h.api.setPosition('1', 5);
 		await h.api.setFeed('1', [], 5);
-		await h.message(libraryChanged(SEQ + 1));
+		await h.message(libraryChanged(POSITION + 1));
 		await h.idle();
 
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(1);
@@ -485,9 +485,9 @@ describe('catalog sync', () => {
 	it('410 bootstraps again', async () => {
 		await started('1');
 		// The server's feed is now behind the device's position, as after a restored backup.
-		await h.api.setSeq('1', 5);
+		await h.api.setPosition('1', 5);
 		await h.api.setFeed('1', [], 5);
-		await h.message(libraryChanged(SEQ + 1));
+		await h.message(libraryChanged(POSITION + 1));
 		await h.idle();
 
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
@@ -498,7 +498,7 @@ describe('catalog sync', () => {
 	it('404 from a feed deletes the library, which the account no longer reaches', async () => {
 		await started('1', '2');
 		await h.api.setLibraries(['1']);
-		await h.message(libraryChanged(SEQ + 1, '2'));
+		await h.message(libraryChanged(POSITION + 1, '2'));
 		await h.idle();
 
 		expect(await h.libraries()).toEqual(['1']);
@@ -510,7 +510,7 @@ describe('catalog sync', () => {
 		expect(await total('listPlaylists')).toBe(2);
 		// The server's account feed is behind the device's position, and holds no playlists now.
 		await h.api.setAccount([], 1);
-		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
 		await h.idle();
 
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
@@ -530,10 +530,10 @@ describe('catalog sync', () => {
 
 	it('410 keeps the old copy until the new snapshot is in', async () => {
 		await started('1');
-		await h.api.setSeq('1', 5);
+		await h.api.setPosition('1', 5);
 		await h.api.setFeed('1', [], 5);
 		await h.api.failAfter('/libraries/1/catalog', 1);
-		await h.message(libraryChanged(SEQ + 1));
+		await h.message(libraryChanged(POSITION + 1));
 		await h.idle();
 
 		expect(await h.libraries()).toEqual(['1']);
@@ -549,7 +549,7 @@ describe('catalog sync', () => {
 		await h.api.restart('2');
 		await h.api.setFeed('1', [tag(BASE + 1, '90', 'Rock')], BASE + 1);
 		await h.message(libraryChanged(BASE + 1));
-		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
 		await h.idle();
 		expect(await h.api.asked(`/libraries/1/changes?after=${BASE}&epoch=1`)).toHaveLength(1);
 		expect(await h.api.asked(`/me/changes?after=${accountHead}&epoch=1`)).toHaveLength(1);
@@ -567,13 +567,16 @@ describe('catalog sync', () => {
 		await started('1');
 		// The restored feed has moved past the device's position, so only the epoch tells.
 		await h.api.restart('9', true);
-		await h.api.setSeq('1', SEQ + 5);
-		await h.api.setFeed('1', [], SEQ + 5);
-		await h.message(libraryChanged(SEQ + 5));
+		await h.api.setPosition('1', POSITION + 5);
+		await h.api.setFeed('1', [], POSITION + 5);
+		await h.message(libraryChanged(POSITION + 5));
 		await h.idle();
 
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
-		expect([await h.cursor('1', 'library'), await h.epoch('1', 'library')]).toEqual([SEQ + 5, '9']);
+		expect([await h.cursor('1', 'library'), await h.epoch('1', 'library')]).toEqual([
+			POSITION + 5,
+			'9'
+		]);
 		expect(await h.reported()).toEqual([]);
 	});
 
@@ -585,15 +588,15 @@ describe('catalog sync', () => {
 		await h.run(file, [
 			'DROP TABLE feed_cursors',
 			'CREATE TABLE feed_cursors (feed TEXT PRIMARY KEY, seq INTEGER NOT NULL) WITHOUT ROWID',
-			`INSERT INTO feed_cursors VALUES ('library', ${SEQ}), ('account', ${accountHead}), ('owner', 1)`,
+			`INSERT INTO feed_cursors VALUES ('library', ${POSITION}), ('account', ${accountHead}), ('owner', 1)`,
 			'PRAGMA user_version = 4'
 		]);
 
 		await h.start();
 		await h.idle();
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
-		await h.api.setFeed('1', [tag(SEQ + 1, '90', 'Rock')], SEQ + 1);
-		await h.message(libraryChanged(SEQ + 1));
+		await h.api.setFeed('1', [tag(POSITION + 1, '90', 'Rock')], POSITION + 1);
+		await h.message(libraryChanged(POSITION + 1));
 		await h.idle();
 		expect(await tagName('90')).toBe('Rock');
 		expect(await h.reported()).toEqual([]);
@@ -653,7 +656,7 @@ describe('catalog sync', () => {
 
 		const more = [tag(12, '91', 'Jazz'), tag(13, '92', 'Soul'), tag(14, '93', 'Folk')];
 		await h.api.setFeed('1', more, 14);
-		await h.api.setSeq('1', 14);
+		await h.api.setPosition('1', 14);
 		await h.message(libraryChanged(14));
 		await h.idle();
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
@@ -670,10 +673,10 @@ describe('catalog sync', () => {
 
 		const renamed = structuredClone(playlists[0]);
 		(renamed.rows.playlists[0] as { title: string }).title = 'Renamed';
-		renamed.seq = accountHead + 1;
-		const deleted = { seq: accountHead + 2, op: 'delete', kind: 'playlist', id: '502' };
+		renamed.position = accountHead + 1;
+		const deleted = { position: accountHead + 2, op: 'delete', kind: 'playlist', id: '502' };
 		await h.api.setAccount([renamed, deleted], accountHead + 2);
-		await h.message({ type: 'accountChanged', seq: accountHead + 2 });
+		await h.message({ type: 'accountChanged', position: accountHead + 2 });
 		await h.idle();
 		const titles = (await h.query('1', 'listPlaylists', {})) as { items: { title: string }[] };
 		expect(titles.items.map((item) => item.title)).toEqual(['Renamed']);
@@ -684,7 +687,7 @@ describe('catalog sync', () => {
 		await started('1');
 		expect(await h.changes()).toEqual(['1']);
 
-		await h.message(libraryChanged(SEQ));
+		await h.message(libraryChanged(POSITION));
 		await h.idle();
 		expect(await h.changes()).toEqual(['1']);
 
@@ -694,16 +697,16 @@ describe('catalog sync', () => {
 		expect(await h.changes()).toEqual(['1', '1']);
 
 		// Another library's playlist is not this library's change.
-		const other = { ...elsewhere, seq: accountHead + 1 };
+		const other = { ...elsewhere, position: accountHead + 1 };
 		await h.api.setAccount([other], accountHead + 1);
-		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
 		await h.idle();
 		expect(await h.changes()).toEqual(['1', '1']);
 
 		const renamed = structuredClone(playlists[0]);
-		renamed.seq = accountHead + 2;
+		renamed.position = accountHead + 2;
 		await h.api.setAccount([renamed], accountHead + 2);
-		await h.message({ type: 'accountChanged', seq: accountHead + 2 });
+		await h.message({ type: 'accountChanged', position: accountHead + 2 });
 		await h.idle();
 		expect(await h.changes()).toEqual(['1', '1', '1']);
 	});
@@ -721,10 +724,10 @@ describe('catalog sync', () => {
 	it('another library answers while a snapshot downloads', async () => {
 		await started('1');
 		await h.api.setLibraries(['1', '2']);
-		await h.api.setSeq('2', 7);
+		await h.api.setPosition('2', 7);
 		await h.api.setFeed('2', [], 7);
 		await h.api.holdBody();
-		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
 		await expect.poll(() => h.api.bodyHeld()).toBe(true);
 
 		expect(await h.busy()).toBe(true);
@@ -764,7 +767,7 @@ describe('catalog sync', () => {
 		await h.message(libraryChanged(BASE + 300));
 		await h.idle();
 
-		// The snapshot stays at SEQ, behind the copy's position: asked for while the server might
+		// The snapshot stays at POSITION, behind the copy's position: asked for while the server might
 		// build a newer one, then never imported.
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(11);
 		expect(await h.files()).toEqual([file]);
@@ -786,12 +789,12 @@ describe('catalog sync', () => {
 
 		const renamed = structuredClone(playlists[0]);
 		(renamed.rows.playlists[0] as { title: string }).title = 'Renamed';
-		renamed.seq = accountHead + 1;
+		renamed.position = accountHead + 1;
 		await h.api.hold('/me/changes');
 		await h.message(hello);
 		await expect.poll(() => h.api.holding()).toBe(true);
 		await h.api.setAccount([renamed], accountHead + 1);
-		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
 		await h.api.release();
 		await h.idle();
 		expect(await h.cursor('1', 'account')).toBe(accountHead + 1);
@@ -804,8 +807,8 @@ describe('catalog sync', () => {
 		await h.idle();
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(3);
 
-		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
-		await h.message(libraryChanged(SEQ + 1));
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
+		await h.message(libraryChanged(POSITION + 1));
 		await h.idle();
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(3);
 
@@ -820,7 +823,7 @@ describe('catalog sync', () => {
 		await h.api.setPageSize(60);
 		const many = Array.from({ length: 120 }, (_, i) => tag(BASE + 1 + i, `${100 + i}`, `Tag ${i}`));
 		await h.api.setFeed('1', many, BASE + 120);
-		await h.api.setSeq('1', BASE + 120);
+		await h.api.setPosition('1', BASE + 120);
 		await h.message(libraryChanged(BASE + 120));
 		await h.idle();
 
@@ -841,14 +844,14 @@ describe('catalog sync', () => {
 	it("a new library's download does not hold up the playlists of the libraries held", async () => {
 		await started('1');
 		await h.api.setLibraries(['1', '2']);
-		await h.api.setSeq('2', 7);
+		await h.api.setPosition('2', 7);
 		await h.api.setFeed('2', [], 7);
 		await h.api.holdBody();
 		const renamed = structuredClone(playlists[0]);
 		(renamed.rows.playlists[0] as { title: string }).title = 'Renamed';
-		renamed.seq = accountHead + 1;
+		renamed.position = accountHead + 1;
 		await h.api.setAccount([renamed], accountHead + 1);
-		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
 		await expect.poll(() => h.api.bodyHeld()).toBe(true);
 
 		await expect.poll(() => h.cursor('1', 'account')).toBe(accountHead + 1);
@@ -911,7 +914,7 @@ describe('catalog sync', () => {
 		(feed[LARGE - 1].rows.tags[0] as { name: string | null }).name = null;
 		await h.api.setFeed('1', feed, BASE + LARGE);
 		// The snapshot downloaded again is current to the feed's head.
-		await h.api.setSeq('1', BASE + LARGE);
+		await h.api.setPosition('1', BASE + LARGE);
 		await h.message(libraryChanged(BASE + LARGE));
 
 		const mid = await h.midApply('1', 'listTags', { limit: 1 });
@@ -970,8 +973,8 @@ describe('catalog sync', () => {
 		expect(await h.reported()).toHaveLength(1);
 
 		await h.message(hello);
-		await h.message(libraryChanged(SEQ + 1));
-		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.message(libraryChanged(POSITION + 1));
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
 		await h.idle();
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(1);
 		expect(await h.reported()).toHaveLength(1);
@@ -1006,8 +1009,8 @@ describe('catalog sync', () => {
 				}
 			).sections.length;
 		expect(await found()).toBe(0);
-		await h.api.setFeed('1', [album(SEQ + 1, '900', 'Zebra Crossing')], SEQ + 1);
-		await h.message(libraryChanged(SEQ + 1));
+		await h.api.setFeed('1', [album(POSITION + 1, '900', 'Zebra Crossing')], POSITION + 1);
+		await h.message(libraryChanged(POSITION + 1));
 		await h.idle();
 		await expect.poll(async () => await found(), { timeout: 5000 }).toBe(1);
 	});

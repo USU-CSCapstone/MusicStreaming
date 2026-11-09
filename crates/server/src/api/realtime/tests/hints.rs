@@ -106,9 +106,9 @@ async fn a_scan_batch_sends_one_library_changed_to_accounts_with_access() {
     let (mut owner, mut user) = (hub.connect(1, 1), hub.connect(2, 2));
     let mut tab = hub.connect(2, 2);
 
-    let seq = change(&db, 1, &[1, 2, 3]).await;
+    let position = change(&db, 1, &[1, 2, 3]).await;
 
-    let hint = json!({ "type": "libraryChanged", "libraryId": "1", "seq": seq });
+    let hint = json!({ "type": "libraryChanged", "libraryId": "1", "position": position });
     assert_eq!(heard(&mut owner).await, hint);
     assert_eq!(heard(&mut user).await, hint);
     assert_eq!(heard(&mut tab).await, hint, "every connection of the account hears it");
@@ -121,9 +121,9 @@ async fn an_account_without_access_hears_nothing() {
     let (mut owner, mut user, mut stranger) =
         (hub.connect(1, 1), hub.connect(2, 2), hub.connect(3, 3));
 
-    let seq = change(&db, 2, &[1]).await;
+    let position = change(&db, 2, &[1]).await;
 
-    let hint = json!({ "type": "libraryChanged", "libraryId": "2", "seq": seq });
+    let hint = json!({ "type": "libraryChanged", "libraryId": "2", "position": position });
     assert_eq!(heard(&mut owner).await, hint);
     assert!(hears_nothing(&mut user).await, "account 2 reaches library 1 only");
     assert!(hears_nothing(&mut stranger).await);
@@ -160,8 +160,8 @@ async fn each_hint_carries_its_own_librarys_seq() {
     // Each library's own position: library 2's three changes leave library 1 at its first.
     let mut heard_both = [heard(&mut owner).await, heard(&mut owner).await];
     heard_both.sort_by_key(|hint| hint["libraryId"].as_str().unwrap().to_owned());
-    assert_eq!(heard_both[0], json!({ "type": "libraryChanged", "libraryId": "1", "seq": 1 }));
-    assert_eq!(heard_both[1], json!({ "type": "libraryChanged", "libraryId": "2", "seq": 3 }));
+    assert_eq!(heard_both[0], json!({ "type": "libraryChanged", "libraryId": "1", "position": 1 }));
+    assert_eq!(heard_both[1], json!({ "type": "libraryChanged", "libraryId": "2", "position": 3 }));
 }
 
 #[tokio::test(start_paused = true)]
@@ -180,7 +180,7 @@ async fn a_library_is_hinted_again_only_when_it_changes() {
     tokio::time::advance(WINDOW).await;
 
     let hint = heard_paused(&mut owner).await;
-    assert_eq!((&hint["libraryId"], &hint["seq"]), (&json!("1"), &json!(again)));
+    assert_eq!((&hint["libraryId"], &hint["position"]), (&json!("1"), &json!(again)));
     tokio::time::sleep(2 * WINDOW).await;
     assert!(hears_nothing(&mut owner).await, "library 2 did not change");
 }
@@ -191,7 +191,7 @@ async fn the_last_change_of_a_burst_is_always_hinted() {
     let mut owner = hub.connect(1, 1);
 
     let first = change(&db, 1, &[1]).await;
-    assert_eq!(heard_paused(&mut owner).await["seq"], json!(first));
+    assert_eq!(heard_paused(&mut owner).await["position"], json!(first));
     // Inside the first hint's window, so held until it ends.
     let mut feed = db.follow_feed();
     let last = change(&db, 1, &[2, 3]).await;
@@ -200,7 +200,7 @@ async fn the_last_change_of_a_burst_is_always_hinted() {
 
     tokio::time::advance(WINDOW).await;
 
-    assert_eq!(heard_paused(&mut owner).await["seq"], json!(last));
+    assert_eq!(heard_paused(&mut owner).await["position"], json!(last));
     tokio::time::sleep(2 * WINDOW).await;
     assert!(hears_nothing(&mut owner).await);
 }
@@ -212,12 +212,12 @@ fn a_burst_of_changes_sends_at_most_one_hint_per_second_with_the_latest_seq() {
     let mut throttle = Throttle::default();
 
     assert_eq!(throttle.moved(at(0), 1, 10), Some(10), "the first change is hinted at once");
-    for (millis, seq) in [(100, 11), (500, 14), (900, 13)] {
-        assert_eq!(throttle.moved(at(millis), 1, seq), None);
+    for (millis, position) in [(100, 11), (500, 14), (900, 13)] {
+        assert_eq!(throttle.moved(at(millis), 1, position), None);
     }
     assert_eq!(throttle.next_deadline(), Some(at(1000)));
     assert_eq!(throttle.due(at(999)), vec![]);
-    assert_eq!(throttle.due(at(1000)), vec![(1, 14)], "the latest seq, once");
+    assert_eq!(throttle.due(at(1000)), vec![(1, 14)], "the latest position, once");
     assert_eq!(throttle.next_deadline(), None);
     // The hint at 1000 opened a new window.
     assert_eq!(throttle.moved(at(1500), 1, 15), None);
@@ -248,9 +248,9 @@ async fn account_changed_reaches_only_the_account() {
         (hub.connect(1, 1), hub.connect(2, 2), hub.connect(3, 3));
     let mut tab = hub.connect(2, 2);
 
-    let seq = account_change(&db, 2).await;
+    let position = account_change(&db, 2).await;
 
-    let hint = json!({ "type": "accountChanged", "seq": seq });
+    let hint = json!({ "type": "accountChanged", "position": position });
     assert_eq!(heard(&mut user).await, hint);
     assert_eq!(heard(&mut tab).await, hint, "every connection of the account hears it");
     // Account 1 reaches library 1 as the owner, and 3 reaches none: neither hears of account 2.
@@ -265,7 +265,7 @@ async fn the_last_account_change_of_a_burst_is_always_hinted() {
     let mut user = hub.connect(2, 2);
 
     let first = account_change(&db, 2).await;
-    assert_eq!(heard_paused(&mut user).await["seq"], json!(first));
+    assert_eq!(heard_paused(&mut user).await["position"], json!(first));
     let mut feed = db.follow_account_feed();
     account_change(&db, 2).await;
     let last = account_change(&db, 2).await;
@@ -274,7 +274,7 @@ async fn the_last_account_change_of_a_burst_is_always_hinted() {
 
     tokio::time::advance(WINDOW).await;
 
-    assert_eq!(heard_paused(&mut user).await["seq"], json!(last));
+    assert_eq!(heard_paused(&mut user).await["position"], json!(last));
 }
 
 #[tokio::test]
@@ -289,5 +289,5 @@ async fn an_account_hint_carries_the_accounts_own_position() {
     })
     .await
     .unwrap();
-    assert_eq!(heard(&mut user).await, json!({ "type": "accountChanged", "seq": 1 }));
+    assert_eq!(heard(&mut user).await, json!({ "type": "accountChanged", "position": 1 }));
 }

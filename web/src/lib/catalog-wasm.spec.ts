@@ -43,7 +43,7 @@ function device(): Catalog {
 	}
 	for (const [feed, entities] of Object.entries(feeds)) {
 		const changes = entities.map(({ kind, id, key, tables }, at) => ({
-			seq: at + 1,
+			position: at + 1,
 			op: 'upsert',
 			kind,
 			id,
@@ -125,9 +125,9 @@ const tag = (name: string, id = '9') => ({
 		tag_types: [{ key: 'genre', name: 'Genre' }]
 	}
 });
-/** A feed change at `seq` that upserts the tag `id` named `name`. */
-const upsert = (seq: number, name: string, id = '9') => ({
-	seq,
+/** A feed change at `position` that upserts the tag `id` named `name`. */
+const upsert = (position: number, name: string, id = '9') => ({
+	position,
 	op: 'upsert',
 	...tag(name, id)
 });
@@ -155,7 +155,7 @@ test('catalog-wasm applies staged changes only at commit, with the feed position
 	catalog.stage(
 		'library:1',
 		'1',
-		JSON.stringify([{ seq: 5, op: 'delete', kind: 'tag', id: '9', rows: null }])
+		JSON.stringify([{ position: 5, op: 'delete', kind: 'tag', id: '9', rows: null }])
 	);
 	expect(name()).toBe('Rock and roll');
 	catalog.commit('library:1', 5n, 100);

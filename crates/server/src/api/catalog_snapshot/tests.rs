@@ -46,9 +46,9 @@ fn open(bytes: &[u8]) -> (tempfile::TempDir, Connection) {
     (temp, conn)
 }
 
-/// The feed position in a response's `X-Jewelcase-Seq`.
-fn seq(headers: &HeaderMap) -> i64 {
-    headers["x-jewelcase-seq"].to_str().unwrap().parse().unwrap()
+/// The feed position in a response's `X-Jewelcase-Position`.
+fn feed_position(headers: &HeaderMap) -> i64 {
+    headers["x-jewelcase-position"].to_str().unwrap().parse().unwrap()
 }
 
 /// The epoch in a response's `X-Jewelcase-Epoch`.
@@ -103,7 +103,7 @@ async fn the_first_request_answers_building_and_a_later_one_the_file() {
     assert_eq!(problem["code"], "catalog_building");
 
     let (headers, _) = built(&app).await;
-    assert_eq!(seq(&headers), 1, "the library's own position, untouched by library 2's");
+    assert_eq!(feed_position(&headers), 1, "the library's own position, untouched by library 2's");
     assert_eq!(epoch(&headers), db.epoch().to_string());
     assert_eq!(headers[header::CONTENT_TYPE], "application/vnd.sqlite3");
     assert_eq!(headers[header::CACHE_CONTROL], "no-store", "no copy left in the HTTP cache");
@@ -112,7 +112,7 @@ async fn the_first_request_answers_building_and_a_later_one_the_file() {
 }
 
 #[tokio::test]
-async fn the_snapshot_holds_exactly_the_device_rows_of_its_library_at_its_seq() {
+async fn the_snapshot_holds_exactly_the_device_rows_of_its_library_at_its_position() {
     let (_temp, db, app) = catalog::app().await;
     let (_, bytes) = built(&app).await;
     let (_file, snapshot) = open(&bytes);
@@ -165,7 +165,7 @@ async fn the_snapshot_holds_exactly_the_device_rows_of_its_library_at_its_seq() 
 async fn no_server_only_column_and_no_other_librarys_row_is_in_the_file() {
     let (_temp, db, app) = catalog::app().await;
     let (headers, bytes) = built(&app).await;
-    let first = seq(&headers);
+    let first = feed_position(&headers);
     let (_file, snapshot) = open(&bytes);
 
     let device = Connection::open_in_memory().unwrap();
@@ -199,7 +199,7 @@ async fn no_server_only_column_and_no_other_librarys_row_is_in_the_file() {
     stale(&db, 1).await;
     let (_, rebuilt) = eventually("the rebuilt file", async || {
         let (_, headers, body) = fetch(&app, URI, false).await;
-        (seq(&headers) > first).then_some((headers, body))
+        (feed_position(&headers) > first).then_some((headers, body))
     })
     .await;
     let (_file, snapshot) = open(&rebuilt);
@@ -234,11 +234,11 @@ async fn a_stale_snapshot_is_served_while_its_replacement_builds() {
 
     let (status, headers, _) = fetch(&app, URI, false).await;
     assert_eq!(status, StatusCode::OK, "the old file answers, not a 503");
-    assert_eq!(seq(&headers), seq(&first));
+    assert_eq!(feed_position(&headers), feed_position(&first));
 
     eventually("the replacement", async || {
         let (_, headers, body) = fetch(&app, URI, false).await;
-        (seq(&headers) > seq(&first)).then_some((headers, body))
+        (feed_position(&headers) > feed_position(&first)).then_some((headers, body))
     })
     .await;
     // The new file is in place a moment before the build deletes the superseded pair.
@@ -255,7 +255,7 @@ async fn a_stale_snapshot_is_served_while_its_replacement_builds() {
 }
 
 #[tokio::test]
-async fn the_feed_after_the_snapshots_seq_brings_a_device_current() {
+async fn the_feed_after_the_snapshots_position_brings_a_device_current() {
     let (_temp, db, app) = catalog::app().await;
     let (headers, bytes) = built(&app).await;
     let (_file, device) = open(&bytes);
@@ -269,7 +269,7 @@ async fn the_feed_after_the_snapshots_seq_brings_a_device_current() {
     .unwrap();
     record(&db, 1, &[(Entity::Track, 1001, Op::Upsert), (Entity::Track, 1002, Op::Delete)]).await;
 
-    let (after, epoch) = (seq(&headers), epoch(&headers));
+    let (after, epoch) = (feed_position(&headers), epoch(&headers));
     let uri = format!("/api/v1/libraries/1/changes?after={after}&epoch={epoch}");
     let (status, page) = json(&app, &uri).await;
     assert_eq!(status, StatusCode::OK, "the feed goes on from the file's position: {page}");
@@ -388,7 +388,7 @@ async fn another_librarys_churn_and_one_change_do_not_rebuild() {
     for _ in 0..3 {
         let (status, headers, _) = fetch(&app, URI, false).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(seq(&headers), seq(&first));
+        assert_eq!(feed_position(&headers), feed_position(&first));
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     let dir = temp.path().join("cache/catalog/1");
@@ -407,7 +407,9 @@ async fn a_file_this_database_cannot_go_on_from_is_not_served() {
     let dir = temp.path().join("cache/catalog/1");
     // Past the library's head in this run, and at its head in a run this database never had,
     // as a file newer than a restored backup would be.
-    for (epoch, position) in [(db.epoch(), seq(&first) + 1), (db.epoch() ^ 1, seq(&first))] {
+    for (epoch, position) in
+        [(db.epoch(), feed_position(&first) + 1), (db.epoch() ^ 1, feed_position(&first))]
+    {
         idle().await;
         let old = newest(&dir).unwrap().unwrap();
         let name =
@@ -418,7 +420,10 @@ async fn a_file_this_database_cannot_go_on_from_is_not_served() {
         let (status, ..) = fetch(&app, URI, false).await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "epoch {epoch} at {position}");
         let (headers, _) = built(&app).await;
-        assert_eq!((seq(&headers), epoch_of(&headers)), (seq(&first), db.epoch()));
+        assert_eq!(
+            (feed_position(&headers), epoch_of(&headers)),
+            (feed_position(&first), db.epoch())
+        );
     }
 }
 
@@ -463,7 +468,7 @@ async fn a_file_a_rebuild_deleted_after_it_was_chosen_gives_way_to_its_replaceme
     let response = serve(dir, gone, request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[header::ETAG], headers[header::ETAG]);
-    assert_eq!(seq(response.headers()), seq(&headers));
+    assert_eq!(feed_position(response.headers()), feed_position(&headers));
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     assert_eq!(body, bytes);
 }
@@ -519,7 +524,7 @@ async fn a_file_of_another_schema_version_is_not_served_and_a_build_replaces_it(
     let (status, ..) = fetch(&app, URI, false).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "the old version's file is not served");
     let (headers, bytes) = built(&app).await;
-    assert_eq!(seq(&headers), seq(&first));
+    assert_eq!(feed_position(&headers), feed_position(&first));
     let (_file, snapshot) = open(&bytes);
     let version: i32 = snapshot.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
     assert_eq!(version, SCHEMA_VERSION);

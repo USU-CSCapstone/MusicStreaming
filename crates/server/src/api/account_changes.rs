@@ -20,7 +20,7 @@ use crate::db::{Database, reaches};
 /// The spec's `AccountChange`.
 #[derive(Serialize)]
 pub struct Change {
-    seq: i64,
+    position: i64,
     op: Op,
     kind: Kind,
     id: Id,
@@ -67,7 +67,7 @@ fn read(
         .collect::<rusqlite::Result<_>>()?;
     let next = next(listed.last().map(|row| row.0), listed.len(), limit, head);
     let mut changes = Vec::with_capacity(listed.len());
-    for (seq, library, kind, playlist, item_key, op) in listed {
+    for (position, library, kind, playlist, item_key, op) in listed {
         let (kind, key) = match kind.as_str() {
             "playlist" => (Kind::Playlist, None),
             _ => (Kind::PlaylistItem, Some(item_key)),
@@ -80,7 +80,7 @@ fn read(
             let Some(rows) = export(conn, library, kind, &id, item_key)? else { continue };
             (Op::Upsert, Some(rows.tables))
         };
-        changes.push(Change { seq, op, kind, id: Id(playlist), key, rows });
+        changes.push(Change { position, op, kind, id: Id(playlist), key, rows });
     }
     Ok(Changes { changes, next, head, epoch: Id(current) })
 }

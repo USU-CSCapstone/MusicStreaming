@@ -17,10 +17,10 @@ use super::Catalog;
 /// position an apply that is part-way goes to. A change to these raises the schema version too.
 pub(crate) const FEED_STATE: &str = "\
     CREATE TABLE IF NOT EXISTS feed_cursors ( \
-        feed TEXT PRIMARY KEY, seq INTEGER NOT NULL, epoch TEXT \
+        feed TEXT PRIMARY KEY, position INTEGER NOT NULL, epoch TEXT \
     ) WITHOUT ROWID; \
     CREATE TABLE IF NOT EXISTS staged_changes ( \
-        feed TEXT NOT NULL, seq INTEGER NOT NULL, change TEXT NOT NULL, PRIMARY KEY (feed, seq) \
+        feed TEXT NOT NULL, position INTEGER NOT NULL, change TEXT NOT NULL, PRIMARY KEY (feed, position) \
     ) WITHOUT ROWID; \
     CREATE TABLE IF NOT EXISTS feed_applying (feed TEXT PRIMARY KEY, through INTEGER NOT NULL) \
         WITHOUT ROWID;";
@@ -29,7 +29,7 @@ pub(crate) const FEED_STATE: &str = "\
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Change {
-    seq: i64,
+    position: i64,
     op: Op,
     kind: Kind,
     id: String,
@@ -59,15 +59,15 @@ impl Catalog {
         // The server answered in `epoch` from this file's position, so its earlier positions go
         // on in it too.
         tx.prepare_cached(
-            "INSERT INTO feed_cursors (feed, seq, epoch) VALUES (?1, 0, ?2) \
+            "INSERT INTO feed_cursors (feed, position, epoch) VALUES (?1, 0, ?2) \
              ON CONFLICT (feed) DO UPDATE SET epoch = excluded.epoch",
         )?
         .execute(params![feed, epoch])?;
         for change in &changes {
             tx.prepare_cached(
-                "INSERT OR REPLACE INTO staged_changes (feed, seq, change) VALUES (?1, ?2, ?3)",
+                "INSERT OR REPLACE INTO staged_changes (feed, position, change) VALUES (?1, ?2, ?3)",
             )?
-            .execute(params![feed, change.seq, serde_json::to_string(change)?])?;
+            .execute(params![feed, change.position, serde_json::to_string(change)?])?;
         }
         Ok(tx.commit()?)
     }
@@ -83,7 +83,7 @@ impl Catalog {
         let mut last = None;
         {
             let mut select = tx.prepare_cached(
-                "SELECT seq, change FROM staged_changes WHERE feed = ?1 ORDER BY seq LIMIT ?2",
+                "SELECT position, change FROM staged_changes WHERE feed = ?1 ORDER BY position LIMIT ?2",
             )?;
             let mut staged = select.query(params![feed, limit])?;
             while let Some(row) = staged.next()? {
@@ -107,7 +107,7 @@ impl Catalog {
         }
         if let Some(last) = last {
             tx.execute(
-                "DELETE FROM staged_changes WHERE feed = ?1 AND seq <= ?2",
+                "DELETE FROM staged_changes WHERE feed = ?1 AND position <= ?2",
                 params![feed, last],
             )?;
         }
@@ -119,8 +119,8 @@ impl Catalog {
         if done {
             tx.execute("DELETE FROM feed_applying WHERE feed = ?1", [feed])?;
             tx.execute(
-                "INSERT INTO feed_cursors (feed, seq) VALUES (?1, ?2) \
-                 ON CONFLICT (feed) DO UPDATE SET seq = excluded.seq",
+                "INSERT INTO feed_cursors (feed, position) VALUES (?1, ?2) \
+                 ON CONFLICT (feed) DO UPDATE SET position = excluded.position",
                 params![feed, through],
             )?;
         } else {
@@ -146,11 +146,13 @@ impl Catalog {
 
     /// The position `feed` was last applied through, or 0 if it never was.
     pub fn cursor(&self, feed: &str) -> Result<i64, JsError> {
-        let seq = self
+        let position = self
             .0
-            .query_row("SELECT seq FROM feed_cursors WHERE feed = ?1", [feed], |row| row.get(0))
+            .query_row("SELECT position FROM feed_cursors WHERE feed = ?1", [feed], |row| {
+                row.get(0)
+            })
             .optional()?;
-        Ok(seq.unwrap_or(0))
+        Ok(position.unwrap_or(0))
     }
 
     /// The epoch of the server's run that `feed`'s positions were last given in, which a pull
@@ -167,12 +169,12 @@ impl Catalog {
     /// none is staged.
     pub fn pulled(&self, feed: &str) -> Result<i64, JsError> {
         let staged: Option<i64> = self.0.query_row(
-            "SELECT max(seq) FROM staged_changes WHERE feed = ?1",
+            "SELECT max(position) FROM staged_changes WHERE feed = ?1",
             [feed],
             |row| row.get(0),
         )?;
         match staged {
-            Some(seq) => Ok(seq),
+            Some(position) => Ok(position),
             None => self.cursor(feed),
         }
     }

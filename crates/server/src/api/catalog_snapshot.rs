@@ -333,7 +333,7 @@ async fn serve(dir: PathBuf, chosen: Current, request: Request) -> Result<Respon
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/vnd.sqlite3"));
     // Not even the browser's HTTP cache keeps a copy, so none outlives a sign-out.
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    headers.insert("x-jewelcase-seq", HeaderValue::from(position));
+    headers.insert("x-jewelcase-position", HeaderValue::from(position));
     headers.insert("x-jewelcase-epoch", HeaderValue::from(epoch));
     headers.insert("x-jewelcase-schema", HeaderValue::from(SCHEMA_VERSION));
     if let Ok(etag) = HeaderValue::try_from(format!("\"{sha256}\"")) {

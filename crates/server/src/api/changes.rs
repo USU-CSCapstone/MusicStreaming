@@ -61,7 +61,7 @@ pub fn head(conn: &Connection, feed: Feed, epoch: Option<i64>, after: i64) -> Re
 /// Where a feed page ends: at the last row read when the page is full, else at the feed's `head`.
 pub fn next(last: Option<i64>, read: usize, limit: u32, head: i64) -> i64 {
     match last {
-        Some(seq) if read == limit as usize => seq,
+        Some(position) if read == limit as usize => position,
         _ => head,
     }
 }
@@ -69,7 +69,7 @@ pub fn next(last: Option<i64>, read: usize, limit: u32, head: i64) -> i64 {
 /// The spec's `LibraryChange`.
 #[derive(Serialize)]
 pub struct Change {
-    seq: i64,
+    position: i64,
     op: Op,
     kind: Kind,
     id: Id,
@@ -112,7 +112,7 @@ fn read(
         .collect::<rusqlite::Result<_>>()?;
     let next = next(listed.last().map(|row| row.0), listed.len(), limit, head);
     let mut changes = Vec::with_capacity(listed.len());
-    for (seq, entity, id, op) in listed {
+    for (position, entity, id, op) in listed {
         let kind = match entity.as_str() {
             "library" => Kind::Library,
             "track" => Kind::Track,
@@ -128,7 +128,7 @@ fn read(
             let Some(rows) = export(conn, library, kind, &id.to_string(), 0)? else { continue };
             (Op::Upsert, Some(rows.tables))
         };
-        changes.push(Change { seq, op, kind, id: Id(id), rows });
+        changes.push(Change { position, op, kind, id: Id(id), rows });
     }
     Ok(Changes { changes, next, head, epoch: Id(current) })
 }

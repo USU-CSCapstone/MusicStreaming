@@ -156,7 +156,7 @@ export interface paths {
          *     Pass `next` as `after`, with the page's `epoch`, until `next` equals `head`, when the
          *     client is current. Positions are the caller's own, counted from 1 by their changes alone,
          *     and `head` is that of the caller's latest change, comparable with `accountChanged`'s
-         *     `seq`.
+         *     `position`.
          */
         get: operations["listAccountChanges"];
         put?: never;
@@ -369,7 +369,7 @@ export interface paths {
          * Download the library's catalog
          * @description The library's catalog as one SQLite database in the device schema
          *     (`crates/catalog/src/schema.sql`), for a device that has none of it yet. It holds the
-         *     rows `listLibraryChanges` carries, as of `X-Jewelcase-Seq`: the device then pulls the
+         *     rows `listLibraryChanges` carries, as of `X-Jewelcase-Position`: the device then pulls the
          *     feed with `after` set to that value and `epoch` to `X-Jewelcase-Epoch`. The file is built once and shared by everyone who
          *     reaches the library. It is rebuilt in the background once the library's feed holds more
          *     changes since the file than a tenth of its tracks, albums and artists, and the old file is
@@ -1564,7 +1564,7 @@ export interface components {
         };
         LibraryChange: {
             /** Format: int64 */
-            seq: number;
+            position: number;
             /** @enum {string} */
             op: "upsert" | "delete";
             /** @enum {string} */
@@ -1597,7 +1597,7 @@ export interface components {
         };
         AccountChange: {
             /** Format: int64 */
-            seq: number;
+            position: number;
             /** @enum {string} */
             op: "upsert" | "delete";
             /** @enum {string} */
@@ -3214,12 +3214,12 @@ export interface components {
             type: "libraryChanged";
             libraryId: components["schemas"]["Id"];
             /** Format: int64 */
-            seq: number;
+            position: number;
         } | {
             /** @constant */
             type: "accountChanged";
             /** Format: int64 */
-            seq: number;
+            position: number;
         } | {
             /** @constant */
             type: "queueReplaced";
@@ -3877,7 +3877,7 @@ export interface operations {
                     /** @description The SHA-256 of the uncompressed database, in quotes. */
                     ETag?: string;
                     /** @description The library's feed position the file is current to, for `listLibraryChanges`'s `after`. */
-                    "X-Jewelcase-Seq"?: number;
+                    "X-Jewelcase-Position"?: number;
                     /** @description The run that position belongs to, for `listLibraryChanges`'s `epoch`. */
                     "X-Jewelcase-Epoch"?: string;
                     /** @description The device schema version of the file (`PRAGMA user_version`). */

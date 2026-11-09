@@ -65,11 +65,11 @@ pub fn start(db: Arc<Database>, hub: Arc<Hub>) -> JoinHandle<()> {
                     (libraries.due(now), accounts.due(now))
                 }
             };
-            for (library, seq) in library_hints {
-                send(&db, &hub, library, seq).await;
+            for (library, position) in library_hints {
+                send(&db, &hub, library, position).await;
             }
-            for (user, seq) in account_hints {
-                hub.broadcast(user, &ServerMessage::AccountChanged { seq });
+            for (user, position) in account_hints {
+                hub.broadcast(user, &ServerMessage::AccountChanged { position });
             }
         }
     })
@@ -116,7 +116,7 @@ fn hinted(throttle: &mut Throttle, now: Instant, moved: Vec<(i64, i64, i64)>) ->
 }
 
 /// Sends `libraryChanged` to each connection of each active account that reaches `library`.
-async fn send(db: &Database, hub: &Hub, library: i64, seq: i64) {
+async fn send(db: &Database, hub: &Hub, library: i64, position: i64) {
     let users = db
         .read(move |conn| {
             conn.prepare_cached(&format!(
@@ -129,7 +129,7 @@ async fn send(db: &Database, hub: &Hub, library: i64, seq: i64) {
         .await;
     match users {
         Ok(users) => {
-            let message = ServerMessage::LibraryChanged { library_id: Id(library), seq };
+            let message = ServerMessage::LibraryChanged { library_id: Id(library), position };
             for user in users {
                 hub.broadcast(user, &message);
             }
@@ -151,17 +151,17 @@ struct Window {
 }
 
 impl Throttle {
-    /// Notes that `library` moved to `seq` at `now`. Returns the position to hint at once if the
+    /// Notes that `library` moved to `position` at `now`. Returns the position to hint at once if the
     /// library's window has ended, and otherwise holds it for [`due`](Self::due) and returns `None`.
-    pub(super) fn moved(&mut self, now: Instant, library: i64, seq: i64) -> Option<i64> {
+    pub(super) fn moved(&mut self, now: Instant, library: i64, position: i64) -> Option<i64> {
         match self.0.get_mut(&library) {
             Some(window) if now < window.opened + WINDOW => {
-                window.pending = window.pending.max(Some(seq));
+                window.pending = window.pending.max(Some(position));
                 None
             }
             _ => {
                 self.0.insert(library, Window { opened: now, pending: None });
-                Some(seq)
+                Some(position)
             }
         }
     }
@@ -172,10 +172,10 @@ impl Throttle {
         let mut due = Vec::new();
         for (&library, window) in &mut self.0 {
             if now >= window.opened + WINDOW
-                && let Some(seq) = window.pending.take()
+                && let Some(position) = window.pending.take()
             {
                 window.opened = now;
-                due.push((library, seq));
+                due.push((library, position));
             }
         }
         due

@@ -277,7 +277,7 @@ paths:
         Pass `next` as `after`, with the page's `epoch`, until `next` equals `head`, when the
         client is current. Positions are the caller's own, counted from 1 by their changes alone,
         and `head` is that of the caller's latest change, comparable with `accountChanged`'s
-        `seq`.
+        `position`.
       operationId: listAccountChanges
       parameters:
         - name: after
@@ -525,7 +525,7 @@ paths:
       description: |
         The library's catalog as one SQLite database in the device schema
         (`crates/catalog/src/schema.sql`), for a device that has none of it yet. It holds the
-        rows `listLibraryChanges` carries, as of `X-Jewelcase-Seq`: the device then pulls the
+        rows `listLibraryChanges` carries, as of `X-Jewelcase-Position`: the device then pulls the
         feed with `after` set to that value and `epoch` to `X-Jewelcase-Epoch`. The file is built once and shared by everyone who
         reaches the library. It is rebuilt in the background once the library's feed holds more
         changes since the file than a tenth of its tracks, albums and artists, and the old file is
@@ -549,7 +549,7 @@ paths:
             ETag:
               description: The SHA-256 of the uncompressed database, in quotes.
               schema: { type: string }
-            X-Jewelcase-Seq:
+            X-Jewelcase-Position:
               description: The library's feed position the file is current to, for `listLibraryChanges`'s `after`.
               schema: { type: integer, format: int64 }
             X-Jewelcase-Epoch:
@@ -2334,9 +2334,9 @@ components:
 
     LibraryChange:
       type: object
-      required: [seq, op, kind, id]
+      required: [position, op, kind, id]
       properties:
-        seq: { type: integer, format: int64 }
+        position: { type: integer, format: int64 }
         op: { type: string, enum: [upsert, delete] }
         kind: { type: string, enum: [library, track, album, artist, tag] }
         id: { $ref: '#/components/schemas/Id' }
@@ -2370,9 +2370,9 @@ components:
 
     AccountChange:
       type: object
-      required: [seq, op, kind, id]
+      required: [position, op, kind, id]
       properties:
-        seq: { type: integer, format: int64 }
+        position: { type: integer, format: int64 }
         op: { type: string, enum: [upsert, delete] }
         kind: { type: string, enum: [playlist, playlistItem] }
         id: { $ref: '#/components/schemas/Id' }
@@ -4730,33 +4730,33 @@ components:
                 `true` when the edit changed the items but its `ops` were too many for one message
                 (they are left out): the device reads the items again. Left out otherwise.
         - type: object
-          required: [type, libraryId, seq]
+          required: [type, libraryId, position]
           description: |
             A library's change feed moved, so a device holding the library fetches what it
             missed (`listLibraryChanges`, with `after` set to the position it holds). Sent to every
             connection of every account that reaches the library, once the change is committed,
-            and never to an account that does not. It carries no data: `seq` is the library's own
+            and never to an account that does not. It carries no data: `position` is the library's own
             feed position, comparable with `head` there, and a device already at or past it does
-            nothing. At most one is sent for a library each second, carrying the latest `seq`,
+            nothing. At most one is sent for a library each second, carrying the latest `position`,
             and a change inside that second is announced when it ends, so a burst such as a scan
             sends a few. A device also fetches on `hello`, so a reconnect and a hint are one path.
           properties:
             type: { const: libraryChanged }
             libraryId: { $ref: '#/components/schemas/Id' }
-            seq: { type: integer, format: int64 }
+            position: { type: integer, format: int64 }
         - type: object
-          required: [type, seq]
+          required: [type, position]
           description: |
             The account's own change feed moved (`listAccountChanges`, with `after` set to the
             position the device holds), so a device keeping its playlists fetches what it
             missed. Sent to every connection of the account, once the change is committed, and
-            to no other account. It carries no data: `seq` is the account's own feed position,
-            comparable with `head` there. At most one is sent each second, carrying the latest `seq`, and a
+            to no other account. It carries no data: `position` is the account's own feed position,
+            comparable with `head` there. At most one is sent each second, carrying the latest `position`, and a
             change inside that second is announced when it ends. A device also fetches on
             `hello`.
           properties:
             type: { const: accountChanged }
-            seq: { type: integer, format: int64 }
+            position: { type: integer, format: int64 }
         - type: object
           required: [type, queueId]
           description: |

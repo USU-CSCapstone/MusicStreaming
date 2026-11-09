@@ -5,7 +5,14 @@
 import { schemaVersion } from '$lib/catalog-wasm/jewelcase_catalog_wasm.js';
 
 /** One entry of a change feed. */
-type Change = { seq: number; op: string; kind: string; id: string; key?: number; rows?: object };
+type Change = {
+	position: number;
+	op: string;
+	kind: string;
+	id: string;
+	key?: number;
+	rows?: object;
+};
 /** A change feed: its entries in order and the position of the latest. */
 type Feed = { changes: Change[]; head: number };
 
@@ -27,7 +34,7 @@ export class FakeApi {
 	#libraries: string[] = [];
 	#session = '1';
 	#snapshot: Uint8Array = new Uint8Array(0);
-	#seq = new Map<string, number>();
+	#position = new Map<string, number>();
 	#rebuilds = new Map<string, number>();
 	#schema: number | undefined;
 	#etag = '';
@@ -61,16 +68,16 @@ export class FakeApi {
 	}
 
 	/** The feed position the snapshot of `library` is current to. */
-	setSeq(library: string, seq: number) {
-		this.#seq.set(library, seq);
+	setPosition(library: string, position: number) {
+		this.#position.set(library, position);
 	}
 
 	/**
-	 * Moves the snapshot of `library` on to `seq` after the next time it is asked for, as the
+	 * Moves the snapshot of `library` on to `position` after the next time it is asked for, as the
 	 * server serves a stale snapshot once more while that request rebuilds it.
 	 */
-	rebuild(library: string, seq: number) {
-		this.#rebuilds.set(library, seq);
+	rebuild(library: string, position: number) {
+		this.#rebuilds.set(library, position);
 	}
 
 	/** Serves snapshots as of device schema version `version`, rather than this build's. */
@@ -205,11 +212,11 @@ export class FakeApi {
 		const wrong = this.#wrongEtags > 0;
 		if (wrong) this.#wrongEtags--;
 		const bytes = this.#snapshot;
-		const seq = this.#seq.get(library[1]) ?? 0;
+		const position = this.#position.get(library[1]) ?? 0;
 		const rebuilt = this.#rebuilds.get(library[1]);
 		if (rebuilt !== undefined) {
 			this.#rebuilds.delete(library[1]);
-			this.#seq.set(library[1], rebuilt);
+			this.#position.set(library[1], rebuilt);
 		}
 		// In pieces, as a download arrives.
 		let at = 0;
@@ -227,7 +234,7 @@ export class FakeApi {
 		return new Response(body, {
 			headers: {
 				etag: `"${wrong ? '0'.repeat(64) : this.#etag}"`,
-				'x-jewelcase-seq': String(seq),
+				'x-jewelcase-position': String(position),
 				'x-jewelcase-epoch': this.#epoch,
 				'x-jewelcase-schema': String(this.#schema ?? schemaVersion()),
 				// A stale snapshot is asked for again at once rather than after the sync's wait.
@@ -246,9 +253,9 @@ export class FakeApi {
 		const limit = Math.min(Number(url.searchParams.get('limit')), this.#pageSize);
 		if (after > feed.head) return problem(410);
 		if (after > 0 && !this.#epochs.has(url.searchParams.get('epoch') ?? '')) return problem(410);
-		const later = feed.changes.filter((change) => change.seq > after);
+		const later = feed.changes.filter((change) => change.position > after);
 		const changes = later.slice(0, limit);
-		const next = changes.length === later.length ? feed.head : changes[changes.length - 1].seq;
+		const next = changes.length === later.length ? feed.head : changes[changes.length - 1].position;
 		return Response.json({ changes, next, head: feed.head, epoch: this.#epoch });
 	}
 }

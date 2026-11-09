@@ -146,7 +146,10 @@ async fn another_librarys_feed_is_not_found_and_holds_none_of_ours() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(page["changes"].as_array().unwrap().len(), 1);
     assert_eq!(page["changes"][0]["id"], "1001");
-    assert_eq!(page["head"], page["changes"][0]["seq"], "head is this library's, not the server's");
+    assert_eq!(
+        page["head"], page["changes"][0]["position"],
+        "head is this library's, not the server's"
+    );
     assert_eq!(page["head"], 1, "a position of library 1's own, before library 2's changes");
     let others = [("track", "2001"), ("track", "2002")].map(|(k, i)| (k.to_owned(), i.to_owned()));
     assert_eq!(walk(&app, 2, 10).await, others);
@@ -196,17 +199,19 @@ async fn each_library_counts_its_own_positions() {
     record(&db, 1, &[(Entity::Track, 1002, Op::Upsert), (Entity::Track, 1001, Op::Upsert)]).await;
 
     let (_, page) = json(&app, "/api/v1/libraries/1/changes").await;
-    let seqs: Vec<_> = page["changes"].as_array().unwrap().iter().map(|c| &c["seq"]).collect();
-    assert_eq!(seqs, [2, 3], "library 2's fifty changes leave no gap, and 1001 moved on");
+    let positions: Vec<_> =
+        page["changes"].as_array().unwrap().iter().map(|c| &c["position"]).collect();
+    assert_eq!(positions, [2, 3], "library 2's fifty changes leave no gap, and 1001 moved on");
     assert_eq!((&page["next"], &page["head"]), (&3.into(), &3.into()));
     let (_, theirs) = json(&app, "/api/v1/libraries/2/changes?limit=1").await;
-    assert_eq!((&theirs["changes"][0]["seq"], &theirs["head"]), (&1.into(), &50.into()));
+    assert_eq!((&theirs["changes"][0]["position"], &theirs["head"]), (&1.into(), &50.into()));
 
     // A device at library 1's position 2 is sent only what came after it there.
     let uri = format!("/api/v1/libraries/1/changes?after=2&epoch={}", db.epoch());
     let (_, later) = json(&app, &uri).await;
-    let seqs: Vec<_> = later["changes"].as_array().unwrap().iter().map(|c| &c["seq"]).collect();
-    assert_eq!(seqs, [3], "{later}");
+    let positions: Vec<_> =
+        later["changes"].as_array().unwrap().iter().map(|c| &c["position"]).collect();
+    assert_eq!(positions, [3], "{later}");
 }
 
 #[tokio::test]

@@ -235,12 +235,14 @@ async fn each_account_counts_its_own_positions() {
     create(&app, "user-token", "Theirs", &[1, 2, 1]).await;
     create(&app, TOKEN, "Mine", &[1]).await;
     let (_, page) = feed(&app, TOKEN, "").await;
-    let seqs: Vec<_> = page["changes"].as_array().unwrap().iter().map(|c| &c["seq"]).collect();
-    assert_eq!(seqs, [1, 2], "the other account's four changes leave no gap: {page}");
+    let positions: Vec<_> =
+        page["changes"].as_array().unwrap().iter().map(|c| &c["position"]).collect();
+    assert_eq!(positions, [1, 2], "the other account's four changes leave no gap: {page}");
     assert_eq!(page["head"], 2);
 
     // A device at the account's position 1 is sent only what came after it there.
     let (_, later) = feed(&app, TOKEN, "?after=1").await;
-    let seqs: Vec<_> = later["changes"].as_array().unwrap().iter().map(|c| &c["seq"]).collect();
-    assert_eq!(seqs, [2], "{later}");
+    let positions: Vec<_> =
+        later["changes"].as_array().unwrap().iter().map(|c| &c["position"]).collect();
+    assert_eq!(positions, [2], "{later}");
 }
