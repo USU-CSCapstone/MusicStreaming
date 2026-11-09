@@ -21,8 +21,9 @@ const PORT: &str = "JEWELCASE_PORT";
 const BASE_PATH: &str = "JEWELCASE_BASE_PATH";
 const LOG: &str = "JEWELCASE_LOG";
 const TRUSTED_PROXIES: &str = "JEWELCASE_TRUSTED_PROXIES";
+const WEB_DIR: &str = "JEWELCASE_WEB_DIR";
 
-const SETTINGS: [&str; 6] = [DATA_DIR, MUSIC, PORT, BASE_PATH, LOG, TRUSTED_PROXIES];
+const SETTINGS: [&str; 7] = [DATA_DIR, MUSIC, PORT, BASE_PATH, LOG, TRUSTED_PROXIES, WEB_DIR];
 
 /// The server's settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +41,8 @@ pub struct Config {
     pub log: String,
     /// The reverse proxies whose `X-Forwarded-*` headers are believed.
     pub trusted_proxies: TrustedProxies,
+    /// The web app's static build, served beside the API when it is there.
+    pub web_dir: PathBuf,
 }
 
 impl Default for Config {
@@ -52,6 +55,7 @@ impl Default for Config {
             base_path: String::new(),
             log: "info".to_owned(),
             trusted_proxies: TrustedProxies::default(),
+            web_dir: PathBuf::from("/usr/share/jewelcase/web"),
         }
     }
 }
@@ -87,6 +91,7 @@ impl Config {
                 TRUSTED_PROXIES => {
                     trusted_proxies::parse(&value).map(|proxies| config.trusted_proxies = proxies)
                 }
+                WEB_DIR => parse_dir(&value).map(|dir| config.web_dir = dir),
                 _ => {
                     problems.push(format!(
                         "{key} is not a Jewelcase setting; the settings are {}",
@@ -198,6 +203,7 @@ mod tests {
             ("JEWELCASE_BASE_PATH", "/music"),
             ("JEWELCASE_LOG", "jewelcase_server=debug"),
             ("JEWELCASE_TRUSTED_PROXIES", "172.16.0.0/12"),
+            ("JEWELCASE_WEB_DIR", "/srv/web"),
         ])
         .unwrap();
         assert_eq!(
@@ -209,6 +215,7 @@ mod tests {
                 base_path: "/music".to_owned(),
                 log: "jewelcase_server=debug".to_owned(),
                 trusted_proxies: trusted_proxies::parse("172.16.0.0/12").unwrap(),
+                web_dir: PathBuf::from("/srv/web"),
             }
         );
     }
