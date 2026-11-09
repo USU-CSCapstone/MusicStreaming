@@ -41,12 +41,14 @@ pub struct AlbumLoss {
 }
 
 /// From an artist's: the tracks crediting them, those of them on albums they do not own (their
-/// appearances), their own albums hidden whole, and the tags only their hidden tracks bring them.
+/// appearances), their own albums hidden whole, the albums they do not own that only hidden
+/// tracks credit them on, and the tags only their hidden tracks bring them.
 #[derive(Default)]
 pub struct ArtistLoss {
     pub tracks: i64,
     pub featured: i64,
     pub albums: i64,
+    pub featured_albums: HashSet<i64>,
     pub tags: HashSet<i64>,
 }
 
@@ -147,6 +149,24 @@ pub fn losses(conn: &Connection, user: i64, library: i64) -> rusqlite::Result<Lo
         loss.featured = row.get(2)?;
     }
 
+    // The albums an artist does not own that only hidden tracks credit them on: as many of them
+    // as `album_credits` counts.
+    for (artist, album) in pairs(
+        query(
+            "SELECT ta.artist_id, t.album_id FROM hid \
+             CROSS JOIN track_artists ta ON ta.track_id = hid.track_id \
+             CROSS JOIN tracks t ON t.id = hid.track_id \
+             CROSS JOIN album_credits ac ON ac.album_id = t.album_id AND ac.artist_id = ta.artist_id \
+             WHERE NOT EXISTS (SELECT 1 FROM album_artists aa \
+                               WHERE aa.album_id = t.album_id AND aa.artist_id = ta.artist_id) \
+             GROUP BY ta.artist_id, t.album_id HAVING count(*) >= max(ac.track_count)",
+        )?,
+        user,
+        library,
+    )? {
+        losses.artists.entry(artist).or_default().featured_albums.insert(album);
+    }
+
     let mut carried = query(
         "SELECT tt.tag_id, count(*) FROM hid CROSS JOIN track_tags tt ON tt.track_id = hid.track_id \
          GROUP BY tt.tag_id",
@@ -193,7 +213,7 @@ pub fn playlists(
     .collect()
 }
 
-/// The `(owner, tag)` pairs `select` finds for `user` in `library`.
+/// The `(owner, other)` pairs, such as `(album, tag)`, `select` finds for `user` in `library`.
 fn pairs(
     mut select: rusqlite::CachedStatement<'_>,
     user: i64,

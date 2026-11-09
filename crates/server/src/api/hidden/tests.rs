@@ -394,3 +394,61 @@ async fn an_unnumbered_disc_is_gone_only_with_disc_1() {
     hide(&app, TOKEN, "PUT", "1102").await;
     assert_eq!(discs(&get(&app, "/albums/105").await), (json!(1), vec![json!(2)]));
 }
+
+/// A filter matches nothing only hidden tracks bring: an album or artist that carries a tag, or
+/// credits an artist, through hidden tracks alone is left out of a list filtered by it, and of its
+/// total, as it is of search.
+#[tokio::test]
+async fn filters_leave_out_what_only_hidden_tracks_bring() {
+    let (_temp, _db, app) = super::super::testing::catalog::app().await;
+    let lists = |list: &str, query: &str| format!("/api/v1/libraries/1/{list}?{query}");
+    // Each list, and what it loses once Come Together (1001: Rock and Calm) and Bonus (1004,
+    // featuring Radiohead) are hidden. The Beatles keep Pop, which none of these tracks brings.
+    let cases = [
+        (lists("albums", "tagAll=30"), vec!["101"]),
+        (lists("albums", "tagAny=30,31"), vec!["101"]),
+        (lists("albums", "tagAll=30&tagAny=32"), vec!["101"]),
+        (lists("artists", "tagAll=30"), vec!["10"]),
+        (lists("artists", "tagAny=32"), vec!["10"]),
+        (lists("artists", "tagAny=30,31"), vec![]),
+        (lists("albums", "artistId=11&artistCredit=featured"), vec!["101"]),
+        (lists("albums", "artistId=11&artistCredit=any"), vec!["101"]),
+        (lists("albums", "artistId=10&artistCredit=any"), vec![]),
+    ];
+    let mut before = Vec::new();
+    for (uri, gone) in &cases {
+        let listed = walk(&app, uri, 100).await;
+        for id in gone {
+            assert!(listed.0.contains(&(*id).to_owned()), "{uri} lists {id}: {listed:?}");
+        }
+        before.push(listed);
+    }
+    let found = |query: &'static str| {
+        let app = app.clone();
+        async move {
+            let uri = format!("/api/v1/libraries/1/search?{query}");
+            let (_, found) = call(&app, TOKEN, "GET", &uri, None).await;
+            let sections = found["sections"].as_array().unwrap().clone();
+            sections.iter().map(|s| s["type"].as_str().unwrap().to_owned()).collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(found("q=abbey&tagAll=30").await, ["albums"]);
+    assert_eq!(found("q=beatles&tagAny=32&types=artists").await, ["artists"]);
+
+    for track in ["1001", "1004"] {
+        hide(&app, TOKEN, "PUT", track).await;
+    }
+    for ((uri, gone), (ids, totals)) in cases.iter().zip(&before) {
+        let left: Vec<String> =
+            ids.iter().filter(|id| !gone.contains(&id.as_str())).cloned().collect();
+        for limit in [1, 100] {
+            let (now, counted) = walk(&app, uri, limit).await;
+            assert_eq!(now, left, "{uri} by {limit}");
+            let expected = totals[0] - i64::try_from(gone.len()).unwrap();
+            assert!(counted.iter().all(|total| *total == expected), "{uri}: {counted:?}");
+        }
+    }
+    assert_eq!(found("q=abbey&tagAll=30").await, Vec::<String>::new());
+    assert_eq!(found("q=beatles&tagAny=32&types=artists").await, Vec::<String>::new());
+    assert_eq!(found("q=beatles&tagAny=31&types=artists").await, ["artists"], "Pop is left");
+}

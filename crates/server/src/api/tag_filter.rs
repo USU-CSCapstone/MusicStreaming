@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use rusqlite::types::Value;
-use rusqlite::{Connection, params_from_iter};
+use rusqlite::{Connection, params, params_from_iter};
 
 use super::page::{self, Check, Lead, Source, Table, Total};
 use super::{AnyId, Problem};
@@ -235,6 +235,47 @@ impl Tags {
 }
 
 impl Tags {
+    /// Of `owners`, rows of `tagged` each with the tags it carries only through tracks a user hid,
+    /// those the filter reaches only through such tracks, so that it matches them no longer for
+    /// that user (`requirements/conventions.md` §8): one carrying a `tagAll` tag only so, or
+    /// carrying a type's `tagAny` tags only so. Rows the filter never matched may be among them.
+    /// Each row is at most one probe of `tagged`'s links per group, so it costs what was hidden.
+    pub fn lost<'a>(
+        &self,
+        conn: &Connection,
+        tagged: &Tagged,
+        owners: impl IntoIterator<Item = (i64, &'a HashSet<i64>)>,
+    ) -> rusqlite::Result<Vec<i64>> {
+        let Tags::Groups(groups) = self else { return Ok(Vec::new()) };
+        let mut holds = conn.prepare_cached(&format!(
+            "SELECT EXISTS (SELECT 1 FROM {} WHERE {} = ?1 \
+             AND tag_id IN (SELECT value FROM json_each(?2)))",
+            tagged.links, tagged.owner
+        ))?;
+        let mut lost = Vec::new();
+        for (owner, hidden) in owners {
+            for group in groups {
+                if !group.ids.iter().any(|tag| hidden.contains(tag)) {
+                    continue;
+                }
+                let gone = match group.tag_match {
+                    TagMatch::All => true,
+                    TagMatch::Any => {
+                        let left: Vec<i64> =
+                            group.ids.iter().copied().filter(|tag| !hidden.contains(tag)).collect();
+                        let left = serde_json::to_string(&left).expect("IDs serialize");
+                        !holds.query_row(params![owner, left], |row| row.get::<_, bool>(0))?
+                    }
+                };
+                if gone {
+                    lost.push(owner);
+                    break;
+                }
+            }
+        }
+        Ok(lost)
+    }
+
     /// The IDs of the rows `tagged` describes that match every group, where the filter names
     /// tags: none for a tag the library does not have. Read from the smallest group's rows, each
     /// checked against the others, so it costs what that group holds.
