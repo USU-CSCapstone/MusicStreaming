@@ -189,6 +189,8 @@ describe('readSearch', () => {
 		await expect(search(vi.fn().mockRejectedValue(failure)).result).rejects.toMatchObject({
 			code: 'not_on_device'
 		});
+		const refused = new ApiError(401, 'unauthenticated', 'sign in');
+		await expect(search(vi.fn().mockRejectedValue(refused)).result).rejects.toBe(refused);
 		vi.stubGlobal('navigator', { onLine: false });
 		try {
 			const known = search();
