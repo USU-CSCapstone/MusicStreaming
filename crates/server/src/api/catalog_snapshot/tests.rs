@@ -336,8 +336,13 @@ async fn the_feed_after_the_snapshots_position_brings_a_device_current() {
 
 #[tokio::test]
 async fn the_gzip_is_served_as_it_is_and_its_etag_is_its_sha256() {
-    let (temp, _db, app) = catalog::app().await;
+    let (temp, _db, app, snapshots) = catalog::app_with_snapshots().await;
     built(&app).await;
+    // The build clears its work folder only after the file is served.
+    eventually("the builds to finish", async || {
+        snapshots.building.lock().unwrap().is_empty().then_some(())
+    })
+    .await;
     let (status, headers, zipped) =
         fetch_with(&app, URI, &[(header::ACCEPT_ENCODING, "gzip")]).await;
     assert_eq!(status, StatusCode::OK);
