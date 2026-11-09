@@ -35,6 +35,7 @@ import {
 	playlistRoute
 } from '../mock/playlists';
 import { PluginStore, adminRoute } from '../mock/plugins';
+import { ScanSimulator, scanRoute } from '../mock/scans';
 
 export const library: Library = {
 	id: '11',
@@ -610,8 +611,8 @@ export const PASSWORD = 'correct horse battery staple';
 /**
  * A server whose setup is done unless `setupRequired`, when `POST /setup` completes it, and
  * with this browser logged in, as an account with `role`, unless `signedIn` is false. Until
- * then, anything but setup and login answers `401`. Returns every play reported to it, and its
- * recent searches, newest first.
+ * then, anything but setup and login answers `401`. Returns every play reported to it, its
+ * recent searches, newest first, and the clock its simulated scans keep, which the test moves.
  */
 export async function serveLibrary(
 	page: Page,
@@ -629,6 +630,13 @@ export async function serveLibrary(
 	);
 	// Playlists, too, run through the mock's own store.
 	const playlistStore = new PlaylistStore(playlistLibrary(playlists));
+	// Scans, too, are the mock's simulation, on a clock the test moves by hand.
+	const scanClock = { now: 0 };
+	const scans = new ScanSimulator({
+		files: (lib) => (!empty && lib === library.id ? library.trackCount : null),
+		folders: () => [`${artist.name}/${album.title}`],
+		now: () => scanClock.now
+	});
 	queueOf(page).playlistRows = (id) =>
 		(
 			playlistStore.items(BigInt(library.id), id, new URLSearchParams({ limit: '1000' }))?.items ??
@@ -749,8 +757,10 @@ export async function serveLibrary(
 		if (path === '/me') {
 			return json({ ...session({ username: 'sam', password: '', device }).user, role });
 		}
-		// Plugins are administered, so a user is refused (`requirements/users.md` §10).
+		// Libraries and plugins are administered, so a user is refused (`requirements/users.md` §10).
 		if (path.startsWith('/admin/') && role === 'user') return problem(403, 'forbidden');
+		if (path.startsWith('/admin/libraries/'))
+			return reply(scanRoute(scans, route.request().method(), path));
 		if (path.startsWith('/admin/plugins')) {
 			const req = route.request();
 			const out = await adminRoute(
@@ -931,7 +941,7 @@ export async function serveLibrary(
 	});
 	// After the rest, so it is asked first for the queue's paths.
 	await serveQueue(page, queueOf(page));
-	return { plays, searches };
+	return { plays, searches, scanClock };
 }
 
 /**
