@@ -219,7 +219,7 @@ mod tests {
         use crate::db::testing::{Album, Track, User, library};
 
         let mut conn = configured();
-        let before = MIGRATIONS.iter().position(|m| m.name.starts_with("0009")).unwrap();
+        let before = MIGRATIONS.iter().position(|m| m.name.starts_with("0010")).unwrap();
         migrate(&mut conn, &MIGRATIONS[..before]).unwrap();
 
         let root = tempfile::tempdir().unwrap();
