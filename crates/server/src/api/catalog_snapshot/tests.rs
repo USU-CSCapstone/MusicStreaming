@@ -19,22 +19,50 @@ use crate::db::testing::access;
 
 const URI: &str = "/api/v1/libraries/1/catalog";
 
-/// `GET`s the catalog as the owner, asking for gzip if `gzip`.
-async fn fetch(app: &Router, uri: &str, gzip: bool) -> (StatusCode, HeaderMap, Vec<u8>) {
+/// `GET`s the catalog as the owner, with `headers`.
+async fn fetch_with(
+    app: &Router,
+    uri: &str,
+    headers: &[(header::HeaderName, &str)],
+) -> (StatusCode, HeaderMap, Vec<u8>) {
     let mut request = owner_request("GET", uri);
-    if gzip {
-        request = request.header(header::ACCEPT_ENCODING, "gzip");
+    for (name, value) in headers {
+        request = request.header(name, *value);
     }
     respond(app.clone(), request.body(Body::empty()).unwrap()).await
 }
 
-/// The catalog once its first build is done.
+/// `GET`s the catalog as the owner, inflating the body of a `200`.
+async fn fetch(app: &Router, uri: &str) -> (StatusCode, HeaderMap, Vec<u8>) {
+    let (status, headers, body) = fetch_with(app, uri, &[]).await;
+    let body = if status == StatusCode::OK { inflate(&body) } else { body };
+    (status, headers, body)
+}
+
+/// The bytes `gzip` holds.
+fn inflate(gzip: &[u8]) -> Vec<u8> {
+    let mut inflated = Vec::new();
+    GzDecoder::new(gzip).read_to_end(&mut inflated).unwrap();
+    inflated
+}
+
+/// The catalog once its first build is done, with the database inflated.
 async fn built(app: &Router) -> (HeaderMap, Vec<u8>) {
     eventually("the first catalog build", async || {
-        let (status, headers, body) = fetch(app, URI, false).await;
+        let (status, headers, body) = fetch(app, URI).await;
         (status == StatusCode::OK).then_some((headers, body))
     })
     .await
+}
+
+/// The names of the files in a library's folder, sorted.
+fn files(dir: &Path) -> Vec<String> {
+    let mut files: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    files.sort();
+    files
 }
 
 /// Opens database bytes as a connection to a copy of them.
@@ -96,7 +124,7 @@ async fn the_first_request_answers_building_and_a_later_one_the_file() {
     let (_temp, db, app) = catalog::app().await;
     record(&db, 2, &[(Entity::Track, 2001, Op::Upsert), (Entity::Track, 2002, Op::Upsert)]).await;
     record(&db, 1, &[(Entity::Track, 1001, Op::Upsert)]).await;
-    let (status, headers, body) = fetch(&app, URI, false).await;
+    let (status, headers, body) = fetch(&app, URI).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(headers[header::RETRY_AFTER], "30");
     let problem: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -105,7 +133,7 @@ async fn the_first_request_answers_building_and_a_later_one_the_file() {
     let (headers, _) = built(&app).await;
     assert_eq!(feed_position(&headers), 1, "the library's own position, untouched by library 2's");
     assert_eq!(epoch(&headers), db.epoch().to_string());
-    assert_eq!(headers[header::CONTENT_TYPE], "application/vnd.sqlite3");
+    assert_eq!(headers[header::CONTENT_TYPE], "application/gzip");
     assert_eq!(headers[header::CACHE_CONTROL], "no-store", "no copy left in the HTTP cache");
     let schema = jewelcase_catalog::SCHEMA_VERSION.to_string();
     assert_eq!(headers["x-jewelcase-schema"], schema.as_str());
@@ -198,7 +226,7 @@ async fn no_server_only_column_and_no_other_librarys_row_is_in_the_file() {
     .unwrap();
     stale(&db, 1).await;
     let (_, rebuilt) = eventually("the rebuilt file", async || {
-        let (_, headers, body) = fetch(&app, URI, false).await;
+        let (_, headers, body) = fetch(&app, URI).await;
         (feed_position(&headers) > first).then_some((headers, body))
     })
     .await;
@@ -232,26 +260,23 @@ async fn a_stale_snapshot_is_served_while_its_replacement_builds() {
     let (first, _) = built(&app).await;
     stale(&db, 1).await;
 
-    let (status, headers, _) = fetch(&app, URI, false).await;
+    let (status, headers, _) = fetch(&app, URI).await;
     assert_eq!(status, StatusCode::OK, "the old file answers, not a 503");
     assert_eq!(feed_position(&headers), feed_position(&first));
 
     eventually("the replacement", async || {
-        let (_, headers, body) = fetch(&app, URI, false).await;
+        let (_, headers, body) = fetch(&app, URI).await;
         (feed_position(&headers) > feed_position(&first)).then_some((headers, body))
     })
     .await;
-    // The new file is in place a moment before the build deletes the superseded pair.
-    let files = eventually("the superseded pair deleted", async || {
-        let mut files: Vec<_> = std::fs::read_dir(temp.path().join("cache/catalog/1"))
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        files.sort();
-        (files.len() == 2).then_some(files)
+    // The new file is in place a moment before the build deletes the superseded one.
+    let dir = temp.path().join("cache/catalog/1");
+    let kept = eventually("the superseded file deleted", async || {
+        let kept = files(&dir);
+        (kept.len() == 1).then_some(kept)
     })
     .await;
-    assert!(files[0].ends_with(".db") && files[1] == format!("{}.gz", files[0]));
+    assert!(kept[0].ends_with(".gz"), "only the gzip is kept: {kept:?}");
 }
 
 #[tokio::test]
@@ -310,21 +335,86 @@ async fn the_feed_after_the_snapshots_position_brings_a_device_current() {
 }
 
 #[tokio::test]
-async fn the_etag_is_the_sha256_of_the_served_file() {
+async fn the_gzip_is_served_as_it_is_and_its_etag_is_its_sha256() {
+    let (temp, _db, app) = catalog::app().await;
+    built(&app).await;
+    let (status, headers, zipped) =
+        fetch_with(&app, URI, &[(header::ACCEPT_ENCODING, "gzip")]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(headers.get(header::CONTENT_ENCODING).is_none(), "no encoding for fetch to undo");
+    assert_eq!(headers[header::CONTENT_TYPE], "application/gzip");
+    assert_eq!(headers[header::ACCEPT_RANGES], "bytes");
+    let expected = format!("\"{:x}\"", Sha256::digest(&zipped));
+    assert_eq!(headers[header::ETAG], expected.as_str(), "the hash of the bytes sent");
+    assert!(inflate(&zipped).starts_with(b"SQLite format 3\0"));
+
+    let kept = files(&temp.path().join("cache/catalog/1"));
+    assert_eq!(kept.len(), 1, "no uncompressed copy: {kept:?}");
+    assert_eq!(std::fs::read(temp.path().join("cache/catalog/1").join(&kept[0])).unwrap(), zipped);
+}
+
+#[tokio::test]
+async fn a_range_of_the_file_its_if_range_names_is_served_and_any_other_gets_the_whole() {
     let (_temp, _db, app) = catalog::app().await;
     built(&app).await;
-    let expected = |bytes: &[u8]| format!("\"{:x}\"", Sha256::digest(bytes));
+    let (_, headers, whole) = fetch_with(&app, URI, &[]).await;
+    let (etag, len) = (headers[header::ETAG].to_str().unwrap().to_owned(), whole.len());
 
-    let (_, headers, plain) = fetch(&app, URI, false).await;
-    assert!(headers.get(header::CONTENT_ENCODING).is_none());
-    assert_eq!(headers[header::ETAG], expected(&plain).as_str());
+    let (status, partial, rest) =
+        fetch_with(&app, URI, &[(header::RANGE, "bytes=100-"), (header::IF_RANGE, etag.as_str())])
+            .await;
+    assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+    assert_eq!(rest, whole[100..]);
+    let range = format!("bytes 100-{}/{len}", len - 1);
+    assert_eq!(partial[header::CONTENT_RANGE], range.as_str());
+    assert_eq!(partial[header::ETAG], etag.as_str());
+    assert_eq!(
+        feed_position(&partial),
+        feed_position(&headers),
+        "the catalog's headers on a part too"
+    );
+    assert_eq!(partial[header::CACHE_CONTROL], "no-store");
 
-    let (_, zipped_headers, zipped) = fetch(&app, URI, true).await;
-    assert_eq!(zipped_headers[header::CONTENT_ENCODING], "gzip");
-    let mut inflated = Vec::new();
-    GzDecoder::new(&zipped[..]).read_to_end(&mut inflated).unwrap();
-    assert_eq!(inflated, plain);
-    assert_eq!(zipped_headers[header::ETAG], headers[header::ETAG]);
+    let (status, _, plain) = fetch_with(&app, URI, &[(header::RANGE, "bytes=0-99")]).await;
+    assert_eq!((status, plain.as_slice()), (StatusCode::PARTIAL_CONTENT, &whole[..100]));
+
+    for other in [format!("\"{}\"", "0".repeat(64)), format!("W/{etag}")] {
+        let asked = [(header::RANGE, "bytes=100-"), (header::IF_RANGE, other.as_str())];
+        let (status, _, body) = fetch_with(&app, URI, &asked).await;
+        assert_eq!((status, body.len()), (StatusCode::OK, len), "If-Range {other}");
+    }
+
+    let past = format!("bytes={len}-");
+    let asked = [(header::RANGE, past.as_str()), (header::IF_RANGE, etag.as_str())];
+    let (status, refused, _) = fetch_with(&app, URI, &asked).await;
+    assert_eq!(status, StatusCode::RANGE_NOT_SATISFIABLE);
+    assert_eq!(refused[header::CONTENT_RANGE], format!("bytes */{len}").as_str());
+}
+
+#[tokio::test]
+async fn a_resume_after_the_file_was_rebuilt_gets_the_new_file_whole() {
+    let (_temp, db, app) = catalog::app().await;
+    let (first, _) = built(&app).await;
+    let etag = first[header::ETAG].to_str().unwrap().to_owned();
+    let (status, ..) = fetch_with(&app, URI, &[(header::RANGE, "bytes=0-99")]).await;
+    assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+    db.write(|tx| tx.execute("UPDATE tracks SET title = 'Renamed' WHERE id = 1001", []))
+        .await
+        .unwrap();
+    stale(&db, 1).await;
+    eventually("the rebuilt file", async || {
+        let (_, headers, _) = fetch(&app, URI).await;
+        (feed_position(&headers) > feed_position(&first)).then_some(())
+    })
+    .await;
+
+    let asked = [(header::RANGE, "bytes=100-"), (header::IF_RANGE, etag.as_str())];
+    let (status, headers, body) = fetch_with(&app, URI, &asked).await;
+    assert_eq!(status, StatusCode::OK, "the part already held is of another file");
+    assert_ne!(headers[header::ETAG], etag.as_str());
+    assert!(feed_position(&headers) > feed_position(&first));
+    let expected = format!("\"{:x}\"", Sha256::digest(&body));
+    assert_eq!(headers[header::ETAG], expected.as_str());
 }
 
 #[tokio::test]
@@ -386,13 +476,13 @@ async fn another_librarys_churn_and_one_change_do_not_rebuild() {
     record(&db, 1, &[(Entity::Track, 1001, Op::Upsert)]).await;
 
     for _ in 0..3 {
-        let (status, headers, _) = fetch(&app, URI, false).await;
+        let (status, headers, _) = fetch(&app, URI).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(feed_position(&headers), feed_position(&first));
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     let dir = temp.path().join("cache/catalog/1");
-    assert_eq!(std::fs::read_dir(dir).unwrap().count(), 2, "no build ran");
+    assert_eq!(files(&dir).len(), 1, "no build ran");
 }
 
 #[tokio::test]
@@ -412,12 +502,10 @@ async fn a_file_this_database_cannot_go_on_from_is_not_served() {
     {
         idle().await;
         let old = newest(&dir).unwrap().unwrap();
-        let name =
-            |ext: &str| format!("{SCHEMA_VERSION}-{epoch}-{position}-{}.db{ext}", old.sha256);
-        std::fs::rename(&old.path, dir.join(name(""))).unwrap();
-        std::fs::rename(old.path.with_extension("db.gz"), dir.join(name(".gz"))).unwrap();
+        let name = format!("{SCHEMA_VERSION}-{epoch}-{position}-{}.gz", old.sha256);
+        std::fs::rename(&old.path, dir.join(name)).unwrap();
 
-        let (status, ..) = fetch(&app, URI, false).await;
+        let (status, ..) = fetch(&app, URI).await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "epoch {epoch} at {position}");
         let (headers, _) = built(&app).await;
         assert_eq!(
@@ -461,7 +549,7 @@ async fn a_file_a_rebuild_deleted_after_it_was_chosen_gives_way_to_its_replaceme
         epoch: 1,
         position: 1,
         sha256: "gone".to_owned(),
-        path: dir.join(format!("{SCHEMA_VERSION}-1-1-gone.db")),
+        path: dir.join(format!("{SCHEMA_VERSION}-1-1-gone.gz")),
     };
     let request = owner_request("GET", URI).body(Body::empty()).unwrap();
 
@@ -470,7 +558,7 @@ async fn a_file_a_rebuild_deleted_after_it_was_chosen_gives_way_to_its_replaceme
     assert_eq!(response.headers()[header::ETAG], headers[header::ETAG]);
     assert_eq!(feed_position(response.headers()), feed_position(&headers));
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    assert_eq!(body, bytes);
+    assert_eq!(inflate(&body), bytes);
 }
 
 #[tokio::test]
@@ -515,13 +603,10 @@ async fn a_file_of_another_schema_version_is_not_served_and_a_build_replaces_it(
     idle().await;
     let dir = temp.path().join("cache/catalog/1");
     let old = newest(&dir).unwrap().unwrap();
-    let name = |ext: &str| {
-        format!("{}-{}-{}-{}.db{ext}", SCHEMA_VERSION - 1, old.epoch, old.position, old.sha256)
-    };
-    std::fs::rename(&old.path, dir.join(name(""))).unwrap();
-    std::fs::rename(old.path.with_extension("db.gz"), dir.join(name(".gz"))).unwrap();
+    let name = format!("{}-{}-{}-{}.gz", SCHEMA_VERSION - 1, old.epoch, old.position, old.sha256);
+    std::fs::rename(&old.path, dir.join(name)).unwrap();
 
-    let (status, ..) = fetch(&app, URI, false).await;
+    let (status, ..) = fetch(&app, URI).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "the old version's file is not served");
     let (headers, bytes) = built(&app).await;
     assert_eq!(feed_position(&headers), feed_position(&first));
@@ -530,8 +615,29 @@ async fn a_file_of_another_schema_version_is_not_served_and_a_build_replaces_it(
     assert_eq!(version, SCHEMA_VERSION);
     // The file is served before the build deletes the old ones.
     idle().await;
-    let files = std::fs::read_dir(&dir).unwrap().count();
-    assert_eq!(files, 2, "the old version's files were removed by the build");
+    assert_eq!(files(&dir).len(), 1, "the old version's file was removed by the build");
+}
+
+#[tokio::test]
+async fn files_of_the_earlier_layout_are_not_served_and_a_build_replaces_them() {
+    let (temp, _db, app, snapshots) = catalog::app_with_snapshots().await;
+    let (first, _) = built(&app).await;
+    eventually("the builds to finish", async || {
+        snapshots.building.lock().unwrap().is_empty().then_some(())
+    })
+    .await;
+    let dir = temp.path().join("cache/catalog/1");
+    let old = newest(&dir).unwrap().unwrap();
+    // The database and its gzip, named for the database's hash.
+    let name = format!("{SCHEMA_VERSION}-{}-{}-{}.db", old.epoch, old.position, "d".repeat(64));
+    std::fs::rename(&old.path, dir.join(format!("{name}.gz"))).unwrap();
+    std::fs::write(dir.join(&name), b"database").unwrap();
+
+    let (status, ..) = fetch(&app, URI).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let (headers, _) = built(&app).await;
+    assert_eq!(feed_position(&headers), feed_position(&first));
+    eventually("the earlier files deleted", async || (files(&dir).len() == 1).then_some(())).await;
 }
 
 #[tokio::test]

@@ -35,12 +35,14 @@ async function storageUsage() {
 	return (await navigator.storage.estimate()).usage;
 }
 
-/** Streams `/data/device.db` onto OPFS as `import.db`, then opens it. */
+/** Streams `/data/device.db.gz` onto OPFS as `import.db`, inflating it, then opens it. */
 async function importPhase(rows) {
 	const usage = await storageUsage();
 	const start = now();
-	const response = await fetch('/data/device.db');
-	const size = Number(response.headers.get('content-length'));
+	// The inflated size, which the import is begun with.
+	const head = await fetch('/data/device.db', { method: 'HEAD' });
+	const size = Number(head.headers.get('content-length'));
+	const response = await fetch('/data/device.db.gz');
 	const target = await Import.begin('import.db', size);
 	let longest = 0;
 	for await (const chunk of response.body) {
@@ -53,6 +55,11 @@ async function importPhase(rows) {
 	(await Catalog.open('import.db')).free();
 	rows.push(
 		['bootstrap by file import', 'database file', mb(size)],
+		[
+			'bootstrap by file import',
+			'gzipped download',
+			mb(Number(response.headers.get('content-length')))
+		],
 		['bootstrap by file import', 'stream onto OPFS (finish included)', ms(streamed)],
 		['bootstrap by file import', 'longest single write call', ms(longest)],
 		['bootstrap by file import', 'stream and open, total', ms(now() - start)],

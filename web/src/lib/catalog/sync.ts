@@ -20,7 +20,7 @@ import type { RealtimeServerMessage } from '$lib/api/types';
 const PAGE = 1000;
 /** A catch-up of more than this share of a library's entities downloads its snapshot again. */
 const REDOWNLOAD_SHARE = 0.1;
-/** Downloads of a snapshot whose hash did not match its ETag, before giving up. */
+/** Downloads of a snapshot that did not match its ETag or would not inflate, before giving up. */
 const DOWNLOAD_TRIES = 3;
 /**
  * Answers of `503 catalog_building` waited out, before leaving the library to the next pull; and
@@ -44,10 +44,15 @@ const CHUNK = 1 << 20;
 const WIPE_TRIES = 5;
 /** How long to wait between those tries. */
 const WIPE_WAIT_MS = 300;
-/** A download's file name: a plain OPFS file beside the pool, which the pool never sees. */
-const DOWNLOAD = (id: string) => `download-${id}.tmp`;
-/** Matches every name `DOWNLOAD` makes. */
-const DOWNLOADS = /^download-.*\.tmp$/;
+/**
+ * A download's file name: a plain OPFS file beside the pool, which the pool never sees, holding
+ * the gzipped snapshot of library `id` whose ETag is `etag`, or as much of it as has arrived.
+ */
+const DOWNLOAD = (id: string, etag: string) => `download-${id}-${etag}.tmp`;
+/** Matches every download's name, giving the library and ETag of one `DOWNLOAD` made. */
+const DOWNLOADS = /^download-(?:(\d+)-([0-9a-f]+))?.*\.tmp$/;
+/** An ETag the device can check a snapshot against: a SHA-256 in lowercase hex. */
+const ETAG = /^[0-9a-f]{64}$/;
 
 /** The feeds' positions a file keeps: its library feed, its account feed, and its owner. */
 const LIBRARY = 'library';
@@ -79,11 +84,15 @@ type WorkerFile = FileSystemFileHandle & {
 	createSyncAccessHandle(): Promise<{
 		read(buffer: Uint8Array, options: { at: number }): number;
 		write(buffer: Uint8Array, options: { at: number }): number;
+		truncate(size: number): void;
 		getSize(): number;
 		flush(): void;
 		close(): void;
 	}>;
 };
+
+/** A download kept from an earlier try: its file, the ETag of what it holds, and its length. */
+type Partial = { name: string; etag: string; size: number };
 
 /** What went wrong that a person may need to know, such as a full disk. */
 export type Report = { message: string; quota: boolean };
@@ -216,7 +225,6 @@ export class CatalogSync {
 		}
 		try {
 			const names = await this.#retrying(() => this.#names());
-			await this.#clearDownloads();
 			const found = new Map<string, { file: string; generation: number }[]>();
 			for (const name of names) {
 				const match = FILE.exec(name);
@@ -242,6 +250,8 @@ export class CatalogSync {
 					void this.#pullLibrary(id);
 				}
 			}
+			// A library's first download goes on where a closed worker left it.
+			await this.#clearDownloads((id) => !this.catalogs.has(id));
 		} catch (error) {
 			this.#closed = true;
 			throw error;
@@ -388,7 +398,7 @@ export class CatalogSync {
 		if (!(await this.#hasOpfs())) return;
 		await this.#retrying(async () => {
 			for (const name of await this.#names()) await this.#remove(name);
-			await this.#clearDownloads();
+			await this.#clearDownloads(() => false);
 		});
 	}
 
@@ -465,6 +475,8 @@ export class CatalogSync {
 			(await this.#json<{ items: { id: string }[] }>('/libraries')).items.map(({ id }) => id)
 		);
 		for (const id of [...this.catalogs.keys()]) if (!listed.has(id)) await this.#discard(id);
+		// One still being written cannot be deleted; its next request is refused and deletes it.
+		await this.#clearDownloads((id) => listed.has(id)).catch(() => {});
 		for (const id of listed) {
 			if (!this.catalogs.has(id) && !this.#failed.has(id)) void this.#pullLibrary(id);
 		}
@@ -767,7 +779,8 @@ export class CatalogSync {
 		let position: number;
 		let epoch: string;
 		for (let mismatches = 0, older = 0; ;) {
-			const response = await this.#snapshot(id);
+			const partial = await this.#partial(id);
+			const response = await this.#snapshot(id, partial);
 			if (!response) {
 				await this.#discard(id);
 				return undefined;
@@ -784,10 +797,11 @@ export class CatalogSync {
 				}
 			}
 			try {
-				await this.#import(id, file, response);
+				await this.#import(id, file, response, partial);
 				break;
 			} catch (error) {
-				const mismatch = error instanceof Error && error.message.includes('hash mismatch');
+				const mismatch =
+					error instanceof Error && /snapshot (hash mismatch|damaged)/.test(error.message);
 				if (!mismatch || ++mismatches === DOWNLOAD_TRIES) throw error;
 			}
 		}
@@ -821,13 +835,24 @@ export class CatalogSync {
 
 	/**
 	 * The snapshot's response, waiting out `503 catalog_building`; null where the account does
-	 * not reach the library. A snapshot of another schema version than this build's stops the
-	 * library's sync for good: only a reload, which brings the new build, helps.
+	 * not reach the library, which deletes any `partial` download. With `partial`, only the rest
+	 * of the file it is part of is asked for, and a server whose file has changed since sends the
+	 * new one whole. A snapshot of another schema version than this build's stops the library's
+	 * sync for good: only a reload, which brings the new build, helps.
 	 */
-	async #snapshot(id: string) {
+	async #snapshot(id: string, partial?: Partial) {
 		for (let tries = 0; tries < BUILD_TRIES; tries++) {
-			const response = await this.#get(`/libraries/${id}/catalog`);
+			const headers: Record<string, string> = partial
+				? { range: `bytes=${partial.size}-`, 'if-range': `"${partial.etag}"` }
+				: {};
+			const response = await this.#get(`/libraries/${id}/catalog`, headers);
+			if (response.status === 404 || response.status === 416) await this.#unlink(partial?.name);
 			if (response.status === 404) return null;
+			// The download is whole and only its import was cut short: it is asked for again whole.
+			if (response.status === 416 && partial) {
+				partial = undefined;
+				continue;
+			}
 			if (response.status !== 503) {
 				if (!response.ok) throw new Refused(response.status);
 				if (Number(response.headers.get('x-jewelcase-schema')) !== schemaVersion()) {
@@ -844,24 +869,38 @@ export class CatalogSync {
 	}
 
 	/**
-	 * Imports the snapshot of `response` into the pool as `file`. The body is first written to a
-	 * plain OPFS file beside the pool, so the network never holds the pool, which a transfer
-	 * takes whole; then one quick local pass copies it in, hashing it as it goes, and publishes
-	 * it only if the hash is the ETag.
+	 * Imports the gzipped snapshot of `response` into the pool as `file`. The body is first
+	 * written to a plain OPFS file beside the pool, so the network never holds the pool, which a
+	 * transfer takes whole; then one quick local pass inflates it in, hashing the gzip as it goes,
+	 * and publishes it only if the hash is the ETag. A `206` goes on from the end of `partial`,
+	 * the download an earlier try left; any other answer replaces it. A body that breaks off
+	 * leaves its download for the next try to go on from; anything else deletes it.
 	 */
-	async #import(id: string, file: string, response: Response) {
+	async #import(id: string, file: string, response: Response, partial?: Partial) {
 		const etag = response.headers.get('etag')?.replaceAll('"', '');
-		if (!etag || !response.body) throw new Error('the catalog file has no ETag');
+		if (!etag || !ETAG.test(etag) || !response.body) {
+			throw new Error('the catalog file has no ETag');
+		}
+		const start = Number(/^bytes (\d+)-/.exec(response.headers.get('content-range') ?? '')?.[1]);
+		const resumed = response.status === 206 && partial?.etag === etag && start === partial.size;
+		if (!resumed) await this.#unlink(partial?.name);
+		if (response.status === 206 && !resumed) {
+			void response.body.cancel();
+			throw new Error('the server sent part of a catalog file it was not asked for');
+		}
 		const root = await navigator.storage.getDirectory();
-		const name = DOWNLOAD(id);
+		const name = DOWNLOAD(id, etag);
+		let cut = false;
 		try {
 			const handle = (await root.getFileHandle(name, { create: true })) as WorkerFile;
 			const download = await handle.createSyncAccessHandle();
 			try {
+				let at = resumed ? start : 0;
+				download.truncate(at);
 				const reader = response.body.getReader();
-				let at = 0;
 				for (;;) {
 					const { done, value } = await reader.read().catch(() => {
+						cut = true;
 						throw this.#closed ? new Closed() : new Offline();
 					});
 					if (done) break;
@@ -871,7 +910,10 @@ export class CatalogSync {
 				download.flush();
 				await this.#pool(async () => {
 					const size = download.getSize();
-					const target = await Import.begin(file, size);
+					// The gzip trailer's last four bytes are the inflated size, little-endian.
+					const trailer = new Uint8Array(4);
+					download.read(trailer, { at: Math.max(0, size - 4) });
+					const target = await Import.begin(file, new DataView(trailer.buffer).getUint32(0, true));
 					try {
 						const chunk = new Uint8Array(CHUNK);
 						for (let from = 0; from < size;) {
@@ -889,8 +931,27 @@ export class CatalogSync {
 				download.close();
 			}
 		} finally {
-			await root.removeEntry(name).catch(() => {});
+			if (!cut) await this.#unlink(name);
 		}
+	}
+
+	/** The download an earlier try left of library `id`'s snapshot, if there is one. */
+	async #partial(id: string): Promise<Partial | undefined> {
+		const root = await navigator.storage.getDirectory();
+		for await (const [name, handle] of root.entries()) {
+			const [, library, etag] = DOWNLOADS.exec(name) ?? [];
+			if (library !== id || handle.kind !== 'file') continue;
+			const { size } = await (handle as FileSystemFileHandle).getFile();
+			if (size > 0) return { name, etag, size };
+		}
+		return undefined;
+	}
+
+	/** Deletes the plain OPFS file `name`, if there is one. */
+	async #unlink(name: string | undefined) {
+		if (!name) return;
+		const root = await navigator.storage.getDirectory();
+		await root.removeEntry(name).catch(() => {});
 	}
 
 	/** Whether the browser has OPFS at all, which it does not in Safari's private browsing. */
@@ -903,10 +964,13 @@ export class CatalogSync {
 		}
 	}
 
-	/** Deletes the downloads a closed worker left behind. */
-	async #clearDownloads() {
+	/** Deletes the downloads, except those of the libraries `keep` says yes to. */
+	async #clearDownloads(keep: (id: string) => boolean) {
 		const root = await navigator.storage.getDirectory();
-		for await (const name of root.keys()) if (DOWNLOADS.test(name)) await root.removeEntry(name);
+		for await (const name of root.keys()) {
+			const match = DOWNLOADS.exec(name);
+			if (match && !(match[1] && keep(match[1]))) await root.removeEntry(name);
+		}
 	}
 
 	/** Runs `job` once the pool operations queued before it are done. */
@@ -936,11 +1000,11 @@ export class CatalogSync {
 		return this.#pool(() => Catalog.open(file));
 	}
 
-	/** Fetches `path` of the API. */
-	async #get(path: string) {
+	/** Fetches `path` of the API, with any `headers`. */
+	async #get(path: string, headers?: Record<string, string>) {
 		if (this.#closed) throw new Closed();
 		try {
-			return await this.#fetch(`${this.#api}${path}`, { signal: this.#abort.signal });
+			return await this.#fetch(`${this.#api}${path}`, { signal: this.#abort.signal, headers });
 		} catch {
 			throw this.#closed ? new Closed() : new Offline();
 		}

@@ -1,12 +1,15 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { library, serveLibrary, serveRealtime } from './fixtures';
 import goldenRows from '../../crates/catalog/parity/library.json' with { type: 'json' };
 
 const snapshot = readFileSync(new URL('../../crates/catalog/parity/library.db', import.meta.url));
-const etag = createHash('sha256').update(snapshot).digest('hex');
+/** The snapshot as the server serves it: gzipped, with the gzip's SHA-256 as its ETag. */
+const gzip = gzipSync(snapshot);
+const etag = createHash('sha256').update(gzip).digest('hex');
 /** The schema version the golden file was built at: its SQLite header's `user_version`. */
 const schema = String(snapshot.readUInt32BE(60));
 
@@ -30,13 +33,13 @@ async function serveCatalog(
 			});
 		if (path === '/libraries/1/catalog')
 			return route.fulfill({
-				body: snapshot,
+				body: gzip,
 				headers: {
 					etag: `"${etag}"`,
 					'x-jewelcase-position': '0',
 					'x-jewelcase-epoch': EPOCH,
 					'x-jewelcase-schema': schema,
-					'content-type': 'application/vnd.sqlite3'
+					'content-type': 'application/gzip'
 				}
 			});
 		if (path === '/libraries/1/changes') return route.fulfill({ json: { ...feed, epoch: EPOCH } });

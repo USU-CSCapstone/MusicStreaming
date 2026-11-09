@@ -17,10 +17,15 @@ export class Harness {
 	private changed: string[] = [];
 	#sync: CatalogSync | undefined;
 
-	/** Closes any sync, deletes every file, and clears the fake server, with the snapshot to serve. */
+	/**
+	 * Closes any sync, deletes every file and download, and clears the fake server, with the
+	 * database to serve as the snapshot.
+	 */
 	async reset(snapshot: Uint8Array) {
 		await this.#sync?.close();
 		for (const name of await storeNames()) await storeRemove(name);
+		const root = await navigator.storage.getDirectory();
+		for (const name of await this.downloads()) await root.removeEntry(name);
 		this.api = new FakeApi();
 		await this.api.setSnapshot(snapshot);
 		this.reports = [];
@@ -171,10 +176,12 @@ export class Harness {
 		catalog.free();
 	}
 
-	/** Leaves a download file at the OPFS root, as a worker closed mid-download does. */
-	async leaveDownload(name: string) {
+	/** Leaves a download file holding `bytes` at the OPFS root, as a worker closed mid-download does. */
+	async leaveDownload(name: string, bytes: Uint8Array = new Uint8Array(0)) {
 		const root = await navigator.storage.getDirectory();
-		await root.getFileHandle(name, { create: true });
+		const writable = await (await root.getFileHandle(name, { create: true })).createWritable();
+		await writable.write(bytes as BlobPart);
+		await writable.close();
 	}
 
 	/** The names of the download files at the OPFS root. */

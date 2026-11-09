@@ -367,17 +367,23 @@ export interface paths {
         };
         /**
          * Download the library's catalog
-         * @description The library's catalog as one SQLite database in the device schema
+         * @description The library's catalog as one gzipped SQLite database in the device schema
          *     (`crates/catalog/src/schema.sql`), for a device that has none of it yet. It holds the
          *     rows `listLibraryChanges` carries, as of `X-Jewelcase-Position`: the device then pulls the
          *     feed with `after` set to that value and `epoch` to `X-Jewelcase-Epoch`. The file is built once and shared by everyone who
          *     reaches the library. It is rebuilt in the background once the library's feed holds more
          *     changes since the file than a tenth of its tracks, albums and artists, and the old file is
-         *     served meanwhile. It is gzipped for a client that accepts it.
+         *     served meanwhile.
          *
-         *     `ETag` is the SHA-256 of the database itself, as a quoted lowercase hex string,
-         *     whether or not the response is compressed: a client checks it against the file it ends
-         *     up with. A file is served only after SQLite's `quick_check` passed on it.
+         *     The body is the gzip file itself, `application/gzip` with no `Content-Encoding`, so a
+         *     client stores the bytes it receives and inflates them itself. An interrupted download
+         *     resumes: the client asks for `Range: bytes=<bytes it has>-` with `If-Range` set to the
+         *     `ETag` it started with, and gets `206` with the rest, or `200` with the whole of a newer
+         *     file if the file has changed since.
+         *
+         *     `ETag` is the SHA-256 of the gzip file, as a quoted lowercase hex string: a client checks
+         *     it against the bytes it ends up with, and gzip's own checksum covers the inflated
+         *     database. A file is served only after SQLite's `quick_check` passed on the database.
          *     `X-Jewelcase-Schema` is the device schema's version, which the database also carries as
          *     its `user_version`: a client that doesn't know that version doesn't import the file. The
          *     response is `no-store`, so no HTTP cache keeps a copy of the catalog.
@@ -3863,7 +3869,12 @@ export interface operations {
     getLibraryCatalog: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description `bytes=<start>-`, to resume a download. */
+                Range?: string;
+                /** @description The `ETag` the download started with; a range of any other file is not sent. */
+                "If-Range"?: string;
+            };
             path: {
                 libraryId: components["parameters"]["LibraryId"];
             };
@@ -3874,7 +3885,7 @@ export interface operations {
             /** @description OK */
             200: {
                 headers: {
-                    /** @description The SHA-256 of the uncompressed database, in quotes. */
+                    /** @description The SHA-256 of the gzip file, in quotes. */
                     ETag?: string;
                     /** @description The library's feed position the file is current to, for `listLibraryChanges`'s `after`. */
                     "X-Jewelcase-Position"?: number;
@@ -3884,20 +3895,20 @@ export interface operations {
                     "X-Jewelcase-Schema"?: number;
                     /** @description `no-store`. */
                     "Cache-Control"?: string;
-                    /** @description `gzip` when the client accepts it. */
-                    "Content-Encoding"?: string;
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/vnd.sqlite3": string;
+                    "application/gzip": string;
                 };
             };
-            /** @description Partial content (`Range`). A range applies to the encoding sent, so an interrupted download can resume. */
+            /** @description The range asked for (`Range`), of the file `If-Range` names if it is set, with the same headers as `200` and `Content-Range`. */
             206: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/gzip": string;
+                };
             };
             /** @description Not modified (`If-Modified-Since`). */
             304: {
@@ -3906,7 +3917,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Range not satisfiable. */
+            /** @description Range not satisfiable: the range starts at or past the end of the file, whose length `Content-Range` gives. */
             416: {
                 headers: {
                     [name: string]: unknown;

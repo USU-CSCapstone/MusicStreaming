@@ -523,17 +523,23 @@ paths:
       tags: [Libraries]
       summary: Download the library's catalog
       description: |
-        The library's catalog as one SQLite database in the device schema
+        The library's catalog as one gzipped SQLite database in the device schema
         (`crates/catalog/src/schema.sql`), for a device that has none of it yet. It holds the
         rows `listLibraryChanges` carries, as of `X-Jewelcase-Position`: the device then pulls the
         feed with `after` set to that value and `epoch` to `X-Jewelcase-Epoch`. The file is built once and shared by everyone who
         reaches the library. It is rebuilt in the background once the library's feed holds more
         changes since the file than a tenth of its tracks, albums and artists, and the old file is
-        served meanwhile. It is gzipped for a client that accepts it.
+        served meanwhile.
 
-        `ETag` is the SHA-256 of the database itself, as a quoted lowercase hex string,
-        whether or not the response is compressed: a client checks it against the file it ends
-        up with. A file is served only after SQLite's `quick_check` passed on it.
+        The body is the gzip file itself, `application/gzip` with no `Content-Encoding`, so a
+        client stores the bytes it receives and inflates them itself. An interrupted download
+        resumes: the client asks for `Range: bytes=<bytes it has>-` with `If-Range` set to the
+        `ETag` it started with, and gets `206` with the rest, or `200` with the whole of a newer
+        file if the file has changed since.
+
+        `ETag` is the SHA-256 of the gzip file, as a quoted lowercase hex string: a client checks
+        it against the bytes it ends up with, and gzip's own checksum covers the inflated
+        database. A file is served only after SQLite's `quick_check` passed on the database.
         `X-Jewelcase-Schema` is the device schema's version, which the database also carries as
         its `user_version`: a client that doesn't know that version doesn't import the file. The
         response is `no-store`, so no HTTP cache keeps a copy of the catalog.
@@ -542,12 +548,21 @@ paths:
         reads the catalog from the other endpoints in the meantime and asks again after
         `Retry-After`.
       operationId: getLibraryCatalog
+      parameters:
+        - name: Range
+          in: header
+          description: '`bytes=<start>-`, to resume a download.'
+          schema: { type: string }
+        - name: If-Range
+          in: header
+          description: The `ETag` the download started with; a range of any other file is not sent.
+          schema: { type: string }
       responses:
         '200':
           description: OK
           headers:
             ETag:
-              description: The SHA-256 of the uncompressed database, in quotes.
+              description: The SHA-256 of the gzip file, in quotes.
               schema: { type: string }
             X-Jewelcase-Position:
               description: The library's feed position the file is current to, for `listLibraryChanges`'s `after`.
@@ -561,15 +576,16 @@ paths:
             Cache-Control:
               description: '`no-store`.'
               schema: { type: string }
-            Content-Encoding:
-              description: '`gzip` when the client accepts it.'
-              schema: { type: string }
           content:
-            application/vnd.sqlite3:
+            application/gzip:
               schema: { type: string, format: binary }
-        '206': { description: 'Partial content (`Range`). A range applies to the encoding sent, so an interrupted download can resume.' }
+        '206':
+          description: The range asked for (`Range`), of the file `If-Range` names if it is set, with the same headers as `200` and `Content-Range`.
+          content:
+            application/gzip:
+              schema: { type: string, format: binary }
         '304': { description: Not modified (`If-Modified-Since`). }
-        '416': { description: Range not satisfiable. }
+        '416': { description: 'Range not satisfiable: the range starts at or past the end of the file, whose length `Content-Range` gives.' }
         '503':
           description: '`catalog_building` — the first build has not finished; try again after `Retry-After`.'
           headers:

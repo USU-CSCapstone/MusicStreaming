@@ -831,14 +831,124 @@ describe('catalog sync', () => {
 		expect(await h.cursor('1', 'library')).toBe(BASE + 120);
 	});
 
-	it('clears the downloads a closed worker left behind', async () => {
+	it('clears the downloads a closed worker left behind of the libraries it holds', async () => {
 		await started('1');
 		await h.stop();
 		await h.leaveDownload('download-1.tmp');
-		expect(await h.downloads()).toEqual(['download-1.tmp']);
+		await h.leaveDownload(`download-1-${'a'.repeat(64)}.tmp`, new Uint8Array(8));
+		expect(await h.downloads()).toHaveLength(2);
 		await h.start();
 		await h.idle();
 		expect(await h.downloads()).toEqual([]);
+	});
+
+	it('an interrupted first download goes on from where it broke off, in the next worker too', async () => {
+		await serve('1');
+		const { gzip, etag } = await h.api.snapshot();
+		await h.api.cutBody();
+		await h.start();
+		await h.idle();
+		expect(await h.libraries()).toEqual([]);
+		expect(await h.downloads()).toEqual([`download-1-${etag}.tmp`]);
+		expect(await h.reported()).toEqual([]);
+
+		await h.start();
+		await h.idle();
+		expect(await h.libraries()).toEqual(['1']);
+		expect(await total('listTracks')).toBe(6);
+		expect(await h.api.ranges()).toEqual(['', 'bytes=1024-']);
+		expect(await h.api.sent()).toBe(gzip.length);
+		expect(await h.downloads()).toEqual([]);
+		expect(await h.reported()).toEqual([]);
+	});
+
+	it('a download goes on at the next hello in the same worker', async () => {
+		await serve('1');
+		await h.api.cutBody();
+		await h.start();
+		await h.idle();
+		expect(await h.libraries()).toEqual([]);
+
+		await h.message(hello);
+		await h.idle();
+		expect(await h.libraries()).toEqual(['1']);
+		expect(await h.api.ranges()).toEqual(['', 'bytes=1024-']);
+	});
+
+	it('a download whose file changed on the server since starts over', async () => {
+		await serve('1');
+		const before = (await h.api.snapshot()).etag;
+		await h.api.cutBody();
+		await h.start();
+		await h.idle();
+		const changed = snapshot.slice();
+		// The database header's application ID, which nothing reads.
+		changed[68] = 1;
+		await h.api.setSnapshot(changed);
+		const { gzip, etag } = await h.api.snapshot();
+		expect(etag).not.toBe(before);
+
+		await h.message(hello);
+		await h.idle();
+		expect(await h.libraries()).toEqual(['1']);
+		expect(await h.api.ranges()).toEqual(['', 'bytes=1024-']);
+		expect(await h.api.sent()).toBe(1024 + gzip.length);
+		expect(await h.downloads()).toEqual([]);
+		expect(await h.reported()).toEqual([]);
+	});
+
+	it('a whole download whose import was cut short is downloaded again whole', async () => {
+		await serve('1');
+		const { gzip, etag } = await h.api.snapshot();
+		await h.leaveDownload(`download-1-${etag}.tmp`, gzip);
+		await h.start();
+		await h.idle();
+		expect(await h.libraries()).toEqual(['1']);
+		expect(await h.api.ranges()).toEqual([`bytes=${gzip.length}-`, '']);
+		expect(await h.reported()).toEqual([]);
+	});
+
+	it('a resumed download that will not inflate is discarded and downloaded again', async () => {
+		await serve('1');
+		const { gzip, etag } = await h.api.snapshot();
+		await h.leaveDownload(`download-1-${etag}.tmp`, new Uint8Array(100).fill(0xab));
+		await h.start();
+		await h.idle();
+		expect(await h.libraries()).toEqual(['1']);
+		expect(await h.api.ranges()).toEqual(['bytes=100-', '']);
+		expect(await h.api.sent()).toBe(gzip.length - 100 + gzip.length);
+		expect(await h.downloads()).toEqual([]);
+		expect(await h.reported()).toEqual([]);
+	});
+
+	it('a part of another file than the download holds is not appended to it', async () => {
+		await serve('1');
+		await h.leaveDownload(`download-1-${'a'.repeat(64)}.tmp`, new Uint8Array(100));
+		await h.api.ignoreIfRange();
+		await h.start();
+		await h.idle();
+		expect(await h.libraries()).toEqual([]);
+		expect(await h.downloads()).toEqual([]);
+		expect(await h.reported()).toHaveLength(1);
+
+		await h.message(hello);
+		await h.idle();
+		expect(await h.libraries()).toEqual(['1']);
+		expect(await h.api.ranges()).toEqual(['bytes=100-', '']);
+	});
+
+	it('the download of a library the account no longer reaches is deleted', async () => {
+		await serve('1');
+		await h.api.cutBody();
+		await h.start();
+		await h.idle();
+		expect(await h.downloads()).toHaveLength(1);
+
+		await h.api.setLibraries([]);
+		await h.message(hello);
+		await h.idle();
+		expect(await h.downloads()).toEqual([]);
+		expect(await h.libraries()).toEqual([]);
 	});
 
 	it("a new library's download does not hold up the playlists of the libraries held", async () => {

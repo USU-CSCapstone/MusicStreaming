@@ -1,4 +1,4 @@
-// A fake server for the catalog sync's tests: the library list, each library's snapshot and
+// A fake server for the catalog sync's tests: the library list, each library's gzipped snapshot and
 // change feed, and the account feed, held in memory and served as `fetch` does. A test sets
 // what the server holds and how it misbehaves, and reads what was asked.
 
@@ -15,6 +15,9 @@ type Change = {
 };
 /** A change feed: its entries in order and the position of the latest. */
 type Feed = { changes: Change[]; head: number };
+
+/** The bytes of a snapshot's body that arrive at a time. */
+const PIECE = 1024;
 
 /** The time to wait for a held response, so a test that forgets to release one fails. */
 const HOLD_MS = 10_000;
@@ -48,13 +51,23 @@ export class FakeApi {
 	#building = 0;
 	#wrongEtags = 0;
 	#bodyHeld: { release: () => void; reached: boolean } | undefined;
+	#cuts = 0;
+	#ignoreIfRange = false;
+	#ranges: string[] = [];
+	#sent = 0;
 	#held: { match: string; release: () => void; reached: boolean } | undefined;
 
-	/** Serves `bytes` as every library's snapshot. */
+	/** Serves the database `bytes`, gzipped, as every library's snapshot. */
 	async setSnapshot(bytes: Uint8Array) {
-		this.#snapshot = bytes;
-		const hash = await crypto.subtle.digest('SHA-256', bytes as BufferSource);
+		const gzip = new Blob([bytes as BlobPart]).stream().pipeThrough(new CompressionStream('gzip'));
+		this.#snapshot = new Uint8Array(await new Response(gzip).arrayBuffer());
+		const hash = await crypto.subtle.digest('SHA-256', this.#snapshot as BufferSource);
 		this.#etag = [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join('');
+	}
+
+	/** The gzipped snapshot served, and its ETag. */
+	snapshot() {
+		return { gzip: this.#snapshot, etag: this.#etag };
 	}
 
 	/** The library list. */
@@ -135,6 +148,16 @@ export class FakeApi {
 		this.#held = { match, release: () => {}, reached: false };
 	}
 
+	/** Breaks off the next `times` snapshot bodies after their first piece, as a lost network does. */
+	cutBody(times = 1) {
+		this.#cuts = times;
+	}
+
+	/** Serves the range asked for whatever `If-Range` names, as a server that ignores it does. */
+	ignoreIfRange() {
+		this.#ignoreIfRange = true;
+	}
+
 	/** Stops the next snapshot's body after its first piece, until `releaseBody`. */
 	holdBody() {
 		this.#bodyHeld = { release: () => {}, reached: false };
@@ -162,6 +185,16 @@ export class FakeApi {
 		this.#held = undefined;
 	}
 
+	/** The `Range` of each snapshot request, or `''` for one without, in order. */
+	ranges() {
+		return this.#ranges;
+	}
+
+	/** The bytes of snapshot bodies sent. */
+	sent() {
+		return this.#sent;
+	}
+
 	/** The paths asked that contain `match`. */
 	asked(match: string) {
 		return this.requests.filter((path) => path.includes(match));
@@ -177,7 +210,9 @@ export class FakeApi {
 				path.includes(f.match) && this.requests.filter((r) => r.includes(f.match)).length > f.after
 		);
 		// Answered when asked, though delivered when released.
-		const response = failure ? problem(failure.status) : this.#answer(url);
+		const response = failure
+			? problem(failure.status)
+			: this.#answer(url, new Headers(init?.headers));
 		const held = this.#held;
 		if (held && path.includes(held.match) && !held.reached) {
 			held.reached = true;
@@ -192,8 +227,8 @@ export class FakeApi {
 		return response;
 	};
 
-	/** The answer to a request that was not made to fail. */
-	#answer(url: URL): Response {
+	/** The answer to a request that was not made to fail, with the request's `headers`. */
+	#answer(url: URL, headers: Headers): Response {
 		const path = url.pathname.replace(/^\/api\/v1/, '');
 		const json = (body: object) => Response.json(body);
 		if (path === '/libraries') return json({ items: this.#libraries.map((id) => ({ id })) });
@@ -211,37 +246,57 @@ export class FakeApi {
 		}
 		const wrong = this.#wrongEtags > 0;
 		if (wrong) this.#wrongEtags--;
-		const bytes = this.#snapshot;
 		const position = this.#position.get(library[1]) ?? 0;
 		const rebuilt = this.#rebuilds.get(library[1]);
 		if (rebuilt !== undefined) {
 			this.#rebuilds.delete(library[1]);
 			this.#position.set(library[1], rebuilt);
 		}
+		const etag = `"${wrong ? '0'.repeat(64) : this.#etag}"`;
+		const length = this.#snapshot.length;
+		const answer = {
+			etag,
+			'x-jewelcase-position': String(position),
+			'x-jewelcase-epoch': this.#epoch,
+			'x-jewelcase-schema': String(this.#schema ?? schemaVersion()),
+			// A stale snapshot is asked for again at once rather than after the sync's wait.
+			'retry-after': '0',
+			'content-type': 'application/gzip'
+		};
+		// A range of the file `If-Range` names, as the server serves one.
+		const range = headers.get('range') ?? '';
+		this.#ranges.push(range);
+		const start = Number(/^bytes=(\d+)-$/.exec(range)?.[1] ?? 0);
+		const ranged =
+			start > 0 && (this.#ignoreIfRange || [null, etag].includes(headers.get('if-range')));
+		if (ranged && start >= length) {
+			return new Response(null, {
+				status: 416,
+				headers: { ...answer, 'content-range': `bytes */${length}` }
+			});
+		}
+		const bytes = this.#snapshot.subarray(ranged ? start : 0);
 		// In pieces, as a download arrives.
 		let at = 0;
 		const stall = this.#bodyHeld;
+		const cut = this.#cuts > 0;
+		if (cut) this.#cuts--;
 		const body = new ReadableStream<Uint8Array>({
-			async pull(controller) {
+			pull: async (controller) => {
 				if (at >= bytes.length) return controller.close();
+				if (cut && at > 0) return controller.error(new TypeError('network error'));
 				if (stall && at > 0 && !stall.reached) {
 					stall.reached = true;
 					await new Promise<void>((resolve) => (stall.release = resolve));
 				}
-				controller.enqueue(bytes.slice(at, (at += 16384)));
+				const piece = bytes.slice(at, (at += PIECE));
+				this.#sent += piece.length;
+				controller.enqueue(piece);
 			}
 		});
-		return new Response(body, {
-			headers: {
-				etag: `"${wrong ? '0'.repeat(64) : this.#etag}"`,
-				'x-jewelcase-position': String(position),
-				'x-jewelcase-epoch': this.#epoch,
-				'x-jewelcase-schema': String(this.#schema ?? schemaVersion()),
-				// A stale snapshot is asked for again at once rather than after the sync's wait.
-				'retry-after': '0',
-				'content-type': 'application/vnd.sqlite3'
-			}
-		});
+		if (!ranged) return new Response(body, { headers: answer });
+		const parted = { ...answer, 'content-range': `bytes ${start}-${length - 1}/${length}` };
+		return new Response(body, { status: 206, headers: parted });
 	}
 
 	/**
