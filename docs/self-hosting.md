@@ -63,6 +63,7 @@ saying what's wrong.
 | `JEWELCASE_BASE_PATH` | none | A path to serve under, such as `/music`. For now only the API can be served under one, not the web app. |
 | `JEWELCASE_LOG` | `info` | How much to log: `error`, `warn`, `info`, `debug`, or `trace` |
 | `JEWELCASE_TRUSTED_PROXIES` | `127.0.0.0/8, ::1` | Reverse proxies to believe about the client's address, as addresses or networks separated by commas |
+| `JEWELCASE_WEB_DIR` | `/usr/share/jewelcase/web` | The web app's build, served beside the API. Without one there, only the API is served. |
 
 With the development setup, `JEWELCASE_MUSIC` in `.env` picks the folder that's mounted as the
 library; point it somewhere else and the library shows that folder's music instead. Of the

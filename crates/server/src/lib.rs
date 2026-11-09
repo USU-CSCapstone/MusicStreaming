@@ -105,9 +105,9 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
         prefix: api::prefix(&config.base_path),
         trusted_proxies: Arc::new(config.trusted_proxies.clone()),
     });
-    let web = Path::new(web::DIR);
+    let web = &config.web_dir;
     if !web.is_dir() {
-        info!(dir = web::DIR, "no web app there; serving the API only");
+        info!(dir = %web.display(), "no web app there; serving the API only");
     } else if !config.base_path.is_empty() {
         // The build's links assume the root until startup rewrites them for the base path
         // (`design/general.md` §7.1).
