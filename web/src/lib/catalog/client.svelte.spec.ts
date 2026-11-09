@@ -57,6 +57,10 @@ class FakeWorker {
 
 let tabs = 0;
 
+/** How many requests for the lock `name` wait. */
+const waiting = async (name: string) =>
+	((await navigator.locks.query()).pending ?? []).filter((lock) => lock.name === name).length;
+
 /** A set of tabs of one browser: they share a lock and a channel, and each has its own client and workers. */
 function browser() {
 	const name = `catalog-test-${++tabs}-${Math.random()}`;
@@ -74,11 +78,21 @@ function browser() {
 		/** Opens a tab. */
 		tab(tabName: string) {
 			const workers: FakeWorker[] = [];
-			const client = new CatalogClient(() => {
-				workers.push(new FakeWorker(tabName, () => silent, flags));
-				return workers[workers.length - 1] as unknown as Worker;
-			}, name);
-			return { client, workers };
+			// Whether the tab is out of sight; `show` and `hide` change it and tell the tab.
+			const view = { hidden: false };
+			const client = new CatalogClient(
+				() => {
+					workers.push(new FakeWorker(tabName, () => silent, flags));
+					return workers[workers.length - 1] as unknown as Worker;
+				},
+				name,
+				() => view.hidden
+			);
+			const change = (hidden: boolean) => {
+				view.hidden = hidden;
+				document.dispatchEvent(new Event('visibilitychange'));
+			};
+			return { client, workers, hide: () => change(true), show: () => change(false) };
 		},
 		/** The router of a worker of the queue or any other asker, on the browser's channel. */
 		router() {
@@ -311,35 +325,143 @@ describe('CatalogClient', () => {
 		second.client.disconnect();
 	});
 
-	it('an owner hidden with another tab waiting hands over, and wants the files back when shown', async () => {
+	it('an owner hidden with a waiting tab in view hands over, and wants the files back when shown', async () => {
 		const b = browser();
 		const first = b.tab('first');
 		const second = b.tab('second');
 		first.client.connect(b.realtime, '7');
 		await vi.waitFor(() => expect(types(first.workers[0])).toContain('start'));
-		const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
 
 		// No one waits: nothing changes.
-		document.dispatchEvent(new Event('visibilitychange'));
+		first.hide();
 		await new Promise((resolve) => setTimeout(resolve, 100));
 		expect(first.workers[0].terminated).toBe(false);
+		first.show();
 
 		second.client.connect(b.realtime, '7');
 		await vi.waitFor(async () =>
 			expect((await navigator.locks.query()).pending?.length).toBeGreaterThan(0)
 		);
-		document.dispatchEvent(new Event('visibilitychange'));
+		first.hide();
 		await vi.waitFor(() =>
 			expect(types(second.workers[0] ?? ({ sent: [] } as never))).toContain('start')
 		);
 		expect(first.workers[0].terminated).toBe(true);
 		expect(types(first.workers[0]).slice(-1)).toEqual(['pause']);
 
-		hidden.mockReturnValue(false);
-		document.dispatchEvent(new Event('visibilitychange'));
+		first.show();
 		first.client.disconnect();
 		second.client.disconnect();
-		vi.restoreAllMocks();
+	});
+
+	it('an owner hidden keeps the catalog while the tabs waiting for it are hidden too, and hands over when one is shown', async () => {
+		const b = browser();
+		const first = b.tab('first');
+		const second = b.tab('second');
+		first.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(first.workers[0])).toContain('start'));
+		second.client.connect(b.realtime, '7');
+		await vi.waitFor(async () => expect(await waiting(b.name)).toBe(1));
+		// A hidden waiting tab leaves the queue for the lock.
+		second.hide();
+		await vi.waitFor(async () => expect(await waiting(b.name)).toBe(0));
+
+		first.hide();
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		expect(first.workers[0].terminated).toBe(false);
+		expect(second.workers).toHaveLength(0);
+
+		second.show();
+		await vi.waitFor(() =>
+			expect(types(second.workers[0] ?? ({ sent: [] } as never))).toContain('start')
+		);
+		expect(first.workers[0].terminated).toBe(true);
+		first.client.disconnect();
+		second.client.disconnect();
+	});
+
+	it('the catalog goes to a waiting tab in view, never to a hidden tab that joined before it', async () => {
+		const b = browser();
+		const a = b.tab('a');
+		const hiddenTab = b.tab('b');
+		const visibleTab = b.tab('c');
+		a.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(a.workers[0])).toContain('start'));
+		hiddenTab.hide();
+		hiddenTab.client.connect(b.realtime, '7');
+		visibleTab.client.connect(b.realtime, '7');
+		await vi.waitFor(async () => expect(await waiting(b.name)).toBe(1));
+
+		a.hide();
+		await vi.waitFor(() =>
+			expect(types(visibleTab.workers[0] ?? ({ sent: [] } as never))).toContain('start')
+		);
+		expect(hiddenTab.workers).toHaveLength(0);
+		a.client.disconnect();
+		hiddenTab.client.disconnect();
+		visibleTab.client.disconnect();
+	});
+
+	it('a tab out of sight owns the catalog when no one holds it, and is not queued when someone does', async () => {
+		const b = browser();
+		const alone = b.tab('alone');
+		alone.hide();
+		alone.client.connect(b.realtime, '7');
+		await vi.waitFor(() =>
+			expect(types(alone.workers[0] ?? ({ sent: [] } as never))).toContain('start')
+		);
+
+		const other = b.tab('other');
+		other.hide();
+		other.client.connect(b.realtime, '7');
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(await waiting(b.name)).toBe(0);
+		alone.client.disconnect();
+		other.client.disconnect();
+	});
+
+	it('says what each tab has to say: an owner hidden says so, and a tab in view that waits asks', async () => {
+		const b = browser();
+		const heard: string[] = [];
+		const probe = new BroadcastChannel(b.name);
+		probe.onmessage = ({ data }) => data.type === 'turn' && heard.push(data.kind);
+		const first = b.tab('first');
+		const second = b.tab('second');
+		first.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(first.workers[0])).toContain('start'));
+		await vi.waitFor(() => expect(heard).toEqual(['want']));
+		heard.length = 0;
+		first.hide();
+		await vi.waitFor(() => expect(heard).toEqual(['hidden']));
+		first.show();
+
+		// A tab that joins in view asks at once, and one shown again after leaving the queue asks too.
+		second.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(heard).toEqual(['hidden', 'want']));
+		second.hide();
+		await vi.waitFor(async () => expect(await waiting(b.name)).toBe(0));
+		second.show();
+		await vi.waitFor(() => expect(heard).toEqual(['hidden', 'want', 'want']));
+		probe.close();
+		first.client.disconnect();
+		second.client.disconnect();
+	});
+
+	it('a hidden owner that is asked for the catalog gives it up, and a visible one does not', async () => {
+		const b = browser();
+		const probe = new BroadcastChannel(b.name);
+		const first = b.tab('first');
+		first.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(first.workers[0])).toContain('start'));
+		probe.postMessage({ type: 'turn', kind: 'want' });
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		expect(first.workers[0].terminated).toBe(false);
+
+		first.hide();
+		probe.postMessage({ type: 'turn', kind: 'want' });
+		await vi.waitFor(() => expect(first.workers[0].terminated).toBe(true));
+		probe.close();
+		first.client.disconnect();
 	});
 
 	it('an owner downloading a snapshot keeps the catalog when hidden, and hands over once it is done', async () => {
@@ -352,20 +474,66 @@ describe('CatalogClient', () => {
 		await vi.waitFor(async () =>
 			expect((await navigator.locks.query()).pending?.length).toBeGreaterThan(0)
 		);
-		const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
 		b.flags.busy = true;
-		document.dispatchEvent(new Event('visibilitychange'));
+		first.hide();
 		await vi.waitFor(() => expect(types(first.workers[0])).toContain('busy'));
 		await new Promise((resolve) => setTimeout(resolve, 100));
 		expect(first.workers[0].terminated).toBe(false);
 
 		b.flags.busy = false;
-		document.dispatchEvent(new Event('visibilitychange'));
+		second.show();
 		await vi.waitFor(() => expect(first.workers[0].terminated).toBe(true));
-		hidden.mockReturnValue(false);
 		first.client.disconnect();
 		second.client.disconnect();
-		vi.restoreAllMocks();
+	});
+
+	it('an owner whose page is frozen stops its worker and releases the lock in microtasks, with no wait for a task', async () => {
+		const b = browser();
+		const first = b.tab('first');
+		first.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(first.workers[0])).toContain('start'));
+
+		document.dispatchEvent(new Event('freeze'));
+		// A frozen page runs no tasks: nothing but microtasks may stand between this and the end of its ownership.
+		for (let i = 0; i < 20; i++) await Promise.resolve();
+		expect(first.workers[0].terminated).toBe(true);
+		expect(types(first.workers[0])).not.toContain('pause');
+		await vi.waitFor(async () =>
+			expect((await navigator.locks.query()).held?.some((lock) => lock.name === b.name)).toBe(false)
+		);
+
+		document.dispatchEvent(new Event('resume'));
+		await vi.waitFor(() => expect(first.workers).toHaveLength(2));
+		await vi.waitFor(() => expect(types(first.workers[1])).toContain('start'));
+
+		// Owning again, a normal hand-over does the pause round trip: nothing is still in a hurry.
+		const second = b.tab('second');
+		second.client.connect(b.realtime, '7');
+		await vi.waitFor(async () => expect(await waiting(b.name)).toBe(1));
+		first.hide();
+		await vi.waitFor(() => expect(first.workers[1].terminated).toBe(true));
+		expect(types(first.workers[1])).toContain('pause');
+		first.client.disconnect();
+		second.client.disconnect();
+	});
+
+	it('a tab that started out of view and was shown before it connected joins the queue when it connects', async () => {
+		const b = browser();
+		const owner = b.tab('owner');
+		const late = b.tab('late');
+		owner.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(owner.workers[0])).toContain('start'));
+		late.hide();
+		late.client.preconnect('7');
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(await waiting(b.name)).toBe(0);
+		late.show();
+
+		// No visibility event follows: connecting alone has to bring it into the queue.
+		late.client.connect(b.realtime, '7');
+		await vi.waitFor(async () => expect(await waiting(b.name)).toBe(1));
+		owner.client.disconnect();
+		late.client.disconnect();
 	});
 
 	it('an owner whose worker fails gives the lock to the next tab', async () => {
@@ -692,5 +860,29 @@ describe('CatalogClient', () => {
 		owner.client.disconnect();
 		stale.client.disconnect();
 		session.mockRestore();
+	});
+
+	it('offline, an owner that does not answer in time is not taken to lack the library', async () => {
+		const b = browser();
+		const first = b.tab('first');
+		const second = b.tab('second');
+		first.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(first.workers[0])).toContain('start'));
+		second.client.setWorkingOffline(true);
+		b.silence(true);
+		// Unknown: the read goes on to ask the device, which waits or says it is unavailable.
+		expect(await second.client.onDevice('1')).toBe(true);
+		first.client.disconnect();
+	});
+
+	it('a caller that found the server unreachable waits for this tab’s own worker, online', async () => {
+		const b = browser();
+		b.flags.slow = true;
+		const { client, workers } = b.tab('a');
+		client.preconnect('7');
+		await vi.waitFor(() => expect(types(workers[0] ?? ({ sent: [] } as never))).toContain('start'));
+		expect(await client.onDevice('1')).toBe(false);
+		expect(await client.onDevice('1', true)).toBe(true);
+		client.disconnect();
 	});
 });

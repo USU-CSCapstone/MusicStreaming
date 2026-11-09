@@ -13,12 +13,23 @@ const post = (message: FromWorker) => postMessage(message);
 /** What the page sent, one message after another: starting and signing out take a while. */
 let work: Promise<CatalogSync | undefined> = Promise.resolve(undefined);
 
+/** The sync, once the module has loaded: what the questions answered outside the queue ask. */
+let current: CatalogSync | undefined;
+
 /** The device is working offline: no request leaves, and nothing pulls. */
 let workingOffline = false;
 
+/** What `sync` says to `data`, a question about its state. */
+const stateOf = (
+	sync: CatalogSync,
+	data: { type: 'onDevice'; library: string } | { type: 'busy' }
+) => (data.type === 'busy' ? sync.busy() : sync.onDevice(data.library));
+
 /**
  * Handles a message from the page: `offline` takes effect at once, `init` loads the module
- * and makes the sync, and every other message waits for that, then goes to the sync in order.
+ * and makes the sync, `onDevice` and `busy` are answered at once from the sync's state, so an
+ * apply or an index build never makes them time out, and every other message waits, then goes
+ * to the sync in order.
  */
 onmessage = ({ data }: MessageEvent<ToWorker>) => {
 	// At once, ahead of the work already queued: a switch must stop what comes next.
@@ -26,17 +37,22 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 		workingOffline = data.value;
 		return;
 	}
+	if (current && (data.type === 'onDevice' || data.type === 'busy')) {
+		post({ type: 'answer', id: data.id, result: stateOf(current, data) ? '1' : '' });
+		return;
+	}
 	if (data.type === 'init') {
+		current = undefined;
 		work = init({ module_or_path: data.wasm }).then(
 			() =>
-				new CatalogSync({
+				(current = new CatalogSync({
 					api: data.api,
 					user: data.user,
 					fetch: gated(() => workingOffline),
 					online: () => navigator.onLine && !workingOffline,
 					report: (r) => post({ type: 'error', ...r }),
 					changed: (libraryId) => post({ type: 'changed', libraryId })
-				}),
+				})),
 			(error) => {
 				post({ type: 'error', ...describe(error) });
 				return undefined;
@@ -59,16 +75,14 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 			else if (data.type === 'pause') {
 				await sync.pause();
 				post({ type: 'paused' });
-			} else if (data.type === 'busy') {
-				post({ type: 'answer', id: data.id, result: sync.busy() ? '1' : '' });
+			} else if (data.type === 'busy' || data.type === 'onDevice') {
+				post({ type: 'answer', id: data.id, result: stateOf(sync, data) ? '1' : '' });
 			} else if (data.type === 'query') {
 				post({
 					type: 'answer',
 					id: data.id,
 					result: await sync.query(data.library, data.name, data.params, data.offline)
 				});
-			} else if (data.type === 'onDevice') {
-				post({ type: 'answer', id: data.id, result: sync.onDevice(data.library) ? '1' : '' });
 			} else {
 				await sync.signOut();
 				post({ type: 'answer', id: data.id, result: '' });

@@ -62,10 +62,14 @@ describe('where a read is answered', () => {
 		expect(server).toHaveBeenCalledOnce();
 	});
 
-	it('a library never fully synced says so when the server cannot be reached either, and rethrows when online', async () => {
+	it('a library never fully synced says so when the server cannot be reached either, and lets a refusal stand', async () => {
 		device.onDevice.mockResolvedValue(false);
 		const failed = new TypeError('Failed to fetch');
-		await expect(read('listAlbums', '1', {}, () => Promise.reject(failed))).rejects.toBe(failed);
+		await expect(read('listAlbums', '1', {}, () => Promise.reject(failed))).rejects.toMatchObject({
+			code: 'not_on_device'
+		});
+		const refused = new ApiError(401, 'unauthenticated', 'sign in');
+		await expect(read('listAlbums', '1', {}, () => Promise.reject(refused))).rejects.toBe(refused);
 		link.offline = true;
 		await expect(read('listAlbums', '1', {}, () => Promise.reject(failed))).rejects.toMatchObject({
 			status: 503,
@@ -142,6 +146,33 @@ describe('where a read is answered', () => {
 	});
 });
 
+describe('a server that cannot be reached while no owner is serving yet', () => {
+	it('is answered from the device, which is waited for as offline', async () => {
+		// Not asked of the owner at first, since none serves; found once it does.
+		device.onDevice.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+		const failed = new TypeError('Failed to fetch');
+		expect(await read('listAlbums', '1', { sort: 'name' }, () => Promise.reject(failed))).toEqual(
+			ON_DEVICE
+		);
+		expect(device.onDevice).toHaveBeenLastCalledWith('1', true);
+		expect(device.query).toHaveBeenCalledWith('1', 'listAlbums', { sort: 'name' }, true);
+	});
+
+	it('a library not on the device shows the server’s own 500 while online', async () => {
+		device.onDevice.mockResolvedValue(false);
+		const broken = new ApiError(500, 'internal', 'broken');
+		await expect(read('listAlbums', '1', {}, () => Promise.reject(broken))).rejects.toBe(broken);
+	});
+
+	it('says unavailable when the device then fails, as offline', async () => {
+		device.onDevice.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+		device.query.mockRejectedValue(new Error('closed'));
+		await expect(
+			read('listAlbums', '1', {}, () => Promise.reject(new TypeError('Failed to fetch')))
+		).rejects.toMatchObject({ code: 'unavailable_offline' });
+	});
+});
+
 describe('offline', () => {
 	it('is true while working offline, whatever the connection says', () => {
 		expect(offline()).toBe(false);
@@ -199,6 +230,13 @@ describe('readSearch', () => {
 			expect(await result).toEqual(ON_DEVICE);
 		}
 	);
+
+	it('a server that cannot be reached is answered by a device that only a waiting ask finds, as no owner is serving yet', async () => {
+		device.onDevice.mockImplementation(async (_library: string, wait?: boolean) => !!wait);
+		const { result } = search(vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+		expect(await result).toEqual(ON_DEVICE);
+		device.onDevice.mockReset();
+	});
 
 	it('a server that refuses the request is not second-guessed', async () => {
 		const refusal = new ApiError(400, 'invalid', 'no');

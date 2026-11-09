@@ -47,7 +47,7 @@ const defaultSignedIn = () =>
 export class Realtime {
 	/** Whether the connection is open and the server has said hello. */
 	connected = $state(false);
-	/** Whether a connection that was open has been lost for longer than a blip. */
+	/** Whether no connection has been open for longer than a blip, since starting or since one was lost. */
 	offline = $state(false);
 	/** This browser's device, as the server knows it. */
 	deviceId = $state<string | null>(null);
@@ -62,7 +62,6 @@ export class Realtime {
 	#listeners = new Set<Listener>();
 	#socket: WebSocket | null = null;
 	#running = false;
-	#wasConnected = false;
 	#failures = 0;
 	/** When the server was last heard from, and when the latest ping went. */
 	#heardAt = 0;
@@ -91,6 +90,7 @@ export class Realtime {
 		addEventListener('online', this.#reconnectNow);
 		document.addEventListener('visibilitychange', this.#reconnectNow);
 		this.#open();
+		this.#watch();
 	}
 
 	stop() {
@@ -102,7 +102,6 @@ export class Realtime {
 		clearTimeout(this.#offlineTimer);
 		this.#offlineTimer = undefined;
 		this.offline = false;
-		this.#wasConnected = false;
 		this.#failures = 0;
 	}
 
@@ -146,7 +145,6 @@ export class Realtime {
 			this.#setClock(Date.parse(message.serverTime) - now);
 			this.deviceId = message.deviceId;
 			this.connected = true;
-			this.#wasConnected = true;
 			this.#failures = 0;
 			clearTimeout(this.#connectTimer);
 			clearTimeout(this.#offlineTimer);
@@ -188,17 +186,21 @@ export class Realtime {
 		this.send({ type: 'ping' });
 	}
 
+	/** Says the app is offline if no connection is open when the wait is over: one lost, or one that never came. */
+	#watch() {
+		if (this.#offlineTimer !== undefined) return;
+		this.#offlineTimer = setTimeout(() => {
+			this.#offlineTimer = undefined;
+			if (!this.connected) this.offline = true;
+		}, OFFLINE_AFTER_MS);
+	}
+
 	/** The connection is gone: tries again, and says so if it stays gone. */
 	#lost() {
 		const refused = !this.connected;
 		this.#drop();
 		if (!this.#running) return;
-		if (this.#wasConnected && this.#offlineTimer === undefined) {
-			this.#offlineTimer = setTimeout(() => {
-				this.#offlineTimer = undefined;
-				if (!this.connected) this.offline = true;
-			}, OFFLINE_AFTER_MS);
-		}
+		this.#watch();
 		// A connection refused may be one whose session ended while this device could not hear
 		// it, asleep perhaps; the browser does not say why, so the API is asked.
 		if (refused) {

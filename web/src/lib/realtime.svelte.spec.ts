@@ -104,12 +104,15 @@ describe('Realtime', () => {
 		expect(realtime.offline).toBe(false);
 	});
 
-	it('never says it is offline if it was never connected', () => {
+	it('says it is offline when it has not connected within a few seconds of starting, and hello clears it', () => {
 		realtime.start();
-		for (let i = 0; i < 5; i++) {
-			latest().onclose?.();
-			vi.advanceTimersByTime(30_000);
-		}
+		vi.advanceTimersByTime(2500);
+		expect(realtime.offline).toBe(false);
+		vi.advanceTimersByTime(1000);
+		expect(realtime.offline).toBe(true);
+
+		// A connection that hangs without failing still counts, and the next hello ends it.
+		latest().hello();
 		expect(realtime.offline).toBe(false);
 	});
 

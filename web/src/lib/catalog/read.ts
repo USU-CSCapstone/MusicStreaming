@@ -51,6 +51,8 @@ export async function read<T>(
 	params: object,
 	server: () => Promise<T>
 ): Promise<T> {
+	// The server could not be reached, so the device is all there is, as offline.
+	let down = false;
 	if (!(await catalog.onDevice(library))) {
 		const notOnDevice = () =>
 			new ApiError(
@@ -59,23 +61,31 @@ export async function read<T>(
 				'This library has not been downloaded to this device yet.'
 			);
 		if (knownOffline()) throw notOnDevice();
-		// A realtime connection in backoff says nothing about HTTP: ask, and call a request that
-		// never reached the server offline; an answer, such as a redirect to log in, stands.
-		return server().catch((error) => {
-			throw offline() && unreachable(error) ? notOnDevice() : error;
-		});
+		// A realtime connection in backoff says nothing about HTTP, and an owner not serving yet
+		// is why the device was not asked: ask the server, and where it cannot be reached wait for
+		// the device as offline does. An answer, such as a redirect to log in, stands.
+		try {
+			return await server();
+		} catch (error) {
+			if (!unreachable(error)) throw error;
+			if (!(await catalog.onDevice(library, true)))
+				// An answered failure, such as a 500, is the server's to show while online.
+				throw error instanceof TypeError || offline() ? notOnDevice() : error;
+			down = true;
+		}
 	}
+	const off = () => down || offline();
 	let local: unknown;
 	try {
-		local = JSON.parse(await catalog.query(library, name, params, offline()));
+		local = JSON.parse(await catalog.query(library, name, params, off()));
 	} catch (error) {
-		if (offline()) throw new ApiError(503, 'unavailable_offline', UNAVAILABLE);
+		if (off()) throw new ApiError(503, 'unavailable_offline', UNAVAILABLE);
 		console.error(error);
 		return server();
 	}
 	// A get that finds nothing is the server's to confirm.
 	if (local === null) {
-		if (offline()) throw new ApiError(404, 'not_found', 'Not found.');
+		if (off()) throw new ApiError(404, 'not_found', 'Not found.');
 		return server();
 	}
 	return local as T;
@@ -122,7 +132,7 @@ export async function readSearch<T>(
 			clearTimeout(timer);
 		}
 	}
-	if (!(await catalog.onDevice(library))) {
+	if (!(await catalog.onDevice(library, failure !== undefined))) {
 		if (failure) throw failure;
 		const notOnDevice = new ApiError(
 			503,

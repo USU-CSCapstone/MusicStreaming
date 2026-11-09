@@ -13,7 +13,7 @@ import type { RealtimeServerMessage } from '$lib/api/types';
 import type { Realtime } from '$lib/realtime.svelte';
 import { toast } from '$lib/toast.svelte';
 import type { Ask, FromWorker, Request, ToWorker } from './protocol';
-import { CHANNEL, CatalogRouter, TIMEOUT_MS } from './router';
+import { CHANNEL, CatalogRouter, TIMEOUT_MS, type Turn } from './router';
 
 /** The realtime messages that make the worker pull. */
 const PULLING = new Set(['hello', 'libraryChanged', 'accountChanged']);
@@ -44,6 +44,8 @@ const spawn = () => new Worker(new URL('./worker.ts', import.meta.url), { type: 
 export class CatalogClient {
 	#spawn: () => Worker;
 	#name: string;
+	/** Whether this tab is out of sight; tests give each tab its own. */
+	#hidden: () => boolean;
 	#router: CatalogRouter | null = null;
 	#worker: Worker | null = null;
 	#user = '';
@@ -58,6 +60,8 @@ export class CatalogClient {
 	#signingOut: Promise<unknown> = Promise.resolve();
 	/** This tab holds the lock, whether or not its worker has started. */
 	#holding = false;
+	/** The page is about to freeze: the owner stops its worker without waiting for it. */
+	#hurry = false;
 	/** This tab answers requests as the owner. */
 	#serving = false;
 	/** Until when an online read goes to the server without asking an owner that did not answer. */
@@ -75,10 +79,11 @@ export class CatalogClient {
 	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- waiting askers are not state to render
 	#says = new Map<string, () => void>();
 
-	/** Makes a client whose owner starts its worker with `create`, on the lock and channel `name`; tests pass their own. */
-	constructor(create: () => Worker = spawn, name = CHANNEL) {
+	/** Makes a client whose owner starts its worker with `create`, on the lock and channel `name`; tests pass their own, and `hidden`. */
+	constructor(create: () => Worker = spawn, name = CHANNEL, hidden = () => document.hidden) {
 		this.#spawn = create;
 		this.#name = name;
+		this.#hidden = hidden;
 	}
 
 	/**
@@ -95,6 +100,8 @@ export class CatalogClient {
 			if (PULLING.has(message.type)) this.#send({ type: 'message', message });
 		});
 		if (!electing) this.#begin(user);
+		// A tab that started out of view and was shown before this is still out of the queue.
+		else this.#resume();
 	}
 
 	/**
@@ -116,8 +123,16 @@ export class CatalogClient {
 			// A page that is going away or frozen gives the catalog up, so a tab in front can take it.
 			addEventListener('pagehide', () => this.#yield());
 			addEventListener('pageshow', (event) => event.persisted && this.#resume());
-			// iOS fires no `pagehide` for a tab switch, so an owner out of sight hands over when
-			// another tab is waiting; desktop tab switches with no one waiting change nothing.
+			// Chromium freezes a hidden page without `pagehide`, and a frozen owner must not keep the
+			// lock: its worker is stopped without the pause round trip, which needs a task the
+			// frozen page never runs, so the lock goes with the microtasks that follow.
+			document.addEventListener('freeze', () => {
+				this.#hurry = true;
+				this.#yield();
+			});
+			document.addEventListener('resume', () => this.#resume());
+			// No browser fires `pagehide` for a tab switch, and a hidden tab waiting for the catalog is
+			// no reason to move it: an owner out of sight hands over only to a waiting tab in view.
 			document.addEventListener('visibilitychange', () => this.#visibility());
 		}
 		// A tab hearing a sign-out leaves, so a signed-out tab never owns the next account's files.
@@ -175,10 +190,12 @@ export class CatalogClient {
 	 * Online, answers at once when no tab is serving the catalog yet, so the server answers the
 	 * read; an owner in another tab that is starting has `STATE_MS` to answer, and one that did
 	 * not answer is not asked again for a while. Offline, a tab about to elect waits for its own
-	 * owner, since the server cannot answer.
+	 * owner, since the server cannot answer; so does a caller that found the server unreachable
+	 * and says so with `wait`.
 	 */
-	async onDevice(library: string) {
-		const offline = this.#workingOffline || connectivity.stale || navigator.onLine === false;
+	async onDevice(library: string, wait = false) {
+		const offline =
+			wait || this.#workingOffline || connectivity.stale || navigator.onLine === false;
 		if (!offline && Date.now() < this.#deafUntil) return false;
 		/** Whether some tab holds the lock, which says an owner is at least starting. */
 		const owned = async () =>
@@ -194,12 +211,17 @@ export class CatalogClient {
 			await new Promise((resolve) => setTimeout(resolve, LOOK_MS));
 		}
 		if (!offline && this.#holding && !this.#serving) return false;
+		let unknown = false;
 		const answer = await this.#route()
 			.ask({ type: 'onDevice', library }, waited ? OWNER_MS : STATE_MS)
 			.catch(() => {
+				// No answer says nothing about the library: online the server answers the read, and
+				// offline the read asks the device and waits, rather than calling it not downloaded.
+				unknown = true;
 				if (!offline) this.#deafUntil = Date.now() + DEAF_MS;
 				return '';
 			});
+		if (unknown && offline) return true;
 		return answer === '1';
 	}
 
@@ -256,26 +278,40 @@ export class CatalogClient {
 	}
 
 	/**
-	 * Gives the catalog up when hidden with another tab waiting for it, unless its worker is
-	 * downloading a snapshot, and wants it back when shown.
+	 * A tab that is shown joins the election again; one that goes out of sight leaves the queue
+	 * for the lock, so only tabs in view are ever waiting, and an owner that goes out of sight
+	 * says so, for a waiting tab in view to ask; see [`#turn`](#turn).
 	 */
-	async #visibility() {
+	#visibility() {
 		if (!this.#unsubscribe) return;
-		if (!document.hidden) return this.#resume();
-		if (!this.#serving) return;
-		const { pending } = await navigator.locks.query();
-		if (!pending?.some((lock) => lock.name === this.#name)) return;
-		const busy = await this.#call({ type: 'busy' });
-		if (document.hidden && this.#serving && !busy) this.#yield();
+		if (!this.#hidden()) this.#resume();
+		else if (this.#serving) this.#route().say('hidden');
+		else if (!this.#holding) this.#yield();
+	}
+
+	/**
+	 * Hears another tab: a hidden owner heard `want` gives the catalog up, unless its worker is
+	 * downloading a snapshot, and wants it back when shown; a waiting tab in view answers `hidden` with `want`.
+	 */
+	async #turn(kind: Turn) {
+		if (kind === 'hidden') {
+			if (!this.#hidden() && this.#abort && !this.#serving) this.#route().say('want');
+		} else if (this.#hidden() && this.#serving) {
+			const busy = await this.#call({ type: 'busy' });
+			if (this.#hidden() && this.#serving && !busy) this.#yield();
+		}
 	}
 
 	/** The channel to the owner, joined when first needed. */
 	#route() {
-		return (this.#router ??= new CatalogRouter(
+		if (this.#router) return this.#router;
+		const router = (this.#router = new CatalogRouter(
 			this.#name,
 			undefined,
 			(request) => request.type === 'signOut' && !this.#serving && this.disconnect()
 		));
+		router.onTurn((kind) => void this.#turn(kind));
+		return router;
 	}
 
 	/** Asks the browser, once, not to evict the device's files: only a page can. */
@@ -285,15 +321,24 @@ export class CatalogClient {
 		navigator.storage?.persist?.().catch((error) => console.error(error));
 	}
 
-	/** Waits for the lock; whoever holds it owns the catalog, for as long as it is held. */
+	/**
+	 * Waits for the lock; whoever holds it owns the catalog, for as long as it is held. A tab out
+	 * of sight takes it only if no one holds it, and otherwise waits to be shown.
+	 */
 	#elect() {
 		const abort = (this.#abort = new AbortController());
 		const released = new Promise<void>((resolve) => (this.#release = resolve));
+		const hidden = this.#hidden();
 		this.#held = navigator.locks
-			.request(this.#name, { signal: abort.signal }, () => this.#own(released))
+			.request(this.#name, hidden ? { ifAvailable: true } : { signal: abort.signal }, (lock) => {
+				if (lock) return this.#own(released);
+				if (this.#abort === abort) this.#abort = this.#release = null;
+			})
 			.catch((error) => {
 				if (error.name !== 'AbortError') console.error(error);
 			});
+		// A tab in view that has to wait asks a hidden owner for the catalog.
+		if (!hidden) this.#route().say('want');
 	}
 
 	/** Gives up the wait for the lock, or the lock itself once the worker has released the pool. */
@@ -309,6 +354,7 @@ export class CatalogClient {
 	 */
 	async #own(released: Promise<void>) {
 		this.#holding = true;
+		this.#hurry = false;
 		this.#launch(this.#user);
 		// A worker that cannot load leaves the lock to the next tab.
 		this.#worker!.onerror = () => this.#yield();
@@ -339,7 +385,7 @@ export class CatalogClient {
 		await released;
 		this.#serving = false;
 		stop();
-		if (started) {
+		if (started && !this.#hurry) {
 			const paused = this.#hear('paused');
 			this.#send({ type: 'pause' });
 			await Promise.race([paused, new Promise((resolve) => setTimeout(resolve, PAUSE_MS))]);

@@ -17,7 +17,12 @@ type Wire =
 	/** A tab has become the owner and can answer. */
 	| { type: 'owner' }
 	/** The owner changed the library's rows on the device. */
-	| { type: 'changed'; library: string };
+	| { type: 'changed'; library: string }
+	/** A tab's word on who should own the catalog: `hidden` an owner that left the screen, `want` a tab in view that waits for it. */
+	| { type: 'turn'; kind: Turn };
+
+/** What tabs say to each other about handing the catalog over. */
+export type Turn = 'hidden' | 'want';
 
 /** Answers a request with its JSON; never answers if the owner goes away meanwhile. */
 export type Handler = (request: Request) => Promise<string>;
@@ -38,6 +43,7 @@ export class CatalogRouter {
 	#handler: Handler | null = null;
 	#overheard?: (request: Request) => void;
 	#listeners = new Set<(library: string) => void>();
+	#turns?: (kind: Turn) => void;
 
 	/**
 	 * Joins the channel `name`; tests use their own name and a short timeout. `heard` is told of
@@ -85,6 +91,16 @@ export class CatalogRouter {
 	announce(library: string) {
 		this.#channel.postMessage({ type: 'changed', library } satisfies Wire);
 		for (const listener of this.#listeners) listener(library);
+	}
+
+	/** Calls `listener` with each word of another tab on handing the catalog over, until the router is replaced. */
+	onTurn(listener: (kind: Turn) => void) {
+		this.#turns = listener;
+	}
+
+	/** Tells the other tabs `kind`. */
+	say(kind: Turn) {
+		this.#channel.postMessage({ type: 'turn', kind } satisfies Wire);
 	}
 
 	/** Calls `listener` with each library announced, by any tab, until the returned function is called. */
@@ -140,6 +156,8 @@ export class CatalogRouter {
 			this.#answered(wire.id, wire);
 		} else if (wire.type === 'changed') {
 			for (const listener of this.#listeners) listener(wire.library);
+		} else if (wire.type === 'turn') {
+			this.#turns?.(wire.kind);
 		} else if (!this.#handler) {
 			for (const id of this.#pending.keys()) this.#send(id);
 		}

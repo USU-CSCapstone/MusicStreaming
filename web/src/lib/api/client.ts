@@ -118,19 +118,37 @@ async function send<T>(
 	return body(await request(fetch, url(path), { method, headers, body: payload }));
 }
 
+/** How long the layout waits for the server before starting with what was kept. */
+const KEPT_WAIT_MS = 3000;
+
+/** The server did not answer a kept read in time and has not answered since, so the start does not wait for it again. */
+let hanging = false;
+
 /**
- * `answer`, kept for the next start with no network; with the server unreachable, what was kept
- * of `key` instead, if anything. Only the layout's own reads use it, so the app can start offline.
+ * `answer`, kept for the next start with no network; with the server unreachable, or not
+ * answering within `KEPT_WAIT_MS` (once, not for each read), what was kept of `key` instead, if
+ * anything. Only the layout's own reads use it, so the app can start offline.
  */
-const kept = <K extends keyof LastKnown>(key: K, answer: Promise<NonNullable<LastKnown[K]>>) =>
-	answer.then(
-		(value) => (remember({ [key]: value }), value),
+const kept = <K extends keyof LastKnown>(key: K, answer: Promise<NonNullable<LastKnown[K]>>) => {
+	const known = lastKnown()[key];
+	const settled = answer.then(
+		(value) => ((hanging = false), remember({ [key]: value }), value),
 		(error) => {
-			const value = lastKnown()[key];
-			if (value && unreachable(error)) return value;
+			if (known && unreachable(error)) return known;
 			throw error;
 		}
 	);
+	if (!known) return settled;
+	if (hanging) {
+		settled.catch(() => {});
+		return Promise.resolve(known);
+	}
+	let timer: ReturnType<typeof setTimeout>;
+	const slow = new Promise<typeof known>(
+		(resolve) => (timer = setTimeout(() => ((hanging = true), resolve(known)), KEPT_WAIT_MS))
+	);
+	return Promise.race([settled, slow]).finally(() => clearTimeout(timer));
+};
 
 /** The server's public details; kept for starting offline. */
 export const getServerInfo = (f: Fetch) => kept('server', get<ServerInfo>(f, '/server'));
