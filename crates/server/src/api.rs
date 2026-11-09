@@ -31,6 +31,7 @@ mod realtime;
 mod recent_searches;
 mod refs;
 mod routes;
+mod scans;
 mod scope;
 mod search;
 mod session;
@@ -43,6 +44,7 @@ mod time;
 mod tracks;
 mod waveform;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -50,6 +52,7 @@ use axum::Router;
 use axum::extract::{DefaultBodyLimit, FromRef};
 use axum::middleware;
 use axum::routing::{MethodRouter, any, get, post};
+use jewelcase_scanner::Scanner;
 use tower_http::timeout::RequestBodyDeadlineLayer;
 
 pub use id::{AnyId, Id, Uuid};
@@ -82,6 +85,8 @@ pub struct AppState {
     /// Whether setup is seen done; a default one has not seen it yet.
     pub setup: Arc<Setup>,
     pub plugins: Arc<Plugins>,
+    /// Each library's scanner, by its ID, for queuing scans an admin asks for.
+    pub scanners: Arc<HashMap<i64, Scanner>>,
     /// The open realtime connections.
     pub hub: Arc<Hub>,
     /// Each account's playback state.

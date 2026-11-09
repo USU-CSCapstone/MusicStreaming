@@ -5,7 +5,7 @@ use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post, put};
 
-use crate::api::{AppState, plugins};
+use crate::api::{AppState, plugins, scans};
 
 /// Every route under `/admin`.
 pub fn router() -> Router<AppState> {
@@ -29,4 +29,5 @@ pub fn router() -> Router<AppState> {
             "/admin/plugins/{plugin_id}/settings",
             get(plugins::get_settings).put(plugins::set_settings),
         )
+        .route("/admin/libraries/{library_id}/scans", get(scans::list).post(scans::start))
 }

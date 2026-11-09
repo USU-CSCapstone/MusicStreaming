@@ -96,6 +96,7 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
         indexes,
         setup: Arc::default(),
         plugins: plugins.clone(),
+        scanners: Arc::new(scanning.scanners()),
         hub: hub.clone(),
         players: players.clone(),
         queues: queues.clone(),
