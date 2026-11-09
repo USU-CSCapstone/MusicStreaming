@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test';
 
 // Specs listed here run in `real`, against a real server; the rest run in `fake`, against the mock
 // API.
-const migrated = ['**/tags.e2e.ts'];
+const migrated = ['**/tags.e2e.ts', '**/sorting.e2e.ts'];
 
 export default defineConfig({
 	globalSetup: './e2e/global-setup.ts',
