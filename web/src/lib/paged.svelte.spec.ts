@@ -197,6 +197,31 @@ describe('a library changing on the device', () => {
 		}
 	});
 
+	it('stops loading once the sentinel leaves the view', async () => {
+		vi.useRealTimers();
+		const rows = Array.from({ length: 400 }, (_, i) => `${1000 + i}`);
+		const { calls, delay, load } = served(() => rows);
+		delay.ms = 20;
+		const paged = new Paged(await load(), load, '1');
+		const el = document.body.appendChild(document.createElement('div'));
+		const destroy = $effect.root(() => {
+			$effect(() => paged.sentinel(el));
+		});
+		flushSync();
+
+		try {
+			await vi.waitFor(() => expect(calls.length).toBeGreaterThan(3));
+			el.style.cssText = 'position: absolute; top: 100000px';
+			await new Promise((resolve) => setTimeout(resolve, 200));
+			const read = calls.length;
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			expect(calls.length - read).toBeLessThanOrEqual(1);
+		} finally {
+			destroy();
+			el.remove();
+		}
+	});
+
 	it('reloads once for a burst', async () => {
 		const { calls, load } = served(() => ['a', 'b']);
 		const paged = new Paged(await load(), load, '1');

@@ -13,6 +13,8 @@ export class Paged<T> {
 	#items = $state<T[]>([]);
 	#total = $state(0);
 	#cursor = $state<string | null>(null);
+	/** Whether the list has rows past those loaded; it changes only when the list gains or loses its end. */
+	#more = $derived(this.#cursor !== null);
 	/** The read under way, which another waits for rather than runs beside. */
 	#busy: Promise<void> | null = null;
 	#subscribe: () => void;
@@ -42,7 +44,7 @@ export class Paged<T> {
 	}
 
 	get hasMore(): boolean {
-		return this.#cursor !== null;
+		return this.#more;
 	}
 
 	/** Reads the next page onto the end, or waits for the read under way; does nothing at the end of the list. */
@@ -118,6 +120,10 @@ export class Paged<T> {
 			{ root, rootMargin: '800px' }
 		);
 		observer.observe(el);
-		return () => observer.disconnect();
+		return () => {
+			// A pump still running for this run must stop, or nothing would ever end it.
+			visible = false;
+			observer.disconnect();
+		};
 	};
 }
