@@ -222,11 +222,9 @@ export class CatalogSync {
 				let kept: string | undefined;
 				for (const { file } of files.sort((a, b) => b.generation - a.generation)) {
 					if (kept) break;
-					const catalog = await this.#adopt(file);
-					if (catalog) {
-						this.catalogs.set(id, catalog);
-						kept = file;
-					}
+					const catalog = await this.#adopt(file, id);
+					if (catalog) this.catalogs.set(id, catalog);
+					if (catalog || this.#outdated.has(id)) kept = file;
 				}
 				await this.#removeFiles(id, kept);
 				// A worker closed mid-apply left the file part-way: it is finished before it answers.
@@ -690,14 +688,22 @@ export class CatalogSync {
 		}
 	}
 
-	/** Opens a file found on the device, or deletes it if it cannot be trusted. */
-	async #adopt(file: string) {
+	/**
+	 * Opens library `id`'s file found on the device, or deletes it if it cannot be trusted. A file
+	 * of a newer schema version is a newer build's, open in another tab: it is kept, and the
+	 * library is outdated here, so this worker neither downloads nor deletes it.
+	 */
+	async #adopt(file: string, id: string) {
 		let catalog: Catalog | undefined;
 		try {
 			catalog = await this.#open(file);
 			if (catalog.cursor(OWNER) === BigInt(this.#user)) return catalog;
-		} catch {
-			// A file that will not open, or is of another schema version, is rebuilt.
+		} catch (error) {
+			if (error instanceof Error && error.message.startsWith('newer')) {
+				this.#outdated.add(id);
+				return undefined;
+			}
+			// A file that will not open, or is of an older schema version, is rebuilt.
 		}
 		catalog?.free();
 		await this.#remove(file);

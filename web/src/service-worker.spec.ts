@@ -81,15 +81,19 @@ describe('the service worker across versions', () => {
 	});
 
 	it('answers a page of the old version its files, and a navigation with the new page', async () => {
-		const old = await load('100', ['/_app/immutable/old.js'], caches);
+		const old = await load('100', ['/_app/immutable/old.js', '/manifest.webmanifest'], caches);
 		await old.run('install');
 		(await caches.open('shell-100')).put('/', 'old page');
-		const next = await load('200', ['/_app/immutable/new.js'], caches);
+		(await caches.open('shell-100')).put('/manifest.webmanifest', 'old manifest');
+		const next = await load('200', ['/_app/immutable/new.js', '/manifest.webmanifest'], caches);
 		await next.run('install');
 		(await caches.open('shell-200')).put('/', 'new page');
+		(await caches.open('shell-200')).put('/manifest.webmanifest', 'new manifest');
 		await next.run('activate');
 
 		expect(await next.answer('/_app/immutable/old.js')).toBe('file');
+		// A file without a hash in its name is this version's.
+		expect(await next.answer('/manifest.webmanifest')).toBe('new manifest');
 		expect(await next.answer('/_app/immutable/new.js')).toBe('file');
 		expect(await next.answer('/albums', 'navigate')).toBe('new page');
 		expect(await next.answer('/api/v1/me')).toBeUndefined();

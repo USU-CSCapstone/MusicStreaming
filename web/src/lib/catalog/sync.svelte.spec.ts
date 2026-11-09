@@ -371,7 +371,20 @@ describe('catalog sync', () => {
 		expect(await h.files()).toHaveLength(1);
 	});
 
-	it('a database of another schema version is deleted and bootstrapped again', async () => {
+	it('a database of an older schema version is deleted and bootstrapped again', async () => {
+		await started('1');
+		await h.stop();
+		const [file] = await h.files();
+		await h.run(file, ['PRAGMA user_version = 1']);
+
+		await h.start();
+		await h.idle();
+		expect(await h.libraries()).toEqual(['1']);
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
+		expect(await total('listTracks')).toBe(6);
+	});
+
+	it('a database of a newer schema version is kept for the build that wrote it, and its library left to the server', async () => {
 		await started('1');
 		await h.stop();
 		const [file] = await h.files();
@@ -379,9 +392,9 @@ describe('catalog sync', () => {
 
 		await h.start();
 		await h.idle();
-		expect(await h.libraries()).toEqual(['1']);
-		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
-		expect(await total('listTracks')).toBe(6);
+		expect(await h.files()).toEqual([file]);
+		expect(await h.libraries()).toEqual([]);
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(1);
 	});
 
 	it('a corruption error from a query bootstraps that library again', async () => {

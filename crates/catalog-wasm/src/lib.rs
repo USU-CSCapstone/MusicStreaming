@@ -66,12 +66,16 @@ impl Catalog {
     }
 
     /// Creates the schema in a new database, and checks the version of an existing one. Either way
-    /// the feed state tables exist afterwards.
+    /// the feed state tables exist afterwards. A newer version's error says "newer", so the sync
+    /// keeps that file for the build that wrote it.
     fn ready(conn: Connection) -> Result<Catalog, JsError> {
         let catalog = Catalog(conn, None);
         match catalog.schema_version()? {
             0 => create_schema(&catalog.0)?,
             SCHEMA_VERSION => {}
+            other if other > SCHEMA_VERSION => {
+                return Err(JsError::new(&format!("newer catalog schema version {other}")));
+            }
             other => return Err(JsError::new(&format!("catalog schema version {other}"))),
         }
         catalog.0.execute_batch(feed::FEED_STATE)?;
