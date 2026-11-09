@@ -28,6 +28,7 @@ vi.mock('$app/state', () => ({
 }));
 
 import { connectivity } from '$lib/connectivity.svelte';
+import { realtime } from '$lib/realtime.svelte';
 import Layout from './+layout.svelte';
 
 const children = createRawSnippet(() => ({ render: () => '<p>page</p>' }));
@@ -75,5 +76,31 @@ describe('the app layout', () => {
 		connectivity.setWorkOffline(true);
 		await vi.waitFor(() => expect(catalog.prepareIndex).toHaveBeenCalledWith('7'));
 		connectivity.setWorkOffline(false);
+	});
+
+	it('has it built only once a lost connection stays lost, not for a moment’s drop such as a server restart', async () => {
+		route.id = '/';
+		await render(Layout, {
+			data: { me: { id: '1' }, library: { id: '7' }, tagTypes: [] },
+			children
+		} as never);
+		catalog.prepareIndex.mockClear();
+		vi.useFakeTimers();
+		try {
+			realtime.offline = true;
+			await vi.advanceTimersByTimeAsync(10_000);
+			realtime.offline = false;
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(catalog.prepareIndex).not.toHaveBeenCalled();
+
+			realtime.offline = true;
+			await vi.advanceTimersByTimeAsync(29_000);
+			expect(catalog.prepareIndex).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(catalog.prepareIndex).toHaveBeenCalledWith('7');
+		} finally {
+			vi.useRealTimers();
+			realtime.offline = false;
+		}
 	});
 });

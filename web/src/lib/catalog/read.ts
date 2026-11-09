@@ -135,7 +135,8 @@ export async function readSearch<T>(
 			clearTimeout(timer);
 		}
 	}
-	if (!(await catalog.onDevice(library, failure !== undefined))) {
+	// A built index already says the library is on the device.
+	if (!late && !(await catalog.onDevice(library, failure !== undefined))) {
 		if (failure) throw failure;
 		const notOnDevice = new ApiError(
 			503,

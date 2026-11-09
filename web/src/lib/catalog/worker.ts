@@ -19,7 +19,7 @@ let current: CatalogSync | undefined;
 /** The device is working offline: no request leaves, and nothing pulls. */
 let workingOffline = false;
 
-/** The questions about the sync's state, which are answered at once. */
+/** The questions about the sync's state, which are answered ahead of queued work. */
 type State = { type: 'onDevice' | 'indexed'; library: string } | { type: 'busy' };
 
 /** Whether `data` is a question about the sync's state. */
@@ -36,9 +36,11 @@ const stateOf = (sync: CatalogSync, data: State) =>
 
 /**
  * Handles a message from the page: `offline` takes effect at once, `init` loads the module
- * and makes the sync, `onDevice`, `indexed` and `busy` are answered at once from the sync's
- * state, so an apply or an index build never makes them time out, and every other message
- * waits, then goes to the sync in order.
+ * and makes the sync, `onDevice`, `indexed` and `busy` are answered from the sync's state ahead
+ * of queued work, and every other message waits, then goes to the sync in order. The answers
+ * come between the worker's synchronous wasm calls, so they wait only on the call under way,
+ * but one call can outlast an asker's wait: an apply chunk, an index build or a snapshot install
+ * each measured seconds on a phone at 4× throttling.
  */
 onmessage = ({ data }: MessageEvent<ToWorker>) => {
 	// At once, ahead of the work already queued: a switch must stop what comes next.
@@ -51,7 +53,6 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 		return;
 	}
 	if (data.type === 'init') {
-		current = undefined;
 		work = init({ module_or_path: data.wasm }).then(
 			() =>
 				(current = new CatalogSync({
@@ -84,8 +85,6 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 			else if (data.type === 'pause') {
 				await sync.pause();
 				post({ type: 'paused' });
-			} else if (isState(data)) {
-				post({ type: 'answer', id: data.id, result: stateOf(sync, data) ? '1' : '' });
 			} else if (data.type === 'prepareIndex') {
 				sync.prepareIndex(data.library);
 				post({ type: 'answer', id: data.id, result: '' });

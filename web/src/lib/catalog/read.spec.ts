@@ -296,6 +296,15 @@ describe('readSearch', () => {
 			expect(await result).toEqual(ON_DEVICE);
 		});
 
+		it('hands off on the index alone, though a read just asked found no owner in time', async () => {
+			device.onDevice.mockResolvedValue(false);
+			const { server } = hanging();
+			const result = readSearch('search', '1', { q: 'a' }, server);
+			await vi.advanceTimersByTimeAsync(SLOW_MS);
+			expect(await result).toEqual(ON_DEVICE);
+			expect(server).toHaveBeenCalledOnce();
+		});
+
 		it('a server that answers within the wait is the answer, and the device is never asked', async () => {
 			const { server, answer } = hanging();
 			const result = readSearch('search', '1', { q: 'a' }, server);
