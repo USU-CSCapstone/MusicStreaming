@@ -88,6 +88,7 @@ pub(crate) fn state(temp: &tempfile::TempDir, db: Arc<Database>) -> AppState {
         indexes: Arc::default(),
         setup: Arc::default(),
         plugins: plugins(temp, &db),
+        scanners: Arc::default(),
         hub: Arc::default(),
         players: Arc::default(),
         queues: Arc::default(),
