@@ -1,6 +1,10 @@
 //! Each user's Liked Songs, as playlists show it (`requirements/playlists.md` §11).
 
+use super::super::super::testing::socket::{Socket, connect_with, next_of, serve};
 use super::*;
+
+/// The owner's second device.
+const PHONE: &str = "phone";
 
 /// The owner's Liked Songs in library 1, as listed.
 async fn liked(app: &Router) -> Value {
@@ -104,8 +108,10 @@ async fn likes_are_each_users_own_in_each_library() {
 #[tokio::test]
 async fn a_like_after_a_delete_makes_it_again_pinned() {
     let (_temp, db, app) = app_with_tracks().await;
+    like(&app, TOKEN, "PUT", "1").await;
     let uri = format!("{URI}/{}", liked(&app).await["id"].as_str().unwrap());
     assert_eq!(call(&app, TOKEN, "DELETE", &uri, None).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(shown(&app, TOKEN).await, [false, false], "deleting it unliked its tracks");
     assert_eq!(like(&app, TOKEN, "DELETE", "1").await, StatusCode::NO_CONTENT, "nothing to unlike");
     assert_eq!(liked(&app).await, Value::Null);
 
@@ -153,4 +159,83 @@ async fn edited_it_keeps_its_name_and_its_adds_like() {
     assert_eq!(call(&app, TOKEN, "PATCH", &uri, Some(body)).await.0, StatusCode::OK);
     assert_eq!(liked_tracks(&app).await, ["2"]);
     assert_eq!(shown(&app, TOKEN).await, [false, true]);
+}
+
+#[tokio::test]
+async fn a_like_needs_no_version_but_an_edit_still_does() {
+    let (_temp, _db, app) = app_with_tracks().await;
+    let playlist = liked(&app).await;
+    let uri = format!("{URI}/{}", playlist["id"].as_str().unwrap());
+    // Another device unpins it, moving it on a version this one has not seen.
+    let body = json!({ "baseVersion": playlist["version"], "pinned": false });
+    let (status, unpinned) = call(&app, TOKEN, "PATCH", &uri, Some(body)).await;
+    assert_eq!(status, StatusCode::OK, "{unpinned}");
+
+    assert_eq!(like(&app, TOKEN, "PUT", "1").await, StatusCode::NO_CONTENT);
+    assert_eq!(like(&app, TOKEN, "PUT", "2").await, StatusCode::NO_CONTENT);
+    assert_eq!(liked_tracks(&app).await, ["2", "1"]);
+
+    // An edit made on the version before the likes still conflicts, since it names positions.
+    let current = unpinned["version"].as_i64().unwrap() + 2;
+    let body = json!({ "baseVersion": unpinned["version"], "ops": [
+        { "op": "remove", "positions": [0] }
+    ] });
+    let (status, problem) = call(&app, TOKEN, "PATCH", &uri, Some(body)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    assert_eq!(
+        (&problem["code"], &problem["currentVersion"]),
+        (&json!("version_conflict"), &json!(current))
+    );
+    assert_eq!(liked_tracks(&app).await, ["2", "1"]);
+}
+
+/// A server with the catalog and the owner's phone, and the phone listening.
+async fn listening() -> (tempfile::TempDir, Router, Socket) {
+    let (temp, _db, app) = app_with_tracks().await;
+    add_device(&conn(&temp), 1, 2, PHONE);
+    let phone = connect_with(serve(app.clone()).await, PHONE).await;
+    (temp, app, phone)
+}
+
+#[tokio::test]
+async fn likes_and_unlikes_reach_the_other_devices_as_edits() {
+    let (_temp, app, mut phone) = listening().await;
+    let id = liked(&app).await["id"].clone();
+    for track in ["1", "2"] {
+        like(&app, TOKEN, "PUT", track).await;
+    }
+    like(&app, TOKEN, "DELETE", "1").await;
+
+    for (version, track) in [(2, "1"), (3, "2")] {
+        let message = next_of(&mut phone, "playlist").await;
+        assert_eq!((&message["playlistId"], &message["version"]), (&id, &json!(version)));
+        let ops = &message["ops"];
+        assert_eq!((&ops[0]["op"], &ops[0]["at"]), (&json!("add"), &json!(0)), "{message}");
+        assert_eq!(ops[0]["trackIds"], json!([track]));
+        assert_eq!(ops[0]["addedAt"], message["playlist"]["modifiedAt"]);
+    }
+    let message = next_of(&mut phone, "playlist").await;
+    assert_eq!(message["version"], 4);
+    assert_eq!(message["ops"], json!([{ "op": "remove", "positions": [1] }]), "{message}");
+    assert_eq!(message["playlist"]["trackCount"], 1);
+}
+
+#[tokio::test]
+async fn a_like_that_makes_it_again_brings_it_to_the_other_devices() {
+    let (_temp, app, mut phone) = listening().await;
+    let old = liked(&app).await["id"].clone();
+    let uri = format!("{URI}/{}", old.as_str().unwrap());
+    call(&app, TOKEN, "DELETE", &uri, None).await;
+    let deleted = next_of(&mut phone, "playlist").await;
+    assert_eq!((&deleted["playlistId"], &deleted["playlist"]), (&old, &Value::Null));
+
+    like(&app, TOKEN, "PUT", "1").await;
+    // The phone never heard it was made: the message carries the whole playlist to show.
+    let message = next_of(&mut phone, "playlist").await;
+    let made = liked(&app).await;
+    assert_ne!(made["id"], old);
+    assert_eq!(message["playlistId"], made["id"]);
+    assert_eq!(message["playlist"], made, "{message}");
+    assert_eq!((&made["kind"], &made["pinned"]), (&json!("liked"), &json!(true)));
+    assert_eq!(message["ops"][0]["trackIds"], json!(["1"]));
 }
