@@ -46,7 +46,8 @@ API_PROXY=http://localhost:8080 pnpm dev
 ```
 
 `pnpm dev` without `API_PROXY` runs the web app against a mock of the API, with no server
-needed.
+needed. The mock has no realtime connection, so 3 seconds after it starts the app shows itself
+Offline; pages still load from the mock.
 
 ### Plugins
 

@@ -5,7 +5,8 @@ import { sveltekit } from '@sveltejs/kit/vite';
 import { mockApi } from './mock/plugin.ts';
 
 // Under `docker compose up`, the Rust server answers the API, realtime connection included; run
-// on its own, the mock does, and the app works without one.
+// on its own, the mock does, without one: the app then shows itself Offline 3 s after it starts,
+// though pages still load.
 const apiProxy = process.env.API_PROXY;
 
 export default defineConfig({

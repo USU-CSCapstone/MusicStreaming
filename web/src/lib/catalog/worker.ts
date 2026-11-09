@@ -83,9 +83,12 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 					id: data.id,
 					result: await sync.query(data.library, data.name, data.params, data.offline)
 				});
-			} else {
+			} else if (data.type === 'signOut') {
 				await sync.signOut();
 				post({ type: 'answer', id: data.id, result: '' });
+			} else {
+				// A newer build's request, from a tab of that version: its asker reads the server.
+				throw new Error('unknown request');
 			}
 		} catch (error) {
 			if ('id' in data) post({ type: 'answer', id: data.id, error: describe(error).message });
