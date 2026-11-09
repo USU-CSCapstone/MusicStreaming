@@ -7,7 +7,7 @@
 //! rows. So the writer is held for writes that scale with the edit, not with the playlist or
 //! the number of ops.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::extract::State;
@@ -168,27 +168,25 @@ pub async fn edit(
                         return Ok(None);
                     }
                     write(tx, user, library, id, base, &plan)?;
-                    // A track added to Liked Songs is liked, and so not hidden; one removed is
-                    // unliked. Unhidden first, so a plugin applying the marks in order ends on the
-                    // like, as the like endpoint's do.
+                    // A track Liked Songs gains is liked, and so not hidden; one it loses is
+                    // unliked. What the edit changes, so one added and taken out again in the same
+                    // edit is neither, since a plugin's word of it outlasts the edit. Unhidden
+                    // first, so a plugin applying the marks in order ends on the like, as the like
+                    // endpoint's do.
                     let mut unhidden = Vec::new();
-                    for &track in plan.added.iter().filter(|_| liked) {
-                        if hidden::unhide_in(tx, user, library, track)? {
-                            unhidden.push(track);
+                    let mut likes = (Vec::new(), Vec::new());
+                    if liked {
+                        for &track in &plan.gained {
+                            if hidden::unhide_in(tx, user, library, track)? {
+                                unhidden.push(track);
+                            }
                         }
+                        let (gained, lost) =
+                            (plan.gained.iter().copied(), plan.lost.iter().copied());
+                        marks::record(tx, user, library, gained, Mark::Liked)?;
+                        marks::record(tx, user, library, lost, Mark::Unliked)?;
+                        likes = (plan.gained.clone(), plan.lost.clone());
                     }
-                    let likes = if liked {
-                        // Liked Songs holds each track once, so each removed is unliked once.
-                        // In track order, which the plan's set of adds lacks.
-                        let mut liked = plan.added.clone();
-                        liked.sort_unstable();
-                        marks::record(tx, user, library, liked.iter().copied(), Mark::Liked)?;
-                        let unliked = plan.removed.iter().copied();
-                        marks::record(tx, user, library, unliked, Mark::Unliked)?;
-                        (liked, plan.removed.clone())
-                    } else {
-                        Default::default()
-                    };
                     // An edit of details alone leaves the items, and so the artwork.
                     if plan.totals.is_some() {
                         catalog::playlist_artwork(tx, id)?;
@@ -292,8 +290,11 @@ pub(super) struct Plan {
     pub(super) totals: Option<(i64, i64)>,
     /// The distinct tracks the ops add.
     pub(super) added: Vec<i64>,
-    /// The tracks of the items the ops remove, one for each.
-    pub(super) removed: Vec<i64>,
+    /// The tracks the playlist holds once written that it did not before, and those it held and
+    /// holds no more, each once and in track order: what the edit changes of which tracks it
+    /// holds, so a track added and removed again by the same ops is in neither.
+    pub(super) gained: Vec<i64>,
+    pub(super) lost: Vec<i64>,
     /// The keys of the rows to delete, or `None` to delete them all, for a renumber.
     delete: Option<Vec<i64>>,
     /// The rows to insert, as `(key, track, added_at)`.
@@ -319,7 +320,8 @@ pub(super) fn plan(
         return Ok(Plan {
             totals: None,
             added: Vec::new(),
-            removed: Vec::new(),
+            gained: Vec::new(),
+            lost: Vec::new(),
             delete: Some(Vec::new()),
             insert: Vec::new(),
             applied: Vec::new(),
@@ -382,7 +384,10 @@ pub(super) fn plan(
     let stored: Vec<Option<i64>> = after.iter().map(|item| item.key).collect();
     let kept: HashSet<i64> = stored.iter().flatten().copied().collect();
     let gone = |item: &&Item| item.key.is_some_and(|key| !kept.contains(&key));
-    let removed_tracks = before.iter().filter(gone).map(|item| item.track).collect();
+    let held = |items: &[Item]| items.iter().map(|item| item.track).collect::<BTreeSet<i64>>();
+    let (held_before, held_after) = (held(&before), held(&after));
+    let gained = held_after.difference(&held_before).copied().collect();
+    let lost = held_before.difference(&held_after).copied().collect();
     let removed = before.iter().filter(gone).filter_map(|item| item.key);
     let duration = after.iter().map(|item| item.duration).sum::<i64>();
     let count = i64::try_from(after.len()).unwrap_or(i64::MAX);
@@ -410,7 +415,8 @@ pub(super) fn plan(
     Ok(Plan {
         totals: Some((count, duration)),
         added: added.into_keys().collect(),
-        removed: removed_tracks,
+        gained,
+        lost,
         delete,
         insert,
         applied,

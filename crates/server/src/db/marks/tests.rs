@@ -105,8 +105,17 @@ async fn edits_of_liked_songs_record_likes_and_unlikes_and_nothing_else_does() {
     let remove = json!({ "baseVersion": moved["version"], "ops": [
         { "op": "remove", "positions": [0] }
     ] });
-    send(&app, "PATCH", &uri, Some(remove)).await;
+    let removed = send(&app, "PATCH", &uri, Some(remove)).await;
     assert_eq!(marks(recorded(&temp, &mut seq)), [(2, "unliked")]);
+
+    // Added, to the top, and taken out again in the same edit: Liked Songs ends as it began, so
+    // nothing is liked, and the plugin is told of nothing.
+    let back_out = json!({ "baseVersion": removed["version"], "ops": [
+        { "op": "add", "items": [{ "type": "track", "id": "2" }] },
+        { "op": "remove", "positions": [0] }
+    ] });
+    send(&app, "PATCH", &uri, Some(back_out)).await;
+    assert_eq!(recorded(&temp, &mut seq), []);
 
     // Another playlist's edits, and its deletion, like nothing.
     let body = json!({ "title": "Mix", "items": tracks });
