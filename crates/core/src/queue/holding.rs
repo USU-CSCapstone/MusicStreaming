@@ -156,6 +156,46 @@ mod tests {
         assert_eq!(reading(&state, &[10]), Reading { up_next: vec![0], history: vec![] });
     }
 
+    /// Shuffled, a context row reads the base item the permutation maps it to, which
+    /// `rows_reading` finds back through `order_row_of`: for several seeds, and with the Manual
+    /// Queue ahead, a copy, and plays behind, its rows are exactly those whose tracks Up Next and
+    /// History show as the ones asked for, as `upNextRows` and `historyRows` read them.
+    #[test]
+    fn finds_the_rows_of_a_shuffled_queue_as_they_read() {
+        for seed in [1, 7, 4242, u32::MAX] {
+            let mut state = QueueState::default();
+            state.start(Source::new("a", "lib", 40, None), 0).unwrap();
+            state.attach_list("a", "ha".into(), (100..140).collect()).unwrap();
+            let source = Source::new("m", "lib", 3, None);
+            state.apply(&Edit::Add { source, before: Anchor::ManualEnd }).unwrap();
+            state.attach_list("m", "hm".into(), Arc::from([105, 130, 199])).unwrap();
+            state.apply(&Edit::Shuffle { on: true, seed }).unwrap();
+            for _ in 0..6 {
+                state.apply(&Edit::Next).unwrap();
+            }
+            let play = PlayRef { play: 1, item: state.history_row(1).unwrap().row.item };
+            state.apply(&Edit::Requeue { play, key: "c".into() }).unwrap();
+
+            let picks: [Vec<u64>; 4] = [
+                vec![105],
+                vec![100, 101, 102, 103],
+                (100..140).step_by(3).collect(),
+                vec![199, 139],
+            ];
+            for tracks in picks {
+                let reading = state.rows_reading(&hits(&state, &tracks));
+                let holds = |track: Option<u64>| track.is_some_and(|t| tracks.contains(&t));
+                let up_next: Vec<u64> = (0..state.up_next_len())
+                    .filter(|&i| holds(state.up_next_row(i).and_then(|row| row.track)))
+                    .collect();
+                let history: Vec<u64> = (0..state.history_len())
+                    .filter(|&i| holds(state.history_row(i).and_then(|play| play.row.track)))
+                    .collect();
+                assert_eq!(reading, Reading { up_next, history }, "seed {seed}, {tracks:?}");
+            }
+        }
+    }
+
     #[test]
     #[ignore = "timing run: cargo test -p jewelcase-core --release -- --ignored --nocapture"]
     fn finding_hidden_rows_of_500k_is_fast() {
