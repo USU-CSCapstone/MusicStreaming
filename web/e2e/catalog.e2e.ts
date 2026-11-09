@@ -519,9 +519,11 @@ test.describe('the offline shell', () => {
 				(await query<Albums>(page, 'listAlbums')).items.some(({ title }) => title === 'Pictured')
 			)
 			.toBe(true);
-		// The worker takes over pages on their next load.
+		// The worker takes over pages on their next load. Online, pages read the server until the
+		// device's owner serves, and this test's server lacks the album, so wait for the owner.
 		await page.evaluate(() => navigator.serviceWorker.ready);
 		await page.reload();
+		await synced(page);
 		await page.getByRole('link', { name: 'Albums', exact: true }).first().click();
 		await expect(page.locator('img.loaded').first()).toBeVisible();
 		await expect
