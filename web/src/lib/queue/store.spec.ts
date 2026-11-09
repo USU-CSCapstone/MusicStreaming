@@ -1730,4 +1730,19 @@ describe('QueueStore hidden tracks', () => {
 		expect(hiddenReads()).toHaveLength(2);
 		expect(upNext()).toEqual(['102', '103']);
 	});
+
+	it('reads Hidden Songs again on reconnecting to a queue that did not change', async () => {
+		server.hidden.set('lib', ['101']);
+		await hello();
+		expect(upNext()).toEqual(['102', '103', '104']);
+
+		// Hidden on another device while the connection was down, so never told of here.
+		server.hidden.set('lib', ['101', '103']);
+		const fetched = server.queueGets().length;
+		await hello();
+		const answered = server.queueGets().slice(fetched);
+		expect(answered.map((r) => r.headers?.['If-None-Match'])).toEqual([`"r1.${QUEUE}.0"`]);
+		expect(hiddenReads()).toHaveLength(2);
+		expect(upNext()).toEqual(['102', '104']);
+	});
 });

@@ -497,6 +497,10 @@ export class QueueStore {
 	/** Takes in what the server said over the realtime connection. */
 	message(message: RealtimeServerMessage) {
 		if (message.type === 'hello') {
+			// What was hidden while the connection was down is read again, by the sync below: a
+			// queue that did not change answers its fetch with 304, and nothing else would.
+			this.#hiddenAsked.clear();
+			this.#told.clear();
 			// What could not be reached is asked for again.
 			for (const [hash, problem] of this.#problems) {
 				if (problem === 'failed') this.#problems.delete(hash);
@@ -513,11 +517,6 @@ export class QueueStore {
 			}
 		} else if (message.type === 'queueEdit') {
 			this.#heard(message);
-		}
-		// What was hidden while the connection was down is read again.
-		if (message.type === 'hello') {
-			this.#hiddenAsked.clear();
-			this.#told.clear();
 		}
 	}
 
