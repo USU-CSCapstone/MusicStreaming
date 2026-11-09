@@ -68,6 +68,33 @@ export function invertOps<T>(
 	};
 }
 
+/**
+ * `ops` and `resolve` as they apply to a Liked Songs of `items`, where adding a track likes it
+ * (`api/openapi.yaml`, `editPlaylist`): an add with no position goes to the top, and adds only
+ * the tracks it does not hold, each once. A track held as the edit is made is not added again,
+ * even after a remove in the same edit. `trackOf` names an item's track, if it has one.
+ */
+export function onlyNew<T>(
+	items: readonly T[],
+	ops: readonly PlaylistOp[],
+	resolve: Resolve<T>,
+	trackOf: (item: T) => string | undefined
+): { ops: PlaylistOp[]; resolve: Resolve<T> } {
+	const held = new Set(items.map(trackOf));
+	return {
+		// The add keeps its own `items`, which `resolve` may know it by.
+		ops: ops.map((op) => (op.op === 'add' && op.at === undefined ? { ...op, at: 0 } : op)),
+		resolve: (added) =>
+			resolve(added).filter((item) => {
+				const track = trackOf(item);
+				if (track === undefined) return true;
+				if (held.has(track)) return false;
+				held.add(track);
+				return true;
+			})
+	};
+}
+
 function applyOp<T>(list: readonly T[], op: PlaylistOp, resolve: Resolve<T>): T[] {
 	switch (op.op) {
 		case 'add': {
