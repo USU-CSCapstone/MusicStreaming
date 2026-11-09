@@ -7,6 +7,8 @@ use jewelcase_plugins::{Event, Mark, MarkKind};
 use rusqlite::OptionalExtension;
 use serde_json::json;
 
+use super::super::due::all;
+use super::super::{Due, Next, Ran, record};
 use super::{HANDLED, Received, connected, deliver, plan, setup};
 use crate::api::testing::eventually;
 use crate::db::Database;
@@ -196,6 +198,68 @@ async fn marks_aged_out_unheard_start_the_user_again() {
     assert_eq!(summary(deliver(&db, 0, HANDLED).await), [(11, Unliked, 300)]);
     sweep(&db, 300 + WINDOW_MS + 1).await;
     assert_eq!(summary(deliver(&db, 0, HANDLED).await), []);
+}
+
+/// User 7's `marked` delivery as it is found due and read, before the plugin runs.
+async fn read(db: &Database) -> (Due, Next) {
+    db.read(|conn| {
+        let mut due = all(conn, 0)?;
+        due.retain(|due| due.hook == Marked && due.user == Some(7));
+        let due = due.pop().expect("a delivery is due for user 7");
+        let (next, _) = (due.read)(conn, &due, 0)?;
+        Ok((due, next))
+    })
+    .await
+    .unwrap()
+}
+
+/// Records `due` as handled up to `next`, as a delivery does once the plugin has run.
+async fn handled(db: &Database, due: Due, next: Next) {
+    db.write(move |tx| record(tx, &due, next, Ran::Handled, "", 0)).await.unwrap();
+}
+
+/// A delivery still running as its user disconnects records nothing: connecting again starts
+/// from where they stand then, and what they did while disconnected is never sent.
+#[tokio::test]
+async fn a_delivery_under_way_as_its_user_disconnects_leaves_them_disconnected() {
+    let (_temp, db, plugins) = setup().await;
+    connected(&plugins, &db, &[LikesAndHides, Marked]).await;
+    likes(&db, 7, vec![11], 150).await;
+    assert_eq!(summary(deliver(&db, 0, HANDLED).await), [(11, Liked, 150)]);
+    hides(&db, 7, 12, 300).await;
+    marked(&db, 7, 12, "hidden", 300).await;
+
+    let (due, next) = read(&db).await;
+    db.write(|tx| disconnect(tx, "plugin", caller(7, false))).await.unwrap();
+    marked(&db, 7, 12, "unhidden", 400).await;
+    db.write(|tx| tx.execute("DELETE FROM hidden_tracks", [])).await.unwrap();
+    connect(&db, "plugin", 7, json!({}), 500).await;
+    handled(&db, due, next).await;
+    assert_eq!(
+        summary(deliver(&db, 0, HANDLED).await),
+        [(11, Liked, 150)],
+        "as they stand, and not the unhide made while disconnected"
+    );
+    assert_eq!(summary(deliver(&db, 0, HANDLED).await), []);
+}
+
+/// A delivery still running as the sweep takes marks it had yet to send records nothing, so the
+/// user starts again from where they stand and the marks it took are not lost.
+#[tokio::test]
+async fn a_delivery_under_way_as_the_sweep_runs_starts_the_user_again() {
+    let (_temp, db, plugins) = setup().await;
+    connected(&plugins, &db, &[LikesAndHides, Marked]).await;
+    assert_eq!(summary(deliver(&db, 0, HANDLED).await), []);
+    likes(&db, 7, vec![11], 200).await;
+    marked(&db, 7, 11, "liked", 200).await;
+
+    // The like is read; the hide comes as the plugin runs, and the sweep takes it unsent.
+    let (due, next) = read(&db).await;
+    hides(&db, 7, 12, 210).await;
+    marked(&db, 7, 12, "hidden", 210).await;
+    sweep(&db, 210 + WINDOW_MS + 1).await;
+    handled(&db, due, next).await;
+    assert_eq!(summary(deliver(&db, 0, HANDLED).await), [(11, Liked, 200), (12, Hidden, 210)]);
 }
 
 /// The hook needs likes and hides granted, which listening activity does not stand in for.

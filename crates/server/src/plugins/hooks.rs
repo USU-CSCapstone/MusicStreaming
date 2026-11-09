@@ -217,6 +217,12 @@ impl Plugins {
 /// failing. The failing is read from the stored row, so a delivery under way as the plugin is
 /// enabled again counts from its fresh start. Unless it is due for one user, it disables the
 /// plugin in the library once it has been failing for [`MAX_FAILING_MS`].
+///
+/// A delivery can take minutes, and its cursor can move meanwhile: a `marked` cursor is deleted
+/// as its user disconnects, so that connecting again starts from their likes and hides as they
+/// stand, and reset by the sweep, which deletes the events it had yet to send. Writing what the
+/// delivery read over either would undo it, so one no longer due as it was found
+/// ([`due::still`]) records nothing.
 fn record(
     conn: &Connection,
     due: &Due,
@@ -225,6 +231,9 @@ fn record(
     summary: &str,
     now: i64,
 ) -> rusqlite::Result<()> {
+    if !due::still(conn, due, now)? {
+        return Ok(());
+    }
     let (plugin, library, hook) = (&due.plugin, due.library, Text(due.hook));
     let user = due.user.unwrap_or(0);
     let since: Option<i64> = conn
