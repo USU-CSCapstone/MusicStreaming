@@ -15,6 +15,7 @@ test('catalog-wasm builds a search index in little more memory than it keeps, an
 		WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 200000)
 		INSERT INTO artists (id, library_id, name, sort_key, added_at)
 		SELECT i, 1, printf('Artist %08x', (i * 2654435761) % 4294967296), x'00', 0 FROM n`);
+	/** The artist section's total from a search, which needs the index built. */
 	const found = () =>
 		JSON.parse(catalog.query('1', '1', 'search', JSON.stringify({ q: 'artist', sectionLimit: 1 })))
 			.sections[0].total;

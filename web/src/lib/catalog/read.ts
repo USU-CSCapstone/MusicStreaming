@@ -73,6 +73,7 @@ export async function read<T>(
 			down = true;
 		}
 	}
+	/** Whether the device is read as offline: the server was just found unreachable, or the app is offline. */
 	const off = () => down || offline();
 	let local: unknown;
 	try {

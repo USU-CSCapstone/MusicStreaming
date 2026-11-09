@@ -98,6 +98,7 @@ function browser() {
 				name,
 				() => view.hidden
 			);
+			/** Shows or hides the tab's page and fires the event the client listens to. */
 			const change = (hidden: boolean) => {
 				view.hidden = hidden;
 				document.dispatchEvent(new Event('visibilitychange'));
