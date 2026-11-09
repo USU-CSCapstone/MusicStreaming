@@ -1,6 +1,16 @@
 <script lang="ts">
+	import { invalidateAll } from '$app/navigation';
 	import { ApiError, adminListScans, startScan } from '$lib/api/client';
-	import { TRIGGER_LABELS, summarize } from '$lib/api/scans';
+	import {
+		TRIGGER_LABELS,
+		findings,
+		folder,
+		progress,
+		summarize,
+		underWay,
+		waiting,
+		withPressed
+	} from '$lib/api/scans';
 	import type { Library, Scan } from '$lib/api/types';
 	import Icon from '$lib/components/Icon.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
@@ -8,40 +18,94 @@
 
 	let { data } = $props();
 
+	/** How often scans under way are asked after: often enough to watch, cheap for the server. */
+	const POLL_MS = 1000;
+
 	// Svelte 5 lets a derived be overwritten locally; it resets when the page reloads its data.
 	let scans = $derived(data.scans);
-	let starting = $state<Record<string, boolean>>({});
+	/** The libraries whose press of Scan now is on its way to the server. */
+	let pressing = $state<Record<string, boolean>>({});
 	let errors = $state<Record<string, string>>({});
+	/** Each library's presses so far, so an answer asked for before the latest one is dropped. */
+	const presses: Record<string, number> = {};
 
-	/** Queues a scan of the whole library, then shows where its scans stand. */
+	/** A library's scans as shown: with a press on its way, a manual scan queued at once. */
+	function shown(id: string): Scan[] {
+		const list = scans[id] ?? [];
+		return pressing[id] ? withPressed(list) : list;
+	}
+
+	/** Queues a scan of the whole library, shown queued at once (`requirements/general.md` §3.4). */
 	async function scan(library: Library) {
 		const id = library.id;
-		starting[id] = true;
+		presses[id] = (presses[id] ?? 0) + 1;
+		pressing[id] = true;
 		errors = Object.fromEntries(Object.entries(errors).filter(([key]) => key !== id));
 		try {
-			await startScan(fetch, id);
-			scans = { ...scans, [id]: (await adminListScans(fetch, id)).items };
+			const started = await startScan(fetch, id);
+			const list = scans[id] ?? [];
+			scans = {
+				...scans,
+				[id]: list.some((s) => s.id === started.id)
+					? list.map((s) => (s.id === started.id ? started : s))
+					: [started, ...list]
+			};
 		} catch (e) {
 			errors = { ...errors, [id]: message(e) };
 		} finally {
-			starting[id] = false;
+			pressing[id] = false;
 		}
+	}
+
+	// Asks again after each library with a scan under way while this page is open, and stops once
+	// none is (`requirements/scanning.md` §5). A failed ask is tried again at the next.
+	$effect(() => {
+		const ids = data.libraries
+			.map((l) => l.id)
+			.filter((id) => !pressing[id] && underWay(scans[id] ?? []));
+		if (ids.length === 0) return;
+		const timer = setTimeout(() => void poll(ids), POLL_MS);
+		return () => clearTimeout(timer);
+	});
+
+	async function poll(ids: string[]) {
+		const asked = ids.map((id) => [id, presses[id] ?? 0] as const);
+		const answers = await Promise.all(
+			asked.map(([id]) => adminListScans(fetch, id).catch(() => null))
+		);
+		const next = { ...scans };
+		let finished = false;
+		asked.forEach(([id, press], i) => {
+			const answer = answers[i];
+			// A press since replaces what this ask found.
+			if (!answer || pressing[id] || (presses[id] ?? 0) !== press) return;
+			finished ||= !underWay(answer.items);
+			next[id] = answer.items;
+		});
+		scans = next;
+		// What a scan found changes the library's counts, here and in the sidebar.
+		if (finished) await invalidateAll();
 	}
 
 	function message(e: unknown): string {
 		return e instanceof ApiError ? e.message : 'Something went wrong. Try again.';
 	}
 
-	/** Where the library's scans stand, in a line. */
-	function status(list: Scan[]): string {
-		const { running, next, last } = summarize(list);
-		if (running) return `${TRIGGER_LABELS[running.trigger]} running`;
-		if (next) return `${TRIGGER_LABELS[next.trigger]} about to start`;
+	/** How the last scan ended, and what it found. */
+	function ended(last: Scan | null): string {
 		if (!last?.finishedAt) return 'Not scanned yet';
 		const at = new Date(last.finishedAt).toLocaleString();
-		if (last.state === 'suspended') return `The last scan stopped short, ${at}`;
+		const found = findings(last);
 		if (last.state === 'cancelled') return `The last scan was cancelled, ${at}`;
-		return `Last scanned ${at}`;
+		if (last.state === 'suspended') {
+			return `The last scan stopped short, ${at}${found ? `: ${found}` : ''}`;
+		}
+		return `Last scanned ${at}: ${found || 'nothing changed'}`;
+	}
+
+	/** The scans waiting to start, in order: "Manual scan, then Scan of changed files". */
+	function inOrder(queued: Scan[]): string {
+		return queued.map((s) => TRIGGER_LABELS[s.trigger]).join(', then ');
 	}
 </script>
 
@@ -53,6 +117,9 @@
 	{:else}
 		<ul class="libraries">
 			{#each data.libraries as library (library.id)}
+				{@const list = shown(library.id)}
+				{@const { running, queued, last } = summarize(list)}
+				{@const queuedAlready = waiting(list) !== null}
 				<li class="card">
 					<div class="top">
 						<span class="icon"><Icon name="folder" size={20} /></span>
@@ -63,16 +130,37 @@
 								{plural(library.artistCount, 'artist')}
 							</p>
 						</div>
+						<!-- A scan of the whole library already queued is what another press would get. -->
 						<button
 							type="button"
 							onclick={() => scan(library)}
-							disabled={starting[library.id]}
-							aria-label="Scan {library.name} now"
+							disabled={queuedAlready}
+							aria-label="{queuedAlready ? 'Queued' : 'Scan now'}: {library.name}"
 						>
-							{starting[library.id] ? 'Starting…' : 'Scan now'}
+							{queuedAlready ? 'Queued' : 'Scan now'}
 						</button>
 					</div>
-					<p class="muted small">{status(scans[library.id] ?? [])}</p>
+					{#if running}
+						{@const where = folder(running)}
+						{@const found = findings(running)}
+						<div class="running">
+							<p>
+								<span class="dot" aria-hidden="true"></span>
+								<span><strong>{TRIGGER_LABELS[running.trigger]}</strong> · {progress(running)}</span
+								>
+							</p>
+							{#if where}<p class="muted small where">In {where}</p>{/if}
+							{#if found}<p class="muted small">So far: {found}</p>{/if}
+						</div>
+					{/if}
+					{#if queued.length}
+						<p class="muted small">
+							{running ? 'Up next' : 'About to start'}: {inOrder(queued)}
+						</p>
+					{/if}
+					{#if !running && !queued.length}
+						<p class="muted small">{ended(last)}</p>
+					{/if}
 					{#if errors[library.id]}<p class="error" role="alert">{errors[library.id]}</p>{/if}
 				</li>
 			{/each}
@@ -154,6 +242,44 @@
 	button:disabled {
 		opacity: 0.5;
 		cursor: default;
+	}
+
+	.running {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-1);
+	}
+
+	.running p:first-child {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		flex-wrap: wrap;
+	}
+
+	/* Pulses while the scan runs; still for anyone who asks for less motion. */
+	.dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: var(--accent);
+		animation: pulse 1.2s ease-in-out infinite;
+	}
+
+	@keyframes pulse {
+		50% {
+			opacity: 0.3;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.dot {
+			animation: none;
+		}
+	}
+
+	.where {
+		overflow-wrap: anywhere;
 	}
 
 	.error {

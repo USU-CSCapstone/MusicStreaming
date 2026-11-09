@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { summarize, underWay } from './scans';
+import { findings, folder, progress, summarize, underWay, waiting, withPressed } from './scans';
 import type { Scan } from './types';
 
 function scan(id: string, state: Scan['state'], finishedAt: string | null = null): Scan {
@@ -22,15 +22,19 @@ function scan(id: string, state: Scan['state'], finishedAt: string | null = null
 const finished = scan('1', 'completed', '2026-11-09T12:00:00.000Z');
 
 describe('summarize', () => {
-	it('splits what is running, what is next, and the last to finish', () => {
+	it('splits what is running, what is queued, and the last to finish', () => {
 		const running = scan('2', 'running');
 		const next = scan('3', 'queued');
-		expect(summarize([next, running, finished])).toEqual({ running, next, last: finished });
+		expect(summarize([next, running, finished])).toEqual({
+			running,
+			queued: [next],
+			last: finished
+		});
 	});
 
-	it('takes the oldest queued scan as next', () => {
-		const older = scan('3', 'queued');
-		expect(summarize([scan('4', 'queued'), older]).next).toBe(older);
+	it('puts the oldest queued scan first, as it starts next', () => {
+		const [older, newer] = [scan('3', 'queued'), scan('4', 'queued')];
+		expect(summarize([newer, older]).queued).toEqual([older, newer]);
 	});
 
 	it('counts a suspended scan as the last to finish', () => {
@@ -39,7 +43,19 @@ describe('summarize', () => {
 	});
 
 	it('is empty for a library never scanned', () => {
-		expect(summarize([])).toEqual({ running: null, next: null, last: null });
+		expect(summarize([])).toEqual({ running: null, queued: [], last: null });
+	});
+});
+
+describe('waiting', () => {
+	it('is a queued scan of the whole library, not one of changed files', () => {
+		const changed = { ...scan('3', 'queued'), trigger: 'watch' as const };
+		const scheduled = { ...scan('4', 'queued'), trigger: 'scheduled' as const };
+		expect([waiting([changed]), waiting([scheduled, changed]), waiting([finished])]).toEqual([
+			null,
+			scheduled,
+			null
+		]);
 	});
 });
 
@@ -51,5 +67,67 @@ describe('underWay', () => {
 			underWay([finished]),
 			underWay([])
 		]).toEqual([true, true, false, false]);
+	});
+});
+
+describe('withPressed', () => {
+	it('shows a manual scan queued at once', () => {
+		const running = scan('2', 'running');
+		const shown = withPressed([running, finished]);
+		expect(shown.map((s) => [s.trigger, s.state])).toEqual([
+			['manual', 'queued'],
+			['manual', 'running'],
+			['manual', 'completed']
+		]);
+		expect(summarize(shown).running).toBe(running);
+	});
+
+	it('adds nothing when a scan of the library is already queued, as the press answers with it', () => {
+		const queued = [scan('3', 'queued')];
+		expect(withPressed(queued)).toBe(queued);
+	});
+
+	it('queues one behind a scan of changed files, which covers only their folders', () => {
+		const changed = { ...scan('3', 'queued'), trigger: 'watch' as const };
+		expect(withPressed([changed])).toHaveLength(2);
+	});
+});
+
+describe('progress', () => {
+	it('says how many files are read of those found so far', () => {
+		const running = { ...scan('2', 'running'), filesSeen: 1234, filesProcessed: 1200 };
+		expect(progress(running)).toBe(
+			`Read ${(1200).toLocaleString()} of ${(1234).toLocaleString()} files found so far`
+		);
+		expect(progress({ ...running, filesSeen: 1, filesProcessed: 0 })).toBe(
+			'Read 0 of 1 file found so far'
+		);
+	});
+
+	it('is still looking before it finds a file', () => {
+		expect(progress(scan('2', 'running'))).toBe('Looking for files');
+	});
+});
+
+describe('findings', () => {
+	it('names only what changed, and the problems', () => {
+		const found = { ...finished, added: 3, missing: 2, problems: 1 };
+		expect(findings(found)).toBe('3 added · 2 missing · 1 problem');
+		expect(findings({ ...finished, updated: 1, problems: 4 })).toBe('1 updated · 4 problems');
+	});
+
+	it('is empty when nothing changed', () => {
+		expect(findings(finished)).toBe('');
+	});
+});
+
+describe('folder', () => {
+	it('names the root as the top folder', () => {
+		const running = scan('2', 'running');
+		expect([
+			folder({ ...running, currentFolder: 'Artist/Album' }),
+			folder({ ...running, currentFolder: '' }),
+			folder(running)
+		]).toEqual(['Artist/Album', 'the top folder', null]);
 	});
 });
