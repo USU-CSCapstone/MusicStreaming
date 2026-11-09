@@ -142,9 +142,12 @@ pub fn leave_out(
 
 /// `source`, a list whose rows `column` names, such as `al.id`, without the rows `ids`, which
 /// are few: what the caller hid, or hid whole. Each row is one lookup in them. A stored total
-/// loses those of them the list holds, counted by reading the list for those alone, which costs
-/// what they do, so the total stays a stored count. Nothing changes where there are none, the
-/// common case.
+/// loses those of them the list holds, counted by reading the list for those alone, so the total
+/// stays a stored count. Over a table, or a lead of one table such as a tag's, that is a lookup
+/// per ID, so it costs what they do. A lead SQLite cannot look into by ID, a compound one such as
+/// an artist's owned and featured albums together, is read through once instead, as the page
+/// itself reads it to sort it, so the count costs no more than the page. Nothing changes where
+/// there are none, the common case.
 pub fn leave_out_ids(
     conn: &Connection,
     source: &mut Source,
