@@ -357,3 +357,40 @@ async fn counts_leave_out_hidden_tracks() {
     assert_eq!((count(&now, "trackCount"), count(&now, "durationUs")), (1, her_majesty));
     assert_eq!(count(&mix, "trackCount"), 3);
 }
+
+/// An album's disc count counts an unnumbered disc as disc 1, as its stored count does: hiding
+/// the unnumbered tracks leaves disc 1 while it has tracks, and both together take it away.
+#[tokio::test]
+async fn an_unnumbered_disc_is_gone_only_with_disc_1() {
+    let (_temp, db, app) = super::super::testing::catalog::app().await;
+    db.write(|tx| {
+        use crate::db::testing::{Album, Track};
+        Album { disc_count: 2, track_count: 3, ..Album::new(105, 1) }.insert(tx)?;
+        for (track, disc) in [(1101, 0), (1102, 1), (1103, 2)] {
+            Track { disc_number: disc, ..Track::new(track, 1, 105) }.insert(tx)?;
+        }
+        tx.execute_batch(
+            "INSERT INTO album_discs (library_id, album_id, disc_number, track_count) \
+             VALUES (1, 105, 0, 1), (1, 105, 1, 1), (1, 105, 2, 1)",
+        )
+    })
+    .await
+    .unwrap();
+    let discs = |album: &Value| {
+        let numbers = album["discs"].as_array().unwrap().iter().map(|d| d["number"].clone());
+        (album["discCount"].clone(), numbers.collect::<Vec<_>>())
+    };
+    assert_eq!(
+        discs(&get(&app, "/albums/105").await),
+        (json!(2), vec![json!(null), json!(1), json!(2)])
+    );
+
+    hide(&app, TOKEN, "PUT", "1101").await;
+    assert_eq!(discs(&get(&app, "/albums/105").await), (json!(2), vec![json!(1), json!(2)]));
+    let (_, listed) = call(&app, TOKEN, "GET", "/api/v1/libraries/1/albums?limit=100", None).await;
+    let summary = listed["items"].as_array().unwrap().iter().find(|a| a["id"] == "105").unwrap();
+    assert_eq!(summary["discCount"], 2, "listed too");
+
+    hide(&app, TOKEN, "PUT", "1102").await;
+    assert_eq!(discs(&get(&app, "/albums/105").await), (json!(1), vec![json!(2)]));
+}
