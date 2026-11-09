@@ -23,7 +23,9 @@
 	const shown = $derived(hidden.items.filter((track) => marks.hidden(library, track.id, true)));
 	const total = $derived(hidden.total - (hidden.items.length - shown.length));
 
-	function unhide(track: TrackSummary) {
+	function unhide(song: TrackSummary) {
+		// Read as hidden, which a refused unhide goes back to.
+		const track = { ...song, hidden: true };
 		void marks.hide(fetch, library, track, false);
 		const undo = () => void marks.hide(fetch, library, track, true);
 		toast(`“${track.title}” is back in your library`, { action: { label: 'Undo', run: undo } });
