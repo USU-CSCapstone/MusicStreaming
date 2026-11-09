@@ -444,9 +444,10 @@ async fn a_file_a_rebuild_deleted_after_it_was_chosen_gives_way_to_its_replaceme
 
 #[tokio::test]
 async fn a_failed_build_is_not_started_again_until_the_cooldown_passes() {
-    let temp = tempfile::tempdir().unwrap();
-    let dir = temp.path().join("1");
-    let snapshots = Arc::new(Snapshots::new(temp.path().to_owned(), temp.path().join("none.db")));
+    let (temp, _db, _app) = catalog::app().await;
+    let root = temp.path().join("other");
+    let dir = root.join("1");
+    let snapshots = Arc::new(Snapshots::new(root.clone(), temp.path().join("jewelcase.db")));
     let attempt = async || {
         snapshots.start(1);
         eventually("the build to end", async || {
@@ -454,9 +455,18 @@ async fn a_failed_build_is_not_started_again_until_the_cooldown_passes() {
         })
         .await;
     };
+    // A file where the library's folder goes fails the build.
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(&dir, "").unwrap();
     attempt().await;
-    assert!(dir.exists(), "the first build ran, and failed on the missing database");
-    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(snapshots.failed.lock().unwrap().contains_key(&1), "the first build ran and failed");
+    std::fs::remove_file(&dir).unwrap();
     attempt().await;
     assert!(!dir.exists(), "no second build while the failure is recent");
+
+    let past = Instant::now().checked_sub(RETRY_COOLDOWN).unwrap();
+    snapshots.failed.lock().unwrap().insert(1, past);
+    attempt().await;
+    assert!(dir.exists(), "a build once the cooldown has passed");
+    assert!(snapshots.failed.lock().unwrap().is_empty(), "its success lifts the cooldown");
 }
