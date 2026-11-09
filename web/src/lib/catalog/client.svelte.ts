@@ -142,19 +142,10 @@ export class CatalogClient {
 								() => false
 							);
 					this.#launch('');
-					let timer: ReturnType<typeof setTimeout>;
 					await Promise.race([
-						this.#call({ type: 'signOut' }),
-						new Promise(
-							(_, reject) =>
-								(timer = setTimeout(
-									() => reject(new Error('the catalog did not answer the sign-out')),
-									TIMEOUT_MS
-								))
-						)
-					])
-						.catch((error) => console.error(error))
-						.finally(() => clearTimeout(timer));
+						this.#call({ type: 'signOut' }).catch((error) => console.error(error)),
+						new Promise((resolve) => setTimeout(resolve, TIMEOUT_MS))
+					]);
 					this.#stop();
 					return true;
 				}

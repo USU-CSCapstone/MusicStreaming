@@ -348,10 +348,34 @@ describe('catalog sync', () => {
 	it('a file kept for another account is deleted', async () => {
 		await started('1');
 		await h.stop();
+		await h.api.setSession('2');
 		await h.start('2');
 		await h.idle();
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
 		expect(await h.files()).toHaveLength(1);
+	});
+
+	it('a worker whose session is now another account’s pulls nothing of it', async () => {
+		await started('1');
+		await h.api.setSession('2');
+		await h.api.setLibraries(['1', '2']);
+		await h.message(hello);
+		await h.idle();
+		expect(await h.api.asked('/libraries/2')).toEqual([]);
+		expect(await h.api.asked('/me/changes')).toHaveLength(1);
+		expect(await h.libraries()).toEqual(['1']);
+	});
+
+	it('a worker whose session is now another account’s downloads no library again', async () => {
+		await started('1');
+		await h.api.setSession('2');
+		await h.api.setSeq('1', 5);
+		await h.api.setFeed('1', [], 5);
+		await h.message(libraryChanged(SEQ + 1));
+		await h.idle();
+
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(1);
+		expect(await h.libraries()).toEqual(['1']);
 	});
 
 	it('410 bootstraps again', async () => {

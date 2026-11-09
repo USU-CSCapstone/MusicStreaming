@@ -22,6 +22,7 @@ export class FakeApi {
 	requests: string[] = [];
 
 	#libraries: string[] = [];
+	#session = '1';
 	#snapshot: Uint8Array = new Uint8Array(0);
 	#seq = new Map<string, number>();
 	#rebuilds = new Map<string, number>();
@@ -46,6 +47,11 @@ export class FakeApi {
 	/** The library list. */
 	setLibraries(ids: string[]) {
 		this.#libraries = ids;
+	}
+
+	/** The account the session cookie is signed in as. */
+	setSession(user: string) {
+		this.#session = user;
 	}
 
 	/** The feed position the snapshot of `library` is current to. */
@@ -168,6 +174,7 @@ export class FakeApi {
 		const path = url.pathname.replace(/^\/api\/v1/, '');
 		const json = (body: object) => Response.json(body);
 		if (path === '/libraries') return json({ items: this.#libraries.map((id) => ({ id })) });
+		if (path === '/me') return json({ id: this.#session });
 		if (path === '/me/changes') return this.#page(this.#account, url);
 		const library = /^\/libraries\/(\d+)\/(catalog|changes)$/.exec(path);
 		if (!library || !this.#libraries.includes(library[1])) return problem(404);

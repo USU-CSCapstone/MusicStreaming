@@ -429,6 +429,23 @@ describe('CatalogClient', () => {
 		session.mockRestore();
 	});
 
+	it('an owner whose session has ended gives the catalog up when another account asks', async () => {
+		const session = vi
+			.spyOn(globalThis, 'fetch')
+			.mockResolvedValue(new Response(null, { status: 401 }));
+		const b = browser();
+		const first = b.tab('first');
+		const second = b.tab('second');
+		first.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(first.workers[0])).toContain('start'));
+		second.client.connect(b.realtime, '8');
+
+		await second.client.query('1', 'listTracks').catch(() => {});
+		await vi.waitFor(() => expect(first.workers[0].terminated).toBe(true));
+		second.client.disconnect();
+		session.mockRestore();
+	});
+
 	it('a stale tab’s query is refused and the owner of the session’s account stays owner', async () => {
 		const session = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ id: '8' }));
 		const b = browser();

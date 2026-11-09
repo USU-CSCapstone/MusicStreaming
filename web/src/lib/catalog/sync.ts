@@ -374,11 +374,20 @@ export class CatalogSync {
 		this.#report(describe(error));
 	}
 
+	/** Throws unless the session is still this worker's account, whose files these are. */
+	async #mine() {
+		const me = await this.#json<{ id: string }>('/me');
+		if (String(me.id) !== this.#user) throw new Error('the session is another account’s');
+	}
+
 	/**
 	 * The account's pull: the library list, then each file's playlists. A library the account
 	 * gained is bootstrapped in the background, so the others' catch-ups do not wait for it.
+	 * Nothing is read while the session is another account's, as in a tab thawed after a
+	 * sign-in elsewhere.
 	 */
 	async #pullAccount() {
+		await this.#mine();
 		const listed = new Set(
 			(await this.#json<{ items: { id: string }[] }>('/libraries')).items.map(({ id }) => id)
 		);
@@ -647,6 +656,7 @@ export class CatalogSync {
 	 * one, and the copy is returned if none comes.
 	 */
 	async #install(id: string, forced: boolean) {
+		await this.#mine();
 		const existing = this.catalogs.get(id);
 		const generation = (await this.#names()).reduce((latest, name) => {
 			const match = FILE.exec(name);
