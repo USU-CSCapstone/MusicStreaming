@@ -137,6 +137,10 @@ CREATE TABLE plugin_connections (
     -- Since when they share their searches with it, in every library (requirements/search.md
     -- §6); null until they turn that on. Sharing is part of the connection, so it ends with it.
     searches_shared_at INTEGER,
+    -- Since when it is sent their likes and hides: as they connected, if it could hear them then,
+    -- so they were told so where they connected (requirements/users.md §7). Null if it could not,
+    -- and an admin's grant made since shares nothing of theirs until they connect again.
+    marks_shared_at    INTEGER,
     PRIMARY KEY (plugin_id, user_id)
 ) STRICT, WITHOUT ROWID;
 

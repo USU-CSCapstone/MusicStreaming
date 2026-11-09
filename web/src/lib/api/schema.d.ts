@@ -2966,9 +2966,11 @@ export interface components {
             /** @description Whether the caller has turned on sharing their searches with it. */
             sharesSearches: boolean;
             /**
-             * @description Whether, once the caller connects it, it is sent their likes and hides: those they
-             *     have, then each change. It asks for them, and an admin allowed it, so the caller is
-             *     told before connecting (`requirements/users.md` §7).
+             * @description Whether it is sent the caller's likes and hides: those they have, then each change.
+             *     Not yet connected, whether connecting would share them: it asks for them, and an admin
+             *     allowed it, so the caller is told before connecting (`requirements/users.md` §7).
+             *     Connected, whether it could hear them as they connected; an admin's grant made since
+             *     shares nothing of theirs until they connect again.
              */
             hearsLikes: boolean;
         };

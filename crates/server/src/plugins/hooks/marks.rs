@@ -17,12 +17,13 @@ use super::{BATCH, Due, Next};
 /// that is handled, and the marks. While their likes and hides as they stand go out
 /// ([`Due::after`]) it is the next page of them; once they are out, the feed after the
 /// position. A mark of a track since removed from the library is passed over, since there is no
-/// track to send. Nothing is sent for a user who is not connected.
+/// track to send. Nothing is sent for a user who is not connected, or did not agree as they
+/// connected to share their likes and hides.
 pub fn marks(conn: &Connection, due: &Due, user: i64) -> rusqlite::Result<(Next, Vec<Mark>)> {
     let connected: bool = conn
         .prepare_cached(
             "SELECT EXISTS (SELECT 1 FROM plugin_connections \
-             WHERE plugin_id = ?1 AND user_id = ?2)",
+             WHERE plugin_id = ?1 AND user_id = ?2 AND marks_shared_at IS NOT NULL)",
         )?
         .query_row(params![due.plugin, user], |row| row.get(0))?;
     let here = Next { position: due.position, after: due.after };

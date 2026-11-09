@@ -42,7 +42,8 @@ pub struct Connectable {
     /// Whether the user could share their searches with it ([`asks_for_searches`]).
     pub asks_for_searches: bool,
     pub shares_searches: bool,
-    /// Whether, once they connect it, it is sent their likes and hides ([`hears_likes`]).
+    /// Whether it is sent their likes and hides: as they agreed when they connected it, or, not
+    /// connected, whether connecting would share them ([`hears_likes`]).
     pub hears_likes: bool,
 }
 
@@ -52,14 +53,15 @@ pub fn connectable(conn: &Connection, caller: Caller) -> rusqlite::Result<Vec<Co
     conn.prepare_cached(&format!(
         "SELECT p.id, json_extract(p.manifest, '$.name') AS name, \
                 json_extract(p.manifest, '$.description'), \
-                c.user_id IS NOT NULL, c.searches_shared_at IS NOT NULL \
+                c.user_id IS NOT NULL, c.searches_shared_at IS NOT NULL, \
+                c.marks_shared_at IS NOT NULL \
          FROM plugins p \
          LEFT JOIN plugin_connections c ON c.plugin_id = p.id AND c.user_id = :user \
          WHERE json_extract(p.manifest, '$.personalSettings') IS NOT NULL \
               AND {REACHED} ORDER BY name, p.id"
     ))?
     .query_map(named_params! { ":user": caller.user, ":admin": caller.admin }, |row| {
-        Ok(Connectable {
+        let plugin = Connectable {
             id: row.get(0)?,
             name: row.get(1)?,
             description: row.get(2)?,
@@ -67,13 +69,16 @@ pub fn connectable(conn: &Connection, caller: Caller) -> rusqlite::Result<Vec<Co
             asks_for_searches: false,
             shares_searches: row.get(4)?,
             hears_likes: false,
-        })
+        };
+        Ok((plugin, row.get::<_, bool>(5)?))
     })?
     .collect::<rusqlite::Result<Vec<_>>>()?
     .into_iter()
-    .map(|mut plugin| {
+    .map(|(mut plugin, shares_marks)| {
         plugin.asks_for_searches = asks_for_searches(conn, &plugin.id)?;
-        plugin.hears_likes = hears_likes(conn, &plugin.id)?;
+        // Theirs once connected: what they agreed to as they connected, whatever was granted since.
+        plugin.hears_likes =
+            if plugin.connected { shares_marks } else { hears_likes(conn, &plugin.id)? };
         Ok(plugin)
     })
     .collect()
@@ -236,7 +241,9 @@ impl Plugins {
 }
 
 /// Connects `user` to `id` at `at` with `settings`, or replaces the settings they connected it
-/// with, keeping when they connected and whether they share their searches. Refused as
+/// with, keeping when they connected and what they share with it. A new connection shares their
+/// likes and hides if the plugin can hear them now ([`hears_likes`]), which the user is told as
+/// they connect; one it comes to hear later is not sent them until they connect again. Refused as
 /// [`PluginError::NotFound`], connecting nothing, if `id` is not installed, such as when it was
 /// uninstalled meanwhile.
 pub(super) fn connect(
@@ -246,11 +253,13 @@ pub(super) fn connect(
     settings: &Map<String, Value>,
     at: i64,
 ) -> Result<(), PluginError> {
+    let hears = hears_likes(conn, id)?;
     let changed = conn.execute(
-        "INSERT INTO plugin_connections (plugin_id, user_id, settings, connected_at) \
-         SELECT id, ?2, ?3, ?4 FROM plugins WHERE id = ?1 \
+        "INSERT INTO plugin_connections (plugin_id, user_id, settings, connected_at, \
+                                        marks_shared_at) \
+         SELECT id, ?2, ?3, ?4, iif(?5, ?4, NULL) FROM plugins WHERE id = ?1 \
          ON CONFLICT (plugin_id, user_id) DO UPDATE SET settings = excluded.settings",
-        params![id, user, Json(settings), at],
+        params![id, user, Json(settings), at, hears],
     )?;
     if changed == 0 {
         return Err(PluginError::NotFound);
