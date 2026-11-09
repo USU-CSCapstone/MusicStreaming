@@ -71,6 +71,20 @@ describe('marks', () => {
 		expect(heard).toEqual(['1/5 true', '1/5 false', '1/6 true', '1/5 true', '1/5 false']);
 	});
 
+	it('tells of a refused like or unhide as the track was read', async () => {
+		const heard: string[] = [];
+		const stop = marks.onHidden((library, id, hidden) => heard.push(`${library}/${id} ${hidden}`));
+		status = 500;
+		// A song from a list, which shows none hidden, liked while the server is out of reach.
+		await marks.like(fetch, '1', track, true);
+		expect(heard.at(-1)).toBe('1/5 false');
+		expect(heard).not.toContain('1/5 true');
+		// One from Hidden Songs, unhidden there.
+		await marks.hide(fetch, '1', { ...track, id: '6', hidden: true }, false);
+		expect(heard.slice(-2)).toEqual(['1/6 false', '1/6 true']);
+		stop();
+	});
+
 	it('shows a track as it was read until a change says otherwise', async () => {
 		expect(marks.liked('1', track)).toBe(false);
 		expect(marks.liked('1', { ...track, liked: true })).toBe(true);

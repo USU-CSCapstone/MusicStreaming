@@ -25,8 +25,11 @@ type Fetch = typeof fetch;
 /** What is known of a track since it was read. */
 type Mark = { liked?: boolean; hidden?: boolean };
 
-/** A track as the marks need it. */
-type Marked = { id: string; title: string; liked?: boolean };
+/**
+ * A track as the marks need it, with `liked` and `hidden` as it was read. A list shows no hidden
+ * track, so `hidden` is left out but where it is one, as on Hidden Songs.
+ */
+type Marked = { id: string; title: string; liked?: boolean; hidden?: boolean };
 
 /** Hears that a track was hidden or unhidden, as the marks show it. */
 export type HiddenListener = (library: string, track: string, hidden: boolean) => void;
@@ -194,9 +197,9 @@ class Marks {
 			if (this.#sending.get(at) === sent) {
 				const confirmed = this.#confirmed.get(at);
 				this.#put(at, confirmed);
-				// What was hidden before the change, as far as is known, is again.
+				// Shown again as the server last confirmed it, or else as it was read.
 				if (mark.hidden !== undefined) {
-					this.#tell(library, track.id, confirmed?.hidden ?? !mark.hidden);
+					this.#tell(library, track.id, confirmed?.hidden ?? track.hidden ?? false);
 				}
 			}
 			toast(`Couldn’t ${what} “${track.title}”. ${e instanceof ApiError ? e.message : ''}`.trim());
