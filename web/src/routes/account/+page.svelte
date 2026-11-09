@@ -98,6 +98,23 @@
 	</section>
 {/if}
 
+{#if me && me.role !== 'user'}
+	<!-- On a phone there is no sidebar, so the admin pages are reached from here. -->
+	<section aria-labelledby="administration">
+		<h2 id="administration">Administration</h2>
+		<ul class="admin">
+			<li>
+				<a href={resolve('/admin/libraries')}>Libraries</a>
+				<span class="muted">Scan your music, and see how the last scan went.</span>
+			</li>
+			<li>
+				<a href={resolve('/admin/plugins')}>Plugins</a>
+				<span class="muted">Add features, and approve what each one reaches.</span>
+			</li>
+		</ul>
+	</section>
+{/if}
+
 {#if me}
 	<section aria-labelledby="devices">
 		<h2 id="devices">Devices</h2>
@@ -249,6 +266,11 @@
 		flex-wrap: wrap;
 		align-items: center;
 		gap: var(--space-2);
+	}
+
+	.admin a {
+		color: var(--accent);
+		font-weight: 600;
 	}
 
 	.column {
