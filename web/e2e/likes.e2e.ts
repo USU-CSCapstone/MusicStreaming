@@ -1,5 +1,5 @@
 import { type Page, expect, test } from '@playwright/test';
-import { album, serveLibrary } from './fixtures';
+import { album, serveLibrary, signalMix } from './fixtures';
 
 // Liking and hiding songs, against the mock's own store of them (`requirements/playlists.md`
 // §11, `requirements/conventions.md` §8).
@@ -32,6 +32,22 @@ test('a liked song tops Liked Songs, and unliked it leaves', async ({ page }) =>
 	await page.goto(`/albums/${album.id}`);
 	await expect(heart(page, 'Signal Part 2')).toHaveAttribute('aria-pressed', 'true');
 	await expect(heart(page, 'Signal Remix')).toHaveAttribute('aria-pressed', 'false');
+});
+
+test('pressing a heart keeps the songs selected', async ({ page }) => {
+	await serveLibrary(page, { playlists: [signalMix] });
+	await page.goto(`/playlists/${signalMix.id}`);
+	const bar = page.getByRole('toolbar', { name: 'Selected songs' });
+	await row(page, 'Signal Part 1').click();
+	await row(page, 'Signal Part 2').click({ modifiers: ['Shift'] });
+	await expect(bar).toContainText('2 songs selected');
+
+	await heart(page, 'Signal Part 2').click();
+	await expect(heart(page, 'Signal Part 2')).toHaveAttribute('aria-pressed', 'true');
+	await heart(page, 'Signal Remix').click();
+	await expect(heart(page, 'Signal Remix')).toHaveAttribute('aria-pressed', 'true');
+	await expect(bar).toContainText('2 songs selected');
+	await expect(row(page, 'Signal Part 1')).toHaveAccessibleDescription('Selected');
 });
 
 test('a hidden song leaves every list until it is unhidden from Hidden Songs', async ({ page }) => {

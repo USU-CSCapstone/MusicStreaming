@@ -20,7 +20,7 @@
 		tagTypesKnown
 	} from '$lib/filters';
 	import { formatLength, plural } from '$lib/format';
-	import type { PlaylistItem } from '$lib/api/types';
+	import type { PlaylistItem, TrackSummary } from '$lib/api/types';
 	import { knownTags } from '$lib/known-tags.svelte';
 	import { marks } from '$lib/marks.svelte';
 	import { toast } from '$lib/toast.svelte';
@@ -55,13 +55,27 @@
 		!!item.track &&
 		!marks.hidden(data.lib, item.track.id, item.hidden) &&
 		(!liked || marks.liked(data.lib, item.track));
-	const rows = $derived(
-		list.items.flatMap((item, position) =>
+	type Row = { track: TrackSummary; position: number; addedAt: string };
+	// Read again as any song is liked or hidden, here or elsewhere; one that changes no row leaves
+	// the rows the same list, so a selection or a drag in them carries on.
+	let lastRows: Row[] = [];
+	const rows = $derived.by(() => {
+		const next = list.items.flatMap((item, position) =>
 			item.track && shows(item)
 				? [{ track: item.track, position, addedAt: item.addedAt ?? '' }]
 				: []
-		)
-	);
+		);
+		const same =
+			next.length === lastRows.length &&
+			next.every(
+				(row, i) =>
+					row.track === lastRows[i].track &&
+					row.position === lastRows[i].position &&
+					row.addedAt === lastRows[i].addedAt
+			);
+		if (!same) lastRows = next;
+		return lastRows;
+	});
 	const tracks = $derived(rows.map((r) => r.track));
 	// Sorting shows the playlist in another order and leaves its own as arranged; it plays as
 	// shown (`requirements/conventions.md` §4.1, `requirements/playlists.md` §10).

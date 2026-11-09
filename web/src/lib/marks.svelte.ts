@@ -22,6 +22,11 @@ class Marks {
 	/** By `{library}/{track}`. */
 	#marks = new SvelteMap<string, Mark>();
 	/**
+	 * Each mark's `hidden`, by library and then track, kept with `#marks`. Lists read hides from
+	 * here, so a like, which lists do not filter by, never makes them filter again.
+	 */
+	#hides = new SvelteMap<string, SvelteMap<string, boolean>>();
+	/**
 	 * The latest change sent for each track, by `{library}/{track}`. While one is under way, the
 	 * server's word on that track may be the echo of an older change this device made, so it is
 	 * recorded but not shown. Nothing shows this, so nothing reacts to it.
@@ -51,8 +56,7 @@ class Marks {
 	unlikeAll(library: string) {
 		this.#cleared.add(library);
 		for (const [at, mark] of [...this.#marks]) {
-			if (at.startsWith(`${library}/`) && mark.liked)
-				this.#marks.set(at, { ...mark, liked: false });
+			if (at.startsWith(`${library}/`) && mark.liked) this.#put(at, { ...mark, liked: false });
 		}
 		for (const [at, mark] of this.#confirmed) {
 			if (at.startsWith(`${library}/`) && mark.liked)
@@ -70,12 +74,19 @@ class Marks {
 	 * says otherwise. A track read in a list was not; a playlist's item says.
 	 */
 	hidden(library: string, id: string, read = false): boolean {
-		return this.#marks.get(key(library, id))?.hidden ?? read;
+		return this.#hides.get(library)?.get(id) ?? read;
 	}
 
-	/** `tracks` of `library` but those the user hid since they were read, which no list shows. */
-	unhidden<T extends { id: string }>(library: string, tracks: readonly T[]): T[] {
-		return tracks.filter((track) => !this.hidden(library, track.id));
+	/**
+	 * `tracks` of `library` but those the user hid since they were read, which no list shows:
+	 * `tracks` itself while that leaves none out, so a list stays the same list, and a selection
+	 * or a drag in it carries on, as songs elsewhere are hidden.
+	 */
+	unhidden<T extends { id: string }>(library: string, tracks: T[]): T[] {
+		const hides = this.#hides.get(library);
+		if (!hides) return tracks;
+		const shown = tracks.filter((track) => !(hides.get(track.id) ?? false));
+		return shown.length === tracks.length ? tracks : shown;
 	}
 
 	/** Likes `track`, which unhides it, or unlikes it. */
@@ -112,6 +123,7 @@ class Marks {
 	/** Forgets every change, so each test starts afresh. */
 	clear() {
 		this.#marks.clear();
+		this.#hides.clear();
 		this.#sending.clear();
 		this.#confirmed.clear();
 		this.#cleared.clear();
@@ -140,8 +152,7 @@ class Marks {
 		} catch (e) {
 			if (this.#sending.get(at) === sent) {
 				const confirmed = this.#confirmed.get(at);
-				if (confirmed) this.#marks.set(at, confirmed);
-				else this.#marks.delete(at);
+				this.#put(at, confirmed);
 			}
 			toast(`Couldn’t ${what} “${track.title}”. ${e instanceof ApiError ? e.message : ''}`.trim());
 		} finally {
@@ -159,7 +170,19 @@ class Marks {
 	}
 
 	#merge(at: string, mark: Mark) {
-		this.#marks.set(at, { ...this.#marks.get(at), ...mark });
+		this.#put(at, { ...this.#marks.get(at), ...mark });
+	}
+
+	/** Sets the mark at `at`, or with none forgets it, and its hide with it. */
+	#put(at: string, mark: Mark | undefined) {
+		if (mark) this.#marks.set(at, mark);
+		else this.#marks.delete(at);
+		const split = at.indexOf('/');
+		const [library, track] = [at.slice(0, split), at.slice(split + 1)];
+		const hides = this.#hides.get(library);
+		if (mark?.hidden === undefined) hides?.delete(track);
+		else if (hides) hides.set(track, mark.hidden);
+		else this.#hides.set(library, new SvelteMap([[track, mark.hidden]]));
 	}
 }
 
