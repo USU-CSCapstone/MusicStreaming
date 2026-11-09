@@ -20,6 +20,7 @@ class FakeWorker {
 			slow: boolean;
 			mute: boolean;
 			onDevice: string;
+			indexed: string;
 		}
 	) {}
 
@@ -33,6 +34,8 @@ class FakeWorker {
 			this.say({ type: 'answer', id: message.id, result: this.flags.busy ? '1' : '' });
 		else if (message.type === 'onDevice' && !this.silent())
 			this.say({ type: 'answer', id: message.id, result: this.flags.onDevice });
+		else if (message.type === 'indexed' && !this.silent())
+			this.say({ type: 'answer', id: message.id, result: this.flags.indexed });
 		else if (message.type === 'pause') this.say({ type: 'paused' });
 		else if (message.type === 'signOut' && !this.flags.mute)
 			this.say({ type: 'answer', id: message.id, result: '' });
@@ -65,7 +68,14 @@ const waiting = async (name: string) =>
 function browser() {
 	const name = `catalog-test-${++tabs}-${Math.random()}`;
 	let silent = false;
-	const flags = { busy: false, stalled: false, slow: false, mute: false, onDevice: '1' };
+	const flags = {
+		busy: false,
+		stalled: false,
+		slow: false,
+		mute: false,
+		onDevice: '1',
+		indexed: '1'
+	};
 	let hear: (message: RealtimeServerMessage) => void = () => {};
 	/** A realtime connection whose messages the test sends through `hear`. */
 	const realtime = {
@@ -228,6 +238,23 @@ describe('CatalogClient', () => {
 		// The state wait, not the router's own (a second tab's router waits 10 s by default).
 		expect(performance.now() - asked).toBeGreaterThan(1000);
 		expect(performance.now() - asked).toBeLessThan(5000);
+		first.client.disconnect();
+	});
+
+	it('a library’s index is built only as the owner says, and with no owner or a silent one it is not, never an error', async () => {
+		const b = browser();
+		const first = b.tab('first');
+		const second = b.tab('second');
+		expect(await second.client.indexed('1')).toBe(false);
+
+		first.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(first.workers[0])).toContain('start'));
+		expect(await second.client.indexed('1')).toBe(true);
+		b.flags.indexed = '';
+		expect(await second.client.indexed('1')).toBe(false);
+		b.flags.indexed = '1';
+		b.silence(true);
+		expect(await second.client.indexed('1')).toBe(false);
 		first.client.disconnect();
 	});
 

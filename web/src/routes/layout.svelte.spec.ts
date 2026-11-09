@@ -7,7 +7,8 @@ const catalog = vi.hoisted(() => ({
 	signOut: vi.fn(),
 	connect: vi.fn(),
 	disconnect: vi.fn(),
-	setWorkingOffline: vi.fn()
+	setWorkingOffline: vi.fn(),
+	prepareIndex: vi.fn()
 }));
 const queue = vi.hoisted(() => ({
 	connect: vi.fn(),
@@ -18,7 +19,13 @@ vi.mock('$lib/catalog/client.svelte', () => ({ catalog }));
 const player = vi.hoisted(() => ({ libraryId: '', stopStreaming: vi.fn() }));
 vi.mock('$lib/queue/client.svelte', () => ({ queue }));
 vi.mock('$lib/player.svelte', () => ({ player }));
-vi.mock('$app/state', () => ({ page: { route } }));
+vi.mock('$app/state', () => ({
+	page: {
+		route,
+		url: new URL('http://localhost/'),
+		data: { me: null, library: null, tagTypes: [] }
+	}
+}));
 
 import { connectivity } from '$lib/connectivity.svelte';
 import Layout from './+layout.svelte';
@@ -54,5 +61,19 @@ describe('the app layout', () => {
 		connectivity.setWorkOffline(false);
 		await vi.waitFor(() => expect(catalog.setWorkingOffline).toHaveBeenLastCalledWith(false));
 		expect(queue.setWorkingOffline).toHaveBeenLastCalledWith(false);
+	});
+
+	it('has the search index of the library on screen built once the app is offline, and not before', async () => {
+		route.id = '/';
+		await render(Layout, {
+			data: { me: { id: '1' }, library: { id: '7' }, tagTypes: [] },
+			children
+		} as never);
+		await vi.waitFor(() => expect(catalog.connect).toHaveBeenCalled());
+		expect(catalog.prepareIndex).not.toHaveBeenCalled();
+
+		connectivity.setWorkOffline(true);
+		await vi.waitFor(() => expect(catalog.prepareIndex).toHaveBeenCalledWith('7'));
+		connectivity.setWorkOffline(false);
 	});
 });

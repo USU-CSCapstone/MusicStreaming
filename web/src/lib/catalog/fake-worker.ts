@@ -85,6 +85,23 @@ export class Harness {
 		return this.#sync!.onDevice(library);
 	}
 
+	/** Whether the library's file answers reads with its search index built. */
+	indexed(library: string) {
+		return this.#sync!.indexed(library);
+	}
+
+	/** Has the sync build the library's search index in the background. */
+	prepareIndex(library: string) {
+		this.#sync!.prepareIndex(library);
+	}
+
+	/** Searches each of `libraries` at once, as tabs on different libraries do, and lets the rebuilds they schedule run. */
+	async searchTogether(libraries: string[]) {
+		const params = { q: 'a', sectionLimit: 5 };
+		await Promise.all(libraries.map((library) => this.#sync!.query(library, 'search', params)));
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+
 	/** The IDs of the libraries on the device. */
 	libraries() {
 		return [...(this.#sync?.catalogs.keys() ?? [])].sort();

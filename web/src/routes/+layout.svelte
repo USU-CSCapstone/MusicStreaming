@@ -44,6 +44,14 @@
 		};
 	});
 
+	// Offline, search is the device's: the library on screen has its index built ahead, in the
+	// background, rather than on the first search. Online, none is built, which the server's search
+	// makes needless.
+	$effect(() => {
+		const library = data.library?.id;
+		if (!bare && data.me && library && connectivity.stale) catalog.prepareIndex(library);
+	});
+
 	// Working offline closes the realtime connection and keeps the workers from any request;
 	// turning it off connects again, and the `hello` that follows makes them catch up.
 	$effect(() => {

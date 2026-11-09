@@ -197,14 +197,11 @@ export class CatalogClient {
 		const offline =
 			wait || this.#workingOffline || connectivity.stale || navigator.onLine === false;
 		if (!offline && Date.now() < this.#deafUntil) return false;
-		/** Whether some tab holds the lock, which says an owner is at least starting. */
-		const owned = async () =>
-			((await navigator.locks?.query()) ?? {}).held?.some((lock) => lock.name === this.#name);
 		// A tab about to elect gives the election a moment rather than answering none: a page
 		// that loads first thing, as a launch offline does, would otherwise miss the device.
 		let waited = false;
 		const end = Date.now() + OWNER_MS;
-		while (!(await owned())) {
+		while (!(await this.#owned())) {
 			// Only a tab still in the election is worth waiting for: one that gave up is not coming.
 			if (!offline || !this.#abort || Date.now() >= end) return false;
 			waited = true;
@@ -223,6 +220,38 @@ export class CatalogClient {
 			});
 		if (unknown && offline) return true;
 		return answer === '1';
+	}
+
+	/**
+	 * Whether `library`'s search index is built on the device, so a search can be handed to it
+	 * without waiting for a build: false where it is not, or where no owner is serving or answers
+	 * in `STATE_MS`.
+	 */
+	async indexed(library: string) {
+		if (!available() || !(await this.#owned()) || (this.#holding && !this.#serving)) return false;
+		const answer = await this.#route()
+			.ask({ type: 'indexed', library }, STATE_MS)
+			.catch(() => '');
+		return answer === '1';
+	}
+
+	/**
+	 * Has whichever tab owns the catalog build `library`'s search index in the background, unless
+	 * it has one, for a device that has gone offline: its first search then does not wait for it.
+	 * Without an owner to answer in time, the first search builds it.
+	 */
+	prepareIndex(library: string) {
+		if (!available()) return;
+		this.#route()
+			.ask({ type: 'prepareIndex', library })
+			.catch(() => {});
+	}
+
+	/** Whether some tab holds the lock, which says an owner is at least starting. */
+	async #owned() {
+		return !!((await navigator.locks?.query()) ?? {}).held?.some(
+			(lock) => lock.name === this.#name
+		);
 	}
 
 	/**

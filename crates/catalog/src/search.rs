@@ -5,7 +5,7 @@
 
 use std::collections::HashSet;
 
-use jewelcase_core::{Document, Kind, Section as Found};
+use jewelcase_core::{Document, Index, IndexBuilder, Kind, Section as Found};
 use rusqlite::Connection;
 use serde::Serialize;
 
@@ -46,28 +46,40 @@ enum SearchResult {
     Artist { artist: ArtistSummary },
 }
 
-/// The library's tracks, albums and artists, as the core's rule makes them documents.
-pub fn documents(conn: &Connection, library: i64) -> rusqlite::Result<Vec<Document>> {
-    let mut documents = Vec::new();
+/// Calls `add` with each of the library's tracks, albums and artists, as the core's rule makes
+/// them documents, one row at a time, so that none of them need be held at once.
+pub fn documents(
+    conn: &Connection,
+    library: i64,
+    mut add: impl FnMut(Document),
+) -> rusqlite::Result<()> {
     let mut tracks = conn.prepare_cached("SELECT id, title FROM tracks WHERE library_id = ?1")?;
-    for track in
-        tracks.query_map([library], |row| Ok(Document::from_track(row.get(0)?, row.get(1)?)))?
-    {
-        documents.push(track?);
+    let mut rows = tracks.query([library])?;
+    while let Some(row) = rows.next()? {
+        add(Document::from_track(row.get(0)?, row.get(1)?));
     }
     let mut albums = conn.prepare_cached("SELECT id, title FROM albums WHERE library_id = ?1")?;
-    for album in
-        albums.query_map([library], |row| Ok(Document::from_album(row.get(0)?, row.get(1)?)))?
-    {
-        documents.extend(album?);
+    let mut rows = albums.query([library])?;
+    while let Some(row) = rows.next()? {
+        if let Some(album) = Document::from_album(row.get(0)?, row.get(1)?) {
+            add(album);
+        }
     }
     let mut artists = conn.prepare_cached("SELECT id, name FROM artists WHERE library_id = ?1")?;
-    for artist in
-        artists.query_map([library], |row| Ok(Document::from_artist(row.get(0)?, row.get(1)?)))?
-    {
-        documents.extend(artist?);
+    let mut rows = artists.query([library])?;
+    while let Some(row) = rows.next()? {
+        if let Some(artist) = Document::from_artist(row.get(0)?, row.get(1)?) {
+            add(artist);
+        }
     }
-    Ok(documents)
+    Ok(())
+}
+
+/// The search index of the library, built from its [`documents`] as they are read.
+pub fn index(conn: &Connection, library: i64) -> rusqlite::Result<Index> {
+    let mut builder = IndexBuilder::default();
+    documents(conn, library, |document| builder.add(document))?;
+    Ok(builder.finish())
 }
 
 /// The kinds to search for the comma-separated section `types`. Playlists add none, since the

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const device = vi.hoisted(() => ({
 	onDevice: vi.fn(),
+	indexed: vi.fn(),
 	query: vi.fn()
 }));
 const link = vi.hoisted(() => ({ offline: false, working: false }));
@@ -42,6 +43,7 @@ beforeEach(() => {
 	link.offline = false;
 	link.working = false;
 	device.onDevice.mockResolvedValue(true);
+	device.indexed.mockResolvedValue(true);
 	device.query.mockResolvedValue(JSON.stringify(ON_DEVICE));
 });
 
@@ -285,7 +287,7 @@ describe('readSearch', () => {
 		beforeEach(() => vi.useFakeTimers());
 		afterEach(() => vi.useRealTimers());
 
-		it('hands off to the device after the wait when the library is on it', async () => {
+		it('hands off to the device after the wait when the library is on it with its index built', async () => {
 			const { server } = hanging();
 			const result = readSearch('search', '1', { q: 'a' }, server);
 			await vi.advanceTimersByTimeAsync(SLOW_MS - 1);
@@ -315,9 +317,31 @@ describe('readSearch', () => {
 
 		it('with the library not on the device it keeps waiting for the server', async () => {
 			device.onDevice.mockResolvedValue(false);
+			device.indexed.mockResolvedValue(false);
 			const { server, answer } = hanging();
 			const result = readSearch('search', '1', { q: 'a' }, server);
 			await vi.advanceTimersByTimeAsync(SLOW_MS * 4);
+			answer(ON_SERVER);
+			expect(await result).toEqual(ON_SERVER);
+			expect(device.query).not.toHaveBeenCalled();
+		});
+
+		it('with the index not built it keeps waiting for the server, rather than building it for a server that is only slow', async () => {
+			device.indexed.mockResolvedValue(false);
+			const { server, answer } = hanging();
+			const result = readSearch('search', '1', { q: 'a' }, server);
+			await vi.advanceTimersByTimeAsync(SLOW_MS * 4);
+			expect(device.indexed).toHaveBeenCalledWith('1');
+			answer(ON_SERVER);
+			expect(await result).toEqual(ON_SERVER);
+			expect(device.query).not.toHaveBeenCalled();
+		});
+
+		it('a server that answers while the device is asked about its index is not kept waiting', async () => {
+			device.indexed.mockReturnValue(new Promise(() => {}));
+			const { server, answer } = hanging();
+			const result = readSearch('search', '1', { q: 'a' }, server);
+			await vi.advanceTimersByTimeAsync(SLOW_MS);
 			answer(ON_SERVER);
 			expect(await result).toEqual(ON_SERVER);
 			expect(device.query).not.toHaveBeenCalled();

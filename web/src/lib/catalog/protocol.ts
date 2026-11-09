@@ -56,5 +56,9 @@ export type Request =
 	  }
 	/** Whether the library has a file on the device that can answer; answered 1 or empty. */
 	| { type: 'onDevice'; library: string }
+	/** Whether the library's search index is built on the device as well; answered 1 or empty. */
+	| { type: 'indexed'; library: string }
+	/** Builds the library's search index in the background, unless built; answered empty at once. */
+	| { type: 'prepareIndex'; library: string }
 	/** Deletes every file on the device. */
 	| { type: 'signOut' };

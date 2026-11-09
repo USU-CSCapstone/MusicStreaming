@@ -21,10 +21,9 @@ import { catalog } from './client.svelte';
 const UNAVAILABLE = 'This needs the server, which this device cannot reach right now.';
 
 /**
- * How long a server search may take before the device answers instead. Past about a second a
- * person types on waiting (`requirements/search.md` §7); this leaves a server on a good day
- * its answer, and a device that has to build its index the first time (under a second, a few
- * on a slow phone) still ahead of a server that is hanging.
+ * How long a server search may take before the device answers instead, where its search index
+ * is already built. Past about a second a person types on waiting (`requirements/search.md` §7);
+ * this leaves a server on a good day its answer.
  */
 export const SLOW_MS = 1500;
 
@@ -101,8 +100,9 @@ export const unreachable = (error: unknown) =>
 /**
  * The answer to the API operation `name` of `library` with `params`, for a read the server
  * answers whenever it can be reached: the device answers when this one is offline, the server
- * fails or is slow (`SLOW_MS`), and only if the library is on it. A refusal by the server (a request it finds invalid)
- * is never the device's to second-guess.
+ * fails, or the server is slow (`SLOW_MS`) and the device's search index is built, and only if
+ * the library is on it. A refusal by the server (a request it finds invalid) is never the
+ * device's to second-guess.
  */
 export async function readSearch<T>(
 	name: string,
@@ -122,8 +122,11 @@ export async function readSearch<T>(
 		try {
 			const answer = await Promise.race([asked, slow]);
 			if (answer !== SLOW) return answer;
-			// Nothing on the device to hand off to: the server is all there is.
-			if (!(await catalog.onDevice(library))) return await asked;
+			// Nothing on the device ready to hand off to: the server is all there is. A device
+			// without the index would build it first, holding up every tab's reads and keeping its
+			// memory, for a server that is only slow; one the server answers before is not waited for.
+			const ready = await Promise.race([catalog.indexed(library), asked.then(() => false)]);
+			if (!ready) return await asked;
 			late = asked;
 		} catch (error) {
 			if (!unreachable(error)) throw error;

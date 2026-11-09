@@ -13,6 +13,7 @@ vi.mock('./sync', () => ({
 				work.finish = resolve;
 			});
 		onDevice = () => true;
+		indexed = () => true;
 		busy = () => true;
 		signOut = async () => {
 			work.signedOut = true;
@@ -22,7 +23,7 @@ vi.mock('./sync', () => ({
 
 afterEach(() => vi.restoreAllMocks());
 
-it('answers whether a library is on the device, and whether a download is under way, while a start is still running', async () => {
+it('answers whether a library is on the device with its index built, and whether a download is under way, while a start is still running', async () => {
 	const said: FromWorker[] = [];
 	vi.spyOn(window, 'postMessage').mockImplementation(((message: FromWorker) =>
 		said.push(message)) as never);
@@ -35,10 +36,12 @@ it('answers whether a library is on the device, and whether a download is under 
 	await vi.waitFor(() => expect(work.running).toBe(true));
 	send({ type: 'onDevice', id: 1, library: '1' });
 	send({ type: 'busy', id: 2 });
+	send({ type: 'indexed', id: 3, library: '1' });
 	await vi.waitFor(() =>
 		expect(said).toEqual([
 			{ type: 'answer', id: 1, result: '1' },
-			{ type: 'answer', id: 2, result: '1' }
+			{ type: 'answer', id: 2, result: '1' },
+			{ type: 'answer', id: 3, result: '1' }
 		])
 	);
 	work.finish();

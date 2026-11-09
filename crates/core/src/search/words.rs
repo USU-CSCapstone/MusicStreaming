@@ -13,7 +13,29 @@ fn is_dropped(ch: char) -> bool {
 /// The folded words of `text`.
 pub fn words(text: &str) -> Vec<String> {
     let mut words = Vec::new();
+    fold(text, |word| words.push(word.to_owned()));
+    words
+}
+
+/// Calls `found` with each folded word of `text`, in order, without allocating one for each.
+pub(super) fn fold(text: &str, mut found: impl FnMut(&str)) {
     let mut word = String::new();
+    // Most names are plain ASCII, which decomposes to itself and lowers a byte at a time: the
+    // same words, several times faster than the general way below.
+    if text.is_ascii() {
+        for byte in text.bytes() {
+            if byte.is_ascii_alphanumeric() {
+                word.push(char::from(byte.to_ascii_lowercase()));
+            } else if byte != b'\'' && !word.is_empty() {
+                found(&word);
+                word.clear();
+            }
+        }
+        if !word.is_empty() {
+            found(&word);
+        }
+        return;
+    }
     // A symbol becomes a space before decomposing, so `™` separates rather than adding `tm`.
     let kept = text.chars().map(|ch| if ch.is_alphanumeric() || is_dropped(ch) { ch } else { ' ' });
     for ch in kept.nfkd() {
@@ -30,13 +52,13 @@ pub fn words(text: &str) -> Vec<String> {
                 }
             }
         } else if !word.is_empty() {
-            words.push(std::mem::take(&mut word));
+            found(&word);
+            word.clear();
         }
     }
     if !word.is_empty() {
-        words.push(word);
+        found(&word);
     }
-    words
 }
 
 #[cfg(test)]
@@ -51,6 +73,14 @@ mod tests {
         assert_eq!(words("Straße Øresund Ærø"), ["strasse", "oresund", "aero"]);
         assert_eq!(words("STRAẞE"), ["strasse"]);
         assert_eq!(words("  ...  "), Vec::<String>::new());
+    }
+
+    #[test]
+    fn folds_plain_ascii_as_any_other_text() {
+        assert_eq!(words("SAY it Ain't so!"), ["say", "it", "aint", "so"]);
+        assert_eq!(words("AC/DC - Live '77"), ["ac", "dc", "live", "77"]);
+        assert_eq!(words("  ...  "), Vec::<String>::new());
+        assert_eq!(words("Track 0a1B"), words("Track 0a1B\u{00A0}"));
     }
 
     #[test]

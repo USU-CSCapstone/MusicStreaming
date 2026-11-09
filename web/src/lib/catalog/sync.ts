@@ -190,8 +190,11 @@ export class CatalogSync {
 	#broken = new WeakSet<Catalog>();
 	/** Bootstraps under way: snapshot downloads that a stop would throw away. */
 	#booting = 0;
-	/** The search index of each open file, which a `Catalog` holds but does not keep current. */
-	#indexes = new WeakMap<Catalog, { stale: boolean; builtAt: number; took: number }>();
+	/**
+	 * The one file with a search index, which its `Catalog` holds but does not keep current. Search
+	 * covers one library at a time, so building another's lets this one go first.
+	 */
+	#index?: { catalog: Catalog; stale: boolean; builtAt: number; took: number };
 	/** Pool operations queued one behind another: a transfer holds the whole pool. */
 	#queue: Promise<unknown> = Promise.resolve();
 
@@ -314,8 +317,7 @@ export class CatalogSync {
 	/** Tells the page the library changed, and marks its search index out of date. */
 	#announce(library: string) {
 		const catalog = this.catalogs.get(library);
-		const index = catalog && this.#indexes.get(catalog);
-		if (index) index.stale = true;
+		if (this.#index && this.#index.catalog === catalog) this.#index.stale = true;
 		this.#changed(library);
 	}
 
@@ -326,14 +328,15 @@ export class CatalogSync {
 	 * (`api/search/indexes.rs`), so a scan costs a tenth of the worker at most.
 	 */
 	#ensureIndex(library: string, catalog: Catalog) {
-		const index = this.#indexes.get(catalog);
+		const index = this.#index?.catalog === catalog ? this.#index : undefined;
 		if (!index) {
 			this.#build(library, catalog);
 		} else if (index.stale && performance.now() - index.builtAt >= index.took * INDEX_SPACING) {
 			index.stale = false;
 			setTimeout(async () => {
 				await this.#queue;
-				if (this.#closed || this.catalogs.get(library) !== catalog) return;
+				// Gone, or let go of for another library's index since.
+				if (this.#closed || this.catalogs.get(library) !== catalog || this.#index !== index) return;
 				// A file part-way through an apply is indexed once the apply announces itself.
 				if (this.#applying.has(catalog)) {
 					index.stale = true;
@@ -349,12 +352,46 @@ export class CatalogSync {
 		}
 	}
 
-	/** Builds `catalog`'s search index now, recording how long it took. */
+	/**
+	 * Builds `catalog`'s search index now, recording how long it took, after letting go of any
+	 * other: WebAssembly memory never shrinks, so two indexes held at once, or an old one held
+	 * through a rebuild, would cost the worker their memory for good. A build that fails leaves
+	 * none, which the next search builds again.
+	 */
 	#build(library: string, catalog: Catalog) {
+		this.#index = undefined;
+		for (const other of this.catalogs.values()) if (other !== catalog) other.dropIndex();
 		const started = performance.now();
 		catalog.buildIndex(library);
 		const builtAt = performance.now();
-		this.#indexes.set(catalog, { stale: false, builtAt, took: builtAt - started });
+		this.#index = { catalog, stale: false, builtAt, took: builtAt - started };
+	}
+
+	/**
+	 * Builds `library`'s search index in the background, unless it has one, so that the first
+	 * search does not wait for it: for a device that has gone offline, where search is the
+	 * device's. A changed library's index is rebuilt as a search would rebuild it. Does nothing
+	 * where the library is not on the device or is part-way through an apply, whose end a search
+	 * waits for anyway.
+	 */
+	prepareIndex(library: string) {
+		setTimeout(async () => {
+			await this.#queue;
+			const catalog = this.catalogs.get(library);
+			if (this.#closed || !catalog || this.#broken.has(catalog) || this.#applying.has(catalog))
+				return;
+			try {
+				this.#ensureIndex(library, catalog);
+			} catch (error) {
+				this.#report(describe(error));
+			}
+		});
+	}
+
+	/** Whether `library` is on the device with its search index built, so a search can be handed to it at once. */
+	indexed(library: string) {
+		const catalog = this.catalogs.get(library);
+		return this.onDevice(library) && this.#index?.catalog === catalog;
 	}
 
 	/**

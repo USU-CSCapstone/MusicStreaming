@@ -9,7 +9,6 @@ use std::path::PathBuf;
 
 use jewelcase_catalog::sync::{Kind, Rows, apply, export};
 use jewelcase_catalog::{create_schema, query, search};
-use jewelcase_core::Index;
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
@@ -25,7 +24,7 @@ const USER: i64 = 1;
 /// where it is refused. The server and a device each build their search index from their own
 /// documents.
 fn answer(conn: &Connection, name: &str, params: &Value) -> Value {
-    let index = Index::build(search::documents(conn, LIBRARY).unwrap());
+    let index = search::index(conn, LIBRARY).unwrap();
     query::answer(conn, USER, LIBRARY, name, params.clone(), Some(&index))
         .unwrap_or_else(|error| json!({ "error": error.to_string() }))
 }
@@ -495,11 +494,9 @@ async fn every_list_sort_and_filter_and_every_get_give_identical_json_on_the_ser
     }
     // The documents the search index is built from, and what searches find in it.
     let documents = |conn: &Connection| {
-        let mut documents: Vec<String> = search::documents(conn, LIBRARY)
-            .unwrap()
-            .iter()
-            .map(|document| format!("{document:?}"))
-            .collect();
+        let mut documents = Vec::new();
+        search::documents(conn, LIBRARY, |document| documents.push(format!("{document:?}")))
+            .unwrap();
         documents.sort();
         documents
     };

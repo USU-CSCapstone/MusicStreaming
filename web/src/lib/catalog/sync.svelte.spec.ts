@@ -1174,4 +1174,43 @@ describe('catalog sync', () => {
 		await h.idle();
 		await expect.poll(async () => await found(), { timeout: 5000 }).toBe(1);
 	});
+
+	it("keeps one search index: building another library's lets the first go", async () => {
+		await started('1', '2');
+		const search = (library: string) => h.query(library, 'search', { q: 'a', sectionLimit: 5 });
+		expect(await h.indexed('1')).toBe(false);
+		await search('1');
+		expect(await h.indexed('1')).toBe(true);
+		await search('2');
+		expect(await h.indexed('2')).toBe(true);
+		expect(await h.indexed('1')).toBe(false);
+		// The file itself holds none any more, not only the sync's record of it.
+		await expect(h.queryAs('1', '1', 'search', { q: 'a', sectionLimit: 5 })).rejects.toThrow(
+			'search index is not built'
+		);
+		await search('1');
+		expect(await h.indexed('1')).toBe(true);
+	});
+
+	it("a changed library's rebuild is dropped when another library's index replaced it meanwhile", async () => {
+		await started('1', '2');
+		await h.query('1', 'search', { q: 'a', sectionLimit: 5 });
+		await h.api.setFeed('1', [album(POSITION + 1, '900', 'Zebra Crossing')], POSITION + 1);
+		await h.message(libraryChanged(POSITION + 1));
+		await h.idle();
+		// Past the rebuild's spacing, so the search of 1 schedules one, which 2's build overtakes.
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		await h.searchTogether(['1', '2']);
+		expect(await h.indexed('2')).toBe(true);
+		expect(await h.indexed('1')).toBe(false);
+	});
+
+	it('builds a search index ahead of the first search when asked, and skips a library not on the device', async () => {
+		await started('1');
+		expect(await h.indexed('1')).toBe(false);
+		await h.prepareIndex('9');
+		await h.prepareIndex('1');
+		await expect.poll(() => h.indexed('1'), { timeout: 5000 }).toBe(true);
+		expect(await h.reported()).toEqual([]);
+	});
 });

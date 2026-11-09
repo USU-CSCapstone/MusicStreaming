@@ -3,7 +3,6 @@
 
 use jewelcase_catalog::query::{self, number};
 use jewelcase_catalog::search;
-use jewelcase_core::Index;
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
 
@@ -12,13 +11,21 @@ use super::Catalog;
 #[wasm_bindgen]
 impl Catalog {
     /// Builds the search index of `library` (the file's own) from the device's documents,
-    /// replacing an earlier one. The caller decides when: the index is not kept in step with
-    /// `commit`.
+    /// replacing an earlier one, which is let go first, so that the two are never held at once.
+    /// If the build fails there is none. The caller decides when: the index is not kept in step
+    /// with `commit`.
     #[wasm_bindgen(js_name = buildIndex)]
     pub fn build_index(&mut self, library: &str) -> Result<(), JsError> {
         let library = number(library, "library")?;
-        self.1 = Some(Index::build(search::documents(&self.0, library)?));
+        self.1 = None;
+        self.1 = Some(search::index(&self.0, library)?);
         Ok(())
+    }
+
+    /// Lets go of the search index, if there is one, so another library's can take its memory.
+    #[wasm_bindgen(js_name = dropIndex)]
+    pub fn drop_index(&mut self) {
+        self.1 = None;
     }
 
     /// Answers the operation `name` (an API operation's ID, such as `listTracks`) with `params`,

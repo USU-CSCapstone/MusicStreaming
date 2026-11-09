@@ -19,17 +19,26 @@ let current: CatalogSync | undefined;
 /** The device is working offline: no request leaves, and nothing pulls. */
 let workingOffline = false;
 
+/** The questions about the sync's state, which are answered at once. */
+type State = { type: 'onDevice' | 'indexed'; library: string } | { type: 'busy' };
+
+/** Whether `data` is a question about the sync's state. */
+const isState = (data: ToWorker): data is ToWorker & State =>
+	data.type === 'onDevice' || data.type === 'indexed' || data.type === 'busy';
+
 /** What `sync` says to `data`, a question about its state. */
-const stateOf = (
-	sync: CatalogSync,
-	data: { type: 'onDevice'; library: string } | { type: 'busy' }
-) => (data.type === 'busy' ? sync.busy() : sync.onDevice(data.library));
+const stateOf = (sync: CatalogSync, data: State) =>
+	data.type === 'busy'
+		? sync.busy()
+		: data.type === 'indexed'
+			? sync.indexed(data.library)
+			: sync.onDevice(data.library);
 
 /**
  * Handles a message from the page: `offline` takes effect at once, `init` loads the module
- * and makes the sync, `onDevice` and `busy` are answered at once from the sync's state, so an
- * apply or an index build never makes them time out, and every other message waits, then goes
- * to the sync in order.
+ * and makes the sync, `onDevice`, `indexed` and `busy` are answered at once from the sync's
+ * state, so an apply or an index build never makes them time out, and every other message
+ * waits, then goes to the sync in order.
  */
 onmessage = ({ data }: MessageEvent<ToWorker>) => {
 	// At once, ahead of the work already queued: a switch must stop what comes next.
@@ -37,7 +46,7 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 		workingOffline = data.value;
 		return;
 	}
-	if (current && (data.type === 'onDevice' || data.type === 'busy')) {
+	if (current && isState(data)) {
 		post({ type: 'answer', id: data.id, result: stateOf(current, data) ? '1' : '' });
 		return;
 	}
@@ -75,8 +84,11 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 			else if (data.type === 'pause') {
 				await sync.pause();
 				post({ type: 'paused' });
-			} else if (data.type === 'busy' || data.type === 'onDevice') {
+			} else if (isState(data)) {
 				post({ type: 'answer', id: data.id, result: stateOf(sync, data) ? '1' : '' });
+			} else if (data.type === 'prepareIndex') {
+				sync.prepareIndex(data.library);
+				post({ type: 'answer', id: data.id, result: '' });
 			} else if (data.type === 'query') {
 				post({
 					type: 'answer',
