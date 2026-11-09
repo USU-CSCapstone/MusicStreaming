@@ -1,6 +1,6 @@
 // The mock's routes: the read-only subset of `api/openapi.yaml` the web client
-// uses, answered from the scanner's database, plus plugin administration (`plugins.ts`)
-// and the user's playlists (`playlists.ts`).
+// uses, answered from the scanner's database, plus plugin administration (`plugins.ts`),
+// simulated scans (`scans.ts`), and the user's playlists (`playlists.ts`).
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join } from 'node:path';
@@ -16,14 +16,16 @@ import type {
 	SearchResponse,
 	SearchResult,
 	SearchSectionType,
+	Scan,
 	Tag,
 	User
 } from '../src/lib/api/types.ts';
 import { Catalog, type Losses, matchRank } from './catalog.ts';
-import { Db, toKey } from './db.ts';
+import { Db, iso, num, str, toKey } from './db.ts';
 import { image, imageSize, playbackInfo, streamAudio, waveform } from './media.ts';
 import { PlaylistStore, dbLibrary, playlistRoute } from './playlists.ts';
 import { PluginStore, adminRoute } from './plugins.ts';
+import { ScanSimulator, scanRoute } from './scans.ts';
 
 type Ctx = {
 	params: string[];
@@ -43,6 +45,19 @@ export function createApi(dataDir: string) {
 		catalog.libraries().map((l) => l.id)
 	);
 	const playlists = new PlaylistStore(dbLibrary(db, catalog));
+	// Scans are simulated over the scanner's library, starting from the last one it finished.
+	const scans = new ScanSimulator({
+		files: (lib) => {
+			const key = toKey(lib);
+			return key === null ? null : (catalog.library(key)?.trackCount ?? null);
+		},
+		folders: (lib) => {
+			const paths = db.all('SELECT path FROM tracks WHERE library_id = ?', BigInt(lib));
+			const folders = paths.map((r) => String(r.path).split('/').slice(0, -1).join('/'));
+			return [...new Set(folders)].sort();
+		},
+		seed: (lib) => mapRow(lastScan(db, BigInt(lib)), scanFromRow)
+	});
 
 	// Recent searches, kept in memory per library, newest first, so the search box can offer
 	// them. Searching the same words again moves them to the top, as the server does.
@@ -407,6 +422,9 @@ export function createApi(dataDir: string) {
 			res.statusCode = 204;
 			return res.end();
 		}
+		if (path.startsWith('/admin/libraries/')) {
+			return reply(res, async () => scanRoute(scans, req.method ?? 'GET', path));
+		}
 		// Playlists take writes, so they are answered before the read-only routes.
 		const lists = /^\/libraries\/([^/]+)(\/playlists(?:\/.*)?)$/.exec(path);
 		if (lists) {
@@ -498,6 +516,32 @@ async function reply(
 		res.statusCode = 500;
 		res.end(String(e));
 	}
+}
+
+/** The library's last scan that ran in the scanner's database, if it has one. */
+function lastScan(db: Db, lib: bigint) {
+	return db.get(
+		`SELECT * FROM scans WHERE library_id = ? AND state IN ('completed', 'suspended')
+		 ORDER BY created_at DESC, id DESC LIMIT 1`,
+		lib
+	);
+}
+
+function scanFromRow(r: Record<string, unknown>): Scan {
+	return {
+		id: String(r.id),
+		trigger: String(r.trigger) as Scan['trigger'],
+		state: String(r.state) as Scan['state'],
+		startedAt: r.started_at === null ? null : iso(r.started_at),
+		finishedAt: r.finished_at === null ? null : iso(r.finished_at),
+		filesSeen: num(r.files_seen),
+		filesProcessed: num(r.files_processed),
+		added: num(r.added),
+		updated: num(r.updated),
+		missing: num(r.missing),
+		problems: num(r.problems),
+		currentFolder: str(r.current_path)
+	};
 }
 
 function withKey<T>(s: string, f: (k: bigint) => T): T | undefined {
