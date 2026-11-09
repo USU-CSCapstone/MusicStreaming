@@ -211,6 +211,17 @@ describe('marks', () => {
 		expect(marks.liked('1', read)).toBe(true);
 	});
 
+	it('shows a like the server took though Liked Songs was deleted while it was sent', async () => {
+		const open = hold();
+		const liking = marks.like(fetch, '1', track, true);
+		// Deleted elsewhere just as this like makes it again.
+		marks.unlikeAll('1');
+		expect(marks.liked('1', track)).toBe(false);
+		open();
+		await liking;
+		expect(marks.liked('1', track)).toBe(true);
+	});
+
 	it('knows Liked Songs deleted elsewhere once it has seen which playlist it is', () => {
 		const read = { ...track, liked: true };
 		marks.receive({

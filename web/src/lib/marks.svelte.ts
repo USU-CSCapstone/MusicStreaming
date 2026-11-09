@@ -172,6 +172,10 @@ class Marks {
 		try {
 			await send();
 			this.#confirmed.set(at, { ...this.#confirmed.get(at), ...mark });
+			// What the server now holds, over anything that wrote the mark meanwhile, such as Liked
+			// Songs deleted elsewhere, whose echo this change held back; a later change decides
+			// for itself.
+			if (this.#sending.get(at) === sent) this.#merge(at, mark);
 		} catch (e) {
 			if (this.#sending.get(at) === sent) {
 				const confirmed = this.#confirmed.get(at);
