@@ -14,8 +14,8 @@ use crate::api::testing::eventually;
 use crate::db::Database;
 use crate::db::retention::{WINDOW_MS, sweep};
 use crate::db::testing::{Track, access};
-use crate::plugins::personal::disconnect;
-use crate::plugins::testing::{caller, connect};
+use crate::plugins::personal::{connectable, disconnect};
+use crate::plugins::testing::{caller, connect, grant};
 use crate::plugins::tests::HEARER;
 
 /// `user` marked track `track` of library 1 as `kind` at `at`, as the like and hide paths
@@ -394,6 +394,34 @@ async fn nothing_is_sent_for_a_suspended_account() {
     assert_eq!(sent(deliver(&db, 0, HANDLED).await), [], "nor from the feed");
     suspended("active").await;
     assert_eq!(sent(deliver(&db, 0, HANDLED).await), [(7, 1, vec![11])]);
+}
+
+/// Likes and hides are shared only with a plugin a user connected knowing it would hear them:
+/// an admin's grant made after they connected shares nothing of theirs, and their account says
+/// so, until they connect again, told this time (`requirements/users.md` §7).
+#[tokio::test]
+async fn a_grant_made_after_a_user_connected_shares_nothing_of_theirs() {
+    let (_temp, db, plugins) = setup().await;
+    // It asks for the hook, but likes and hides are not granted as user 7 connects.
+    connected(&plugins, &db, &[Marked]).await;
+    likes(&db, 7, vec![11], 150).await;
+    marked(&db, 7, 11, "liked", 150).await;
+    grant(&plugins, "plugin", &[LikesAndHides, Marked], &[LibraryRead]).await;
+    assert_eq!(sent(deliver(&db, 0, HANDLED).await), [], "granted since they connected");
+    let hears = |user: i64| {
+        let db = db.clone();
+        async move {
+            let plugins = db.read(move |conn| connectable(conn, caller(user, false))).await;
+            plugins.unwrap().iter().find(|p| p.id == "plugin").map(|p| p.hears_likes)
+        }
+    };
+    assert_eq!(hears(7).await, Some(false), "user 7's account says it does not hear theirs");
+    assert_eq!(hears(8).await, Some(true), "user 8 would be told before connecting");
+
+    db.write(|tx| disconnect(tx, "plugin", caller(7, false))).await.unwrap();
+    connect(&db, "plugin", 7, json!({}), 500).await;
+    assert_eq!(hears(7).await, Some(true));
+    assert_eq!(sent(deliver(&db, 0, HANDLED).await), [(7, 1, vec![11])], "told, and connected");
 }
 
 /// The hook needs likes and hides granted, which listening activity does not stand in for.

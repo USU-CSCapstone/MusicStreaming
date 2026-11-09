@@ -175,10 +175,12 @@ pub(super) fn hooks() -> [(Permission, String, Read); 9] {
         hook_granted(Playing),
         deliverable("p.library_id", "s.user_id", "coalesce(c.position, 0)"),
     );
-    // For each user who connected it, their likes and hides as they stand until all are out,
-    // then what they liked, unliked, hid, or unhid since.
+    // For each user who connected it while it could hear their likes and hides, so agreed to
+    // share them, those as they stand until all are out, then what they liked, unliked, hid, or
+    // unhid since. A grant made after they connected shares nothing of theirs.
     let marked = format!(
-        "SELECT * FROM (SELECT p.plugin_id, p.library_id, {} WHERE {READY}{}{CONNECTED_REACHES}) d \
+        "SELECT * FROM (SELECT p.plugin_id, p.library_id, {} WHERE {READY}{}{CONNECTED_REACHES} \
+                        AND s.marks_shared_at IS NOT NULL) d \
          WHERE d.after IS NOT NULL \
             OR EXISTS (SELECT 1 FROM mark_events e WHERE e.library_id = d.library_id \
                        AND e.user_id = d.user_id AND e.seq > d.position)",
