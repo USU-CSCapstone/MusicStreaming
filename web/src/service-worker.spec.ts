@@ -33,7 +33,8 @@ async function load(version: string, build: string[], caches: ReturnType<typeof 
 	const skipWaiting = vi.fn(async () => {});
 	vi.stubGlobal('self', {
 		addEventListener: (type: string, handler: Handler) => (handlers[type] = handler),
-		skipWaiting
+		skipWaiting,
+		clients: { claim: async () => {} }
 	});
 	vi.stubGlobal('location', { origin: 'https://app.test' });
 	vi.stubGlobal('caches', caches);

@@ -425,6 +425,20 @@ test.describe('the offline shell', () => {
 	// The service worker runs here, as in `pwa.e2e.ts`: it answers the reloads below from its own files.
 	test.use({ serviceWorkers: 'allow' });
 
+	test('a page not opened before loads offline on the first visit', async ({ page, context }) => {
+		await serveGolden(page, []);
+		await page.goto('/');
+		await synced(page);
+		// No reload: the worker takes over the page it was installed from.
+		await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
+		const { items } = await query<Albums>(page, 'listAlbums');
+
+		await context.setOffline(true);
+		await page.route('**/api/v1/**', (route) => route.abort());
+		await go(page, `/albums/${items[0].id}`);
+		await expect(page.getByRole('heading', { name: items[0].title })).toBeVisible();
+	});
+
 	test('reloading offline after one visit shows the app', async ({ page, context }) => {
 		await serveGolden(page, []);
 		await page.goto('/');

@@ -34,15 +34,19 @@ worker.addEventListener('install', (event) => {
  * Deletes the caches of older versions but the newest one, which pages still open from before
  * this version need for their lazy chunks. Versions are timestamps, so they sort by age; two
  * shells bound the disk the build costs, and a page left open across two upgrades has to reload.
+ * Then takes over the pages already open, so a first visit's pages not yet seen load offline.
  */
 worker.addEventListener('activate', (event) => {
 	event.waitUntil(
-		caches.keys().then((keys) => {
-			const older = keys
-				.filter((key) => key.startsWith('shell-') && key !== CACHE)
-				.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
-			return Promise.all(older.slice(1).map((key) => caches.delete(key)));
-		})
+		caches
+			.keys()
+			.then((keys) => {
+				const older = keys
+					.filter((key) => key.startsWith('shell-') && key !== CACHE)
+					.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+				return Promise.all(older.slice(1).map((key) => caches.delete(key)));
+			})
+			.then(() => worker.clients.claim())
 	);
 });
 
