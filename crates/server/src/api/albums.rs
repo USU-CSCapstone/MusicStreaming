@@ -86,7 +86,8 @@ pub struct ListQuery {
 
 /// The library's albums, or those credited to `artistId` as `artistCredit` says and whose
 /// tracks carry the tags `tagAll` and `tagAny` name, a page at a time; without those the caller
-/// hid whole ([`hidden::albums`]), and those the filters reach only through tracks they hid.
+/// hid whole ([`Losses::whole_albums`](hidden::Losses)), and those the filters reach only through
+/// tracks they hid.
 pub async fn list(
     State(db): State<Arc<Database>>,
     Scope { user, library }: Scope,
@@ -99,7 +100,7 @@ pub async fn list(
         .read(move |conn| {
             let mut source = source(conn, library, artist, credit, &tags)?;
             let losses = hidden::losses(conn, user, library)?;
-            let mut gone = hidden::albums(conn, user, library)?;
+            let mut gone = losses.whole_albums.clone();
             let owners = losses.albums.iter().map(|(&album, loss)| (album, &loss.tags));
             gone.extend(Tags::read(conn, library, &TAGGED, &tags)?.lost(conn, &TAGGED, owners)?);
             if let (Some(AnyId(Some(artist))), ArtistCredit::Featured | ArtistCredit::Any) =
@@ -125,12 +126,13 @@ pub async fn get(
     Path((_, Id(album))): Path<(Id, Id)>,
 ) -> Result<Json<Album>, Problem> {
     db.read(move |conn| {
-        if hidden::albums(conn, user, library)?.contains(&album) {
+        let losses = hidden::losses(conn, user, library)?;
+        if losses.whole_albums.contains(&album) {
             return Ok(None);
         }
         let mut found = representation::album(conn, library, album)?;
         if let Some(album) = &mut found {
-            album.lose(&hidden::losses(conn, user, library)?);
+            album.lose(&losses);
         }
         Ok(found)
     })

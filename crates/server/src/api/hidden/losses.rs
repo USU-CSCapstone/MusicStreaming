@@ -9,10 +9,13 @@ use rusqlite::{Connection, params};
 
 use super::{HID, albums, artists};
 
-/// What the hidden tracks take from each count, by what holds them. Nothing, for a user who hid
-/// nothing.
+/// What the hidden tracks take from each count, by what holds them, and the albums and artists
+/// they take whole ([`albums`], [`artists`]), which every list and page leaves out. Nothing, for
+/// a user who hid nothing.
 #[derive(Default)]
 pub struct Losses {
+    pub whole_albums: Vec<i64>,
+    pub whole_artists: Vec<i64>,
     pub library: LibraryLoss,
     pub albums: HashMap<i64, AlbumLoss>,
     pub artists: HashMap<i64, ArtistLoss>,
@@ -178,14 +181,15 @@ pub fn losses(conn: &Connection, user: i64, library: i64) -> rusqlite::Result<Lo
 
     // Albums hidden whole leave the library's count and their artists'; artists hidden whole
     // leave the library's.
-    let whole = albums(conn, user, library)?;
-    losses.library.albums = i64::try_from(whole.len()).unwrap_or(i64::MAX);
-    losses.library.artists = i64::try_from(artists(conn, user, library)?.len()).unwrap_or(i64::MAX);
+    losses.whole_albums = albums(conn, user, library)?;
+    losses.whole_artists = artists(conn, user, library)?;
+    losses.library.albums = i64::try_from(losses.whole_albums.len()).unwrap_or(i64::MAX);
+    losses.library.artists = i64::try_from(losses.whole_artists.len()).unwrap_or(i64::MAX);
     let mut owners = conn.prepare_cached(
         "SELECT artist_id, count(*) FROM album_artists \
          WHERE album_id IN (SELECT value FROM json_each(?1)) GROUP BY artist_id",
     )?;
-    let whole = serde_json::to_string(&whole).expect("IDs serialize");
+    let whole = serde_json::to_string(&losses.whole_albums).expect("IDs serialize");
     let mut rows = owners.query([whole])?;
     while let Some(row) = rows.next()? {
         losses.artists.entry(row.get(0)?).or_default().albums = row.get(1)?;

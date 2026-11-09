@@ -18,10 +18,11 @@ pub use indexes::Indexes;
 use super::albums::{self, AlbumSummary};
 use super::artists::{self, ArtistSummary};
 use super::extract::Query;
+use super::hidden::{self, Losses};
 use super::scope::Scope;
 use super::tag_filter::{TagFilter, Tags};
 use super::tracks::{self, TrackSummary};
-use super::{Problem, hidden, page};
+use super::{Problem, page};
 use crate::db::{Database, by_ids};
 
 /// The spec's `search` parameters.
@@ -92,16 +93,16 @@ pub async fn search(
     // albums and artists every track of which they hid. The tagged sets are everyone's, so the
     // albums and artists the tags reach only through hidden tracks are left out here too.
     let tags = filter.clone();
-    let hid: [HashSet<i64>; 3] = db
+    let (hid, losses) = db
         .read(move |conn| {
+            let losses = hidden::losses(conn, user, library)?;
             // By `Kind`, as the tagged sets are.
             let mut hid: [HashSet<i64>; 3] = [
                 hidden::ids(conn, user, library)?,
-                hidden::albums(conn, user, library)?.into_iter().collect(),
-                hidden::artists(conn, user, library)?.into_iter().collect(),
+                losses.whole_albums.iter().copied().collect(),
+                losses.whole_artists.iter().copied().collect(),
             ];
             if !tags.is_empty() && !hid[Kind::Track as usize].is_empty() {
-                let losses = hidden::losses(conn, user, library)?;
                 let albums = losses.albums.iter().map(|(&album, loss)| (album, &loss.tags));
                 let tagged = &albums::TAGGED;
                 let lost = Tags::read(conn, library, tagged, &tags)?.lost(conn, tagged, albums)?;
@@ -111,14 +112,14 @@ pub async fn search(
                 let lost = Tags::read(conn, library, tagged, &tags)?.lost(conn, tagged, artists)?;
                 hid[Kind::Artist as usize].extend(lost);
             }
-            Ok::<_, rusqlite::Error>(hid)
+            Ok::<_, rusqlite::Error>((hid, losses))
         })
         .await?;
     let found = index.search_within(&query.q, &kinds, limit, |kind, id| {
         !hid[kind as usize].contains(&id)
             && tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
     });
-    let sections = db.read(move |conn| results(conn, user, library, found)).await?;
+    let sections = db.read(move |conn| results(conn, user, library, found, &losses)).await?;
 
     Ok(Json(SearchResponse {
         query: query.q,
@@ -176,15 +177,16 @@ fn section_type(kind: Kind) -> &'static str {
     }
 }
 
-/// The summaries of what the index found, as the browse lists show them to `user`.
+/// The summaries of what the index found, as the browse lists show them to `user`, whose hidden
+/// tracks take `losses` from them.
 fn results(
     conn: &Connection,
     user: i64,
     library: i64,
     found: Vec<Found>,
+    losses: &Losses,
 ) -> rusqlite::Result<Vec<Section>> {
     let mut sections = Vec::with_capacity(found.len());
-    let losses = hidden::losses(conn, user, library)?;
     for section in found {
         let ids = &section.ids;
         let items = match section.kind {
@@ -198,12 +200,12 @@ fn results(
             }
             Kind::Album => by_ids(conn, albums::SELECT, "albums al", "", library, ids, |row| {
                 let mut album = albums::summary(row)?;
-                album.lose(&losses);
+                album.lose(losses);
                 Ok(SearchResult::Album { album })
             })?,
             Kind::Artist => by_ids(conn, artists::SELECT, "artists ar", "", library, ids, |row| {
                 let mut artist = artists::summary(row)?;
-                artist.lose(&losses);
+                artist.lose(losses);
                 Ok(SearchResult::Artist { artist })
             })?,
         };
