@@ -76,27 +76,60 @@ pub struct Import {
     hash: Sha256,
 }
 
-/// Where the inflated bytes go: the pool's import, which takes exactly the size it was begun with.
+/// How much of a database file holds the facts its size is read from: the 100-byte header.
+const HEADER: usize = 100;
+
+/// Where the inflated bytes go: the pool's import, begun once the header says how big it is.
 struct Target {
-    import: DbImport<OpfsSAHImportTarget<'static>>,
-    /// The bytes the import still takes.
-    left: u64,
+    pool: &'static OpfsSAHPoolUtil,
+    name: String,
+    /// The bytes written before the import began, up to the write that completes the header.
+    head: Vec<u8>,
+    import: Option<DbImport<OpfsSAHImportTarget<'static>>>,
     /// The pool's own failure, kept so it is told apart from a damaged snapshot.
     fault: Option<OpfsSAHError>,
 }
 
+/// Hands `bytes` to `import`, which takes exactly the size the header gave. The import's own
+/// refusals, such as more bytes than that or a header that is not a database's, are a damaged
+/// snapshot; the pool's are not, and are kept in `fault`.
+fn put(
+    import: &mut DbImport<OpfsSAHImportTarget<'static>>,
+    fault: &mut Option<OpfsSAHError>,
+    bytes: &[u8],
+) -> io::Result<()> {
+    import.write(bytes).map_err(|error| match error {
+        OpfsSAHError::Transfer(_) => io::Error::other(error.to_string()),
+        error => {
+            *fault = Some(error);
+            io::Error::other("the import failed")
+        }
+    })
+}
+
 impl Write for Target {
-    /// Hands `bytes` to the import. More bytes than it was begun with is a damaged snapshot.
+    /// Keeps the bytes until the header is whole, then begins the import it sizes and writes them
+    /// and the rest to it.
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        let len = bytes.len() as u64;
-        if len > self.left {
-            return Err(io::Error::other("more bytes than the gzip trailer says"));
+        if let Some(import) = &mut self.import {
+            put(import, &mut self.fault, bytes)?;
+            return Ok(bytes.len());
         }
-        if let Err(error) = self.import.write(bytes) {
-            self.fault = Some(error);
-            return Err(io::Error::other("the import failed"));
+        self.head.extend_from_slice(bytes);
+        if self.head.len() >= HEADER {
+            let head = std::mem::take(&mut self.head);
+            let import = match self.pool.begin_import(&self.name, page_count_size(&head)?) {
+                Ok(import) => import,
+                Err(error @ OpfsSAHError::Transfer(_)) => {
+                    return Err(io::Error::other(error.to_string()));
+                }
+                Err(error) => {
+                    self.fault = Some(error);
+                    return Err(io::Error::other("the import failed"));
+                }
+            };
+            put(self.import.insert(import), &mut self.fault, &head)?;
         }
-        self.left -= len;
         Ok(bytes.len())
     }
 
@@ -105,24 +138,39 @@ impl Write for Target {
     }
 }
 
+/// The size in bytes of the database whose first 100 bytes are `header`: its page size (offset 16,
+/// where 1 means 65,536) times the page count in its header (offset 28). That count counts only
+/// if the header's "version-valid-for" number (offset 92) is the file change counter (offset 24),
+/// which says the last writer kept it up; otherwise it is an error. Whether the result is a
+/// database's size, and the header a database's, is for the import to refuse.
+fn page_count_size(header: &[u8]) -> io::Result<u64> {
+    let number = |at: usize| {
+        u32::from_be_bytes([header[at], header[at + 1], header[at + 2], header[at + 3]])
+    };
+    if number(92) != number(24) {
+        return Err(io::Error::other("the header's page count is not valid"));
+    }
+    let page_size = match u16::from_be_bytes([header[16], header[17]]) {
+        1 => 65536,
+        size => u64::from(size),
+    };
+    Ok(page_size * u64::from(number(28)))
+}
+
 #[wasm_bindgen]
 impl Import {
-    /// Starts importing a gzipped database file as `name`. `size` is the inflated size, which the
-    /// gzip trailer's last four bytes give (little-endian), so a database must be under 4 GiB: a
-    /// larger one's size wraps and its import fails as damaged. One that is no database's size
-    /// throws as a damaged snapshot. Nothing is visible under `name` until `finish`.
-    pub async fn begin(name: String, size: u32) -> Result<Import, JsError> {
-        if size < 512 || !size.is_multiple_of(512) {
-            return Err(JsError::new(&format!("{DAMAGED}: {size} bytes is no database's size")));
-        }
-        let size = u64::from(size);
-        let import = pool().await?.begin_import(&name, size)?;
-        let target = Target { import, left: size, fault: None };
+    /// Starts importing a gzipped database file as `name`. The inflated size comes from the
+    /// database's own header, so the file's size has no limit but the pool's. Nothing is visible
+    /// under `name` until `finish`.
+    pub async fn begin(name: String) -> Result<Import, JsError> {
+        let target =
+            Target { pool: pool().await?, name, head: Vec::new(), import: None, fault: None };
         let inflate = GzDecoder::new(BufWriter::with_capacity(WRITE_CHUNK, target));
         Ok(Import { inflate, hash: Sha256::new() })
     }
 
-    /// Takes the gzip's next bytes. Bytes that do not inflate throw as a damaged snapshot.
+    /// Takes the gzip's next bytes. Bytes that do not inflate, or a header that does not say how
+    /// big the database is, throw as a damaged snapshot.
     pub fn write(&mut self, bytes: &[u8]) -> Result<(), JsError> {
         self.hash.update(bytes);
         let written = self.inflate.write_all(bytes);
@@ -131,7 +179,8 @@ impl Import {
 
     /// Publishes the file once the whole gzip has been written. With `sha256` (lowercase hex),
     /// the file is published only if the gzip written hashes to it; otherwise, or if the gzip is
-    /// cut short or its checksum fails, it throws and the import is discarded.
+    /// cut short, its checksum fails, or it held less than a header or less than the header said,
+    /// it throws and the import is discarded.
     pub fn finish(self, sha256: Option<String>) -> Result<(), JsError> {
         if let Some(expected) = sha256 {
             let actual: String = self.hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
@@ -144,9 +193,18 @@ impl Import {
         if let Err(error) = finished {
             return Err(failure(inflate.get_mut().get_mut(), error));
         }
-        // Flushed, so nothing is left in the buffer; gzip's check of its length found it whole.
+        // Flushed, so nothing is left in the buffer. The import's own count, not gzip's length
+        // check, which wraps at 4 GiB, says whether it is whole.
         let (target, _) = inflate.finish()?.into_parts();
-        Ok(target.import.finish()?)
+        let Some(import) = target.import else {
+            return Err(JsError::new(&format!("{DAMAGED}: it ends before a database's header")));
+        };
+        match import.finish() {
+            Err(error @ OpfsSAHError::Transfer(_)) => {
+                Err(JsError::new(&format!("{DAMAGED}: {error}")))
+            }
+            result => Ok(result?),
+        }
     }
 }
 

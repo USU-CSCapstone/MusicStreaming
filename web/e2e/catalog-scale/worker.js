@@ -43,7 +43,7 @@ async function importPhase(rows) {
 	const head = await fetch('/data/device.db', { method: 'HEAD' });
 	const size = Number(head.headers.get('content-length'));
 	const response = await fetch('/data/device.db.gz');
-	const target = await Import.begin('import.db', size);
+	const target = await Import.begin('import.db');
 	let longest = 0;
 	for await (const chunk of response.body) {
 		const before = now();

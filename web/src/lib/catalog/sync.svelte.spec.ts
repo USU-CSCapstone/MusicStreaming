@@ -625,6 +625,46 @@ describe('catalog sync', () => {
 		expect(await h.reported()).toEqual([]);
 	});
 
+	// The import is sized from the database's own header: page size (offset 16) times page count
+	// (offset 28), which counts only while "version-valid-for" (offset 92) is the change counter
+	// (offset 24). Whatever the header does not give is a damaged snapshot, downloaded again.
+	it.each([
+		['more pages than the file has', (v: DataView) => v.setUint32(28, v.getUint32(28) + 1)],
+		['fewer pages than the file has', (v: DataView) => v.setUint32(28, v.getUint32(28) - 1)],
+		['a page count its writer did not keep', (v: DataView) => v.setUint32(92, v.getUint32(24) + 1)],
+		['no page count', (v: DataView) => v.setUint32(28, 0)],
+		['not SQLite', (v: DataView) => v.setUint8(0, 0x58)]
+	])('a snapshot with %s is damaged and never shown', async (_, damage) => {
+		const bytes = snapshot.slice();
+		damage(new DataView(bytes.buffer));
+		await h.api.setSnapshot(bytes);
+		await h.api.setLibraries(['1']);
+		await h.api.setFeed('1', [], POSITION);
+		await h.api.setPosition('1', POSITION);
+		await h.api.setAccount([...playlists, elsewhere], accountHead);
+		await h.start();
+		await h.idle();
+
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(3);
+		expect(await h.libraries()).toEqual([]);
+		expect(await h.files()).toEqual([]);
+		expect(await h.reported()).toHaveLength(1);
+	});
+
+	it('a snapshot that ends before a database header is damaged and never shown', async () => {
+		await h.api.setSnapshot(snapshot.slice(0, 60));
+		await h.api.setLibraries(['1']);
+		await h.api.setFeed('1', [], POSITION);
+		await h.api.setPosition('1', POSITION);
+		await h.api.setAccount([...playlists, elsewhere], accountHead);
+		await h.start();
+		await h.idle();
+
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(3);
+		expect(await h.libraries()).toEqual([]);
+		expect(await h.reported()).toHaveLength(1);
+	});
+
 	it('a snapshot that never matches its ETag is never shown', async () => {
 		await serve('1');
 		await h.api.wrongEtag(5);

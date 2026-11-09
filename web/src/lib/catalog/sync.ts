@@ -910,10 +910,7 @@ export class CatalogSync {
 				download.flush();
 				await this.#pool(async () => {
 					const size = download.getSize();
-					// The gzip trailer's last four bytes are the inflated size, little-endian.
-					const trailer = new Uint8Array(4);
-					download.read(trailer, { at: Math.max(0, size - 4) });
-					const target = await Import.begin(file, new DataView(trailer.buffer).getUint32(0, true));
+					const target = await Import.begin(file);
 					try {
 						const chunk = new Uint8Array(CHUNK);
 						for (let from = 0; from < size;) {
