@@ -318,6 +318,9 @@ describe('Liked Songs', () => {
 			title: 'Faves'
 		});
 		expect(renamed.status).toBe(422);
+		// The version is checked first, as the server checks it.
+		const stale = call<Problem>('PATCH', '/playlists/liked-1', { baseVersion: 1, title: 'Faves' });
+		expect(stale.status).toBe(409);
 		const items = [2, 1, 2].map((id) => ({ type: 'track', id: String(id) }));
 		const added = call('PATCH', '/playlists/liked-1', {
 			baseVersion: 2,

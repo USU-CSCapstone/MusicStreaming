@@ -209,11 +209,6 @@ export class PlaylistStore {
 			throw invalid('/pinned', 'Pinned must be true or false.');
 		}
 		if (ops !== undefined) this.#checkOps(lib, ops);
-		const liked = entry.playlist.kind === 'liked';
-		if (liked && (title !== undefined || description !== undefined)) {
-			throw invalid('', 'Liked Songs keeps its title, and has no description.');
-		}
-
 		const current = entry.playlist.version;
 		if (baseVersion !== current) {
 			throw new PlaylistError(
@@ -222,6 +217,11 @@ export class PlaylistStore {
 				'The playlist changed somewhere else, so this edit was not applied.',
 				{ currentVersion: current }
 			);
+		}
+		// As the server does, only once the version matches.
+		const liked = entry.playlist.kind === 'liked';
+		if (liked && (title !== undefined || description !== undefined)) {
+			throw invalid('', 'Liked Songs keeps its title, and has no description.');
 		}
 
 		let items = entry.items;
