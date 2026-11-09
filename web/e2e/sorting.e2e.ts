@@ -1,7 +1,10 @@
-import { type Page, expect, test } from '@playwright/test';
-import { album, artist, serveLibrary, signalMix } from './fixtures';
+import type { Page } from '@playwright/test';
+import { createPlaylist, expect, test } from './test';
 
-// Sorting track lists (`requirements/conventions.md` §4.1).
+// Sorting track lists (`requirements/conventions.md` §4.1). The tracks were added in the order
+// Signal Part 1, Part 2, Remix, then Kindling, which is on another album.
+
+const SIGNAL = ['Signal Part 1', 'Signal Part 2', 'Signal Remix'];
 
 const titles = (page: Page) => page.locator('.track .title');
 const heading = (page: Page, name: string) => page.getByRole('button', { name, exact: true });
@@ -21,10 +24,10 @@ test.describe('a playlist', () => {
 		await page.setViewportSize({ width: 1280, height: 700 });
 	});
 
-	test('sorts by a column, and plays as shown', async ({ page }) => {
-		await serveLibrary(page, { playlists: [signalMix] });
-		await page.goto(`/playlists/${signalMix.id}`);
-		await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
+	test('sorts by a column, and plays as shown', async ({ page, server }) => {
+		const id = await createPlaylist(server, 'Signal Mix', SIGNAL);
+		await page.goto(`/playlists/${id}`);
+		await expect(titles(page)).toHaveText(SIGNAL);
 
 		await heading(page, 'Title').click();
 		await heading(page, 'Title, sorted ascending').click();
@@ -40,10 +43,13 @@ test.describe('a playlist', () => {
 		await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
 	});
 
-	test('moves nothing while sorted, but still removes the songs picked', async ({ page }) => {
-		await serveLibrary(page, { playlists: [signalMix] });
+	test('moves nothing while sorted, but still removes the songs picked', async ({
+		page,
+		server
+	}) => {
+		const id = await createPlaylist(server, 'Signal Mix', SIGNAL);
 		const sent = edits(page);
-		await page.goto(`/playlists/${signalMix.id}?sort=title&order=desc`);
+		await page.goto(`/playlists/${id}?sort=title&order=desc`);
 		await expect(titles(page)).toHaveText(['Signal Remix', 'Signal Part 2', 'Signal Part 1']);
 
 		// Neither the keyboard nor a drag moves a song.
@@ -72,33 +78,29 @@ test.describe('a playlist', () => {
 		await expect(heading(page, 'Title, sorted descending')).toBeVisible();
 	});
 
-	test('sorts by when each song was added to it', async ({ page }) => {
-		await serveLibrary(page, { playlists: [signalMix] });
-		await page.goto(`/playlists/${signalMix.id}`);
+	test('sorts by when each song was added to it', async ({ page, server }) => {
+		const id = await createPlaylist(server, 'Signal Mix', SIGNAL);
+		await page.goto(`/playlists/${id}`);
 		// Signal Part 1 again, added now, after the rest.
 		await page.getByRole('button', { name: 'Actions for Signal Part 1' }).click();
 		await page.getByRole('menuitem', { name: /Signal Mix/ }).click();
 		await page.getByRole('button', { name: 'Add anyway' }).click();
-		const order = ['Signal Part 1', 'Signal Part 2', 'Signal Remix', 'Signal Part 1'];
-		await expect(titles(page)).toHaveText(order);
+		await expect(titles(page)).toHaveText([...SIGNAL, 'Signal Part 1']);
 
+		const ids = server.ids.tracks;
+		// The songs added together follow the track ID, which the server picked at random.
+		const byId = SIGNAL.toSorted((a, b) => (BigInt(ids[a]) < BigInt(ids[b]) ? -1 : 1));
 		await heading(page, 'Date added').click();
-		await expect(titles(page)).toHaveText(order);
+		await expect(titles(page)).toHaveText([...byId, 'Signal Part 1']);
 		await heading(page, 'Date added, sorted ascending').click();
-		// Newest first; the songs added together follow the track ID, reversed (design/general.md §3).
-		await expect(titles(page)).toHaveText([
-			'Signal Part 1',
-			'Signal Remix',
-			'Signal Part 2',
-			'Signal Part 1'
-		]);
+		// Newest first, the ties reversed (design/general.md §3).
+		await expect(titles(page)).toHaveText(['Signal Part 1', ...byId.toReversed()]);
 	});
 });
 
-test('an album sorts as one run, and plays as shown', async ({ page }) => {
+test('an album sorts as one run, and plays as shown', async ({ page, server }) => {
 	await page.setViewportSize({ width: 1280, height: 700 });
-	await serveLibrary(page);
-	await page.goto(`/albums/${album.id}`);
+	await page.goto(`/albums/${server.ids.albums.Signal}`);
 	await expect(page.getByText('Disc 2')).toBeVisible();
 	// Every song shares the album, so it heads no Album or Year column.
 	await expect(heading(page, 'Album')).toHaveCount(0);
@@ -114,13 +116,23 @@ test('an album sorts as one run, and plays as shown', async ({ page }) => {
 
 test('search results sort without searching again', async ({ page }) => {
 	await page.setViewportSize({ width: 1280, height: 700 });
-	await serveLibrary(page);
 	let searches = 0;
 	page.on('request', (r) => {
 		if (/\/api\/v1\/libraries\/[^/]+\/search\?/.test(r.url())) searches++;
 	});
+	const answered = page.waitForResponse((r) =>
+		/\/api\/v1\/libraries\/[^/]+\/search\?/.test(r.url())
+	);
 	await page.goto('/search?q=signal');
-	await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
+	// The order they matched in is the server's to say.
+	const found = (await (await answered).json()).sections.find(
+		(section: { type: string }) => section.type === 'tracks'
+	);
+	const matched: string[] = found.items.map(
+		(item: { track: { title: string } }) => item.track.title
+	);
+	expect(matched.toSorted()).toEqual(SIGNAL);
+	await expect(titles(page)).toHaveText(matched);
 
 	await heading(page, 'Title').click();
 	await heading(page, 'Title, sorted ascending').click();
@@ -128,7 +140,7 @@ test('search results sort without searching again', async ({ page }) => {
 	await expect(titles(page)).toHaveText(['Signal Remix', 'Signal Part 2', 'Signal Part 1']);
 	// Unsorted is the order they matched in.
 	await heading(page, 'Title, sorted descending').click();
-	await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
+	await expect(titles(page)).toHaveText(matched);
 	expect(searches).toBe(1);
 });
 
@@ -140,21 +152,30 @@ test.describe('songs, which the server sorts', () => {
 	test('the library opens newest first, and a heading steps through its sorts', async ({
 		page
 	}) => {
-		await serveLibrary(page);
 		await page.goto('/songs');
-		const newest = ['Signal Part 2', 'Signal Remix', 'Signal Part 1'];
+		const newest = ['Kindling', 'Signal Remix', 'Signal Part 2', 'Signal Part 1'];
 		await expect(titles(page)).toHaveText(newest);
 		await expect(page.getByRole('button', { name: /sorted/ })).toHaveCount(0);
 
 		await heading(page, 'Title').click();
 		await expect(page).toHaveURL(/\?sort=title&order=asc$/);
-		await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
+		await expect(titles(page)).toHaveText(['Kindling', ...SIGNAL]);
 		await heading(page, 'Title, sorted ascending').click();
-		await expect(titles(page)).toHaveText(['Signal Remix', 'Signal Part 2', 'Signal Part 1']);
+		await expect(titles(page)).toHaveText([
+			'Signal Remix',
+			'Signal Part 2',
+			'Signal Part 1',
+			'Kindling'
+		]);
 
 		// A reload asks the server for the same order.
 		await page.reload();
-		await expect(titles(page)).toHaveText(['Signal Remix', 'Signal Part 2', 'Signal Part 1']);
+		await expect(titles(page)).toHaveText([
+			'Signal Remix',
+			'Signal Part 2',
+			'Signal Part 1',
+			'Kindling'
+		]);
 
 		await heading(page, 'Title, sorted descending').click();
 		await expect(page).not.toHaveURL(/sort=/);
@@ -163,30 +184,38 @@ test.describe('songs, which the server sorts', () => {
 
 	test('sorts from a menu where the headings do not fit', async ({ page }) => {
 		await page.setViewportSize({ width: 390, height: 700 });
-		await serveLibrary(page);
 		await page.goto('/songs');
-		await expect(titles(page)).toHaveText(['Signal Part 2', 'Signal Remix', 'Signal Part 1']);
+		await expect(titles(page)).toHaveText([
+			'Kindling',
+			'Signal Remix',
+			'Signal Part 2',
+			'Signal Part 1'
+		]);
 
 		await page.getByRole('button', { name: 'Sort', exact: true }).click();
 		await page.getByRole('menuitemradio', { name: 'Title' }).click();
 		await expect(page).toHaveURL(/\?sort=title&order=asc$/);
-		await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
+		await expect(titles(page)).toHaveText(['Kindling', ...SIGNAL]);
 		await expect(page.getByRole('button', { name: 'Sort, by title ascending' })).toBeFocused();
 	});
 
-	test("an artist's songs sort without loading the rest of the page again", async ({ page }) => {
-		await serveLibrary(page);
+	test("an artist's songs sort without loading the rest of the page again", async ({
+		page,
+		server
+	}) => {
 		const asked: string[] = [];
 		page.on('request', (r) => {
 			const path = new URL(r.url()).pathname;
 			if (/\/api\/v1\/libraries\/[^/]+\/(artists|albums|tracks)/.test(path)) asked.push(path);
 		});
-		await page.goto(`/artists/${artist.id}`);
+		await page.goto(`/artists/${server.ids.artists['Aurora Lane']}`);
 		const songs = page
 			.locator('section')
 			.filter({ has: page.getByRole('heading', { name: 'Songs' }) });
 		// Unsorted, an artist's songs are in album order.
-		await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
+		await expect(titles(page)).toHaveText(SIGNAL);
+		// The page's other requests are done before the count starts.
+		await page.waitForLoadState('networkidle');
 		asked.length = 0;
 
 		await songs.getByRole('button', { name: 'Title', exact: true }).click();
@@ -199,7 +228,7 @@ test.describe('songs, which the server sorts', () => {
 		await expect(playing(page)).toHaveText('Signal Remix');
 
 		// A link to the sorted songs opens sorted.
-		await page.goto(`/artists/${artist.id}?sort=title&order=desc`);
+		await page.goto(`/artists/${server.ids.artists['Aurora Lane']}?sort=title&order=desc`);
 		await expect(titles(page)).toHaveText(['Signal Remix', 'Signal Part 2', 'Signal Part 1']);
 		await expect(songs.getByRole('button', { name: 'Title, sorted descending' })).toBeVisible();
 	});

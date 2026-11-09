@@ -7,7 +7,18 @@ export { expect } from '@playwright/test';
 
 const CLIENT = { 'X-Jewelcase-Client': 'web' };
 
-export const test = base.extend<object, { server: Server }>({
+/** Creates the owner's playlist of the tracks titled `trackTitles`, in that order, and returns its ID. */
+export async function createPlaylist(server: Server, title: string, trackTitles: string[]) {
+	const { library, tracks } = server.ids;
+	const items = trackTitles.map((name) => ({ type: 'track', id: tracks[name] }));
+	const made = await server.api(`/libraries/${library}/playlists`, {
+		method: 'POST',
+		body: { title, items }
+	});
+	return made.id as string;
+}
+
+export const test = base.extend<{ cleanPlaylists: void }, { server: Server }>({
 	server: [
 		// eslint-disable-next-line no-empty-pattern -- Playwright reads fixtures from this pattern
 		async ({}, use) => {
@@ -19,6 +30,17 @@ export const test = base.extend<object, { server: Server }>({
 			}
 		},
 		{ scope: 'worker', timeout: 120_000 }
+	],
+	// Every test starts with no playlists, as the server may be shared with the tests before it.
+	cleanPlaylists: [
+		async ({ server }, use) => {
+			const path = `/libraries/${server.ids.library}/playlists`;
+			for (const { id } of (await server.api(`${path}?limit=200`)).items) {
+				await server.api(`${path}/${id}`, { method: 'DELETE' });
+			}
+			await use();
+		},
+		{ auto: true }
 	],
 	baseURL: async ({ server }, use) => use(server.url),
 	// The page's context logs in as the owner, as the web app does, and logs out afterwards.

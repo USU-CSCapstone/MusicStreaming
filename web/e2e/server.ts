@@ -115,6 +115,7 @@ export interface Ids {
 	library: string;
 	tracks: Record<string, string>;
 	albums: Record<string, string>;
+	artists: Record<string, string>;
 	tags: Record<string, string>;
 }
 
@@ -237,6 +238,7 @@ export async function startServer(): Promise<Server> {
 			library,
 			tracks: await byName('/tracks', 'title'),
 			albums: await byName('/albums', 'title'),
+			artists: await byName('/artists', 'name'),
 			tags: await byName('/tags', 'name')
 		};
 		return { url, username, password, ids, api, stop };
