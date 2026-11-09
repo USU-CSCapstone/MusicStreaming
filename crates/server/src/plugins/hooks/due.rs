@@ -118,13 +118,14 @@ pub fn still(conn: &Connection, due: &Due, now: i64) -> rusqlite::Result<bool> {
 pub(super) fn hooks() -> [(Permission, String, Read); 8] {
     use Permission::*;
     let pair = position(Hook::Library);
-    // Changes of one kind of entity in the library, for the hook that asked for them.
+    // Changes plugins can see to one kind of entity in the library, for the hook that asked for
+    // them.
     let changes = |hook: Permission, entity: &str| {
         format!(
             "SELECT p.plugin_id, p.library_id, {pair} WHERE {READY}{} \
              AND EXISTS (SELECT 1 FROM library_changes f \
                          WHERE f.library_id = p.library_id AND f.entity_type = '{entity}' \
-                         AND f.seq > coalesce(c.position, 0))",
+                         AND f.plugin_seq > coalesce(c.position, 0))",
             hook_granted(hook),
         )
     };

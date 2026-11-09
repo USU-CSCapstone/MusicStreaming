@@ -16,6 +16,7 @@ pub mod libraries;
 pub mod migrations;
 mod new_id;
 pub mod plays;
+pub mod plugin_view;
 mod reach;
 pub mod retention;
 pub mod store;

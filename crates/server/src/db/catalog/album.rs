@@ -114,9 +114,9 @@ pub(super) fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i
     let album_type = album_type(kind, any_compilation != 0, track_total);
     let labels = most_used(tx, "labels", album)?;
 
-    let old_sort_key: Vec<u8> = tx
-        .prepare_cached("SELECT sort_key FROM albums WHERE id = ?1")?
-        .query_row([album], |r| r.get(0))?;
+    let (old_title, old_sort_key): (Option<String>, Vec<u8>) = tx
+        .prepare_cached("SELECT title, sort_key FROM albums WHERE id = ?1")?
+        .query_row([album], |r| Ok((r.get(0)?, r.get(1)?)))?;
     tx.prepare_cached(
         "UPDATE albums SET title = ?2, sort_key = COALESCE(?3, sort_key), \
          artist_sort_key = COALESCE(?4, artist_sort_key), type = ?5, release_date = ?6, \
@@ -141,10 +141,11 @@ pub(super) fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i
     ])?;
     recompute_album_loudness(tx, album)?;
     feed::record(tx, lib, Entity::Album, album, Op::Upsert, now)?;
-    // The `albums_sort_key` trigger copied a changed key to every track of the album, whose
-    // device rows carry it. With no key from the tracks (`None`) the album keeps its own, so
-    // nothing changed.
-    if sort_key.is_some_and(|key| key != old_sort_key) {
+    // Every track of the album shows plugins its title, which can change spelling without its
+    // tracks in the batch, and the `albums_sort_key` trigger copied a changed key to each of
+    // them, whose device rows carry it. With no key from the tracks (`None`) the album keeps its
+    // own, so that did not change.
+    if title != old_title || sort_key.is_some_and(|key| key != old_sort_key) {
         let tracks: Vec<i64> = tx
             .prepare_cached("SELECT id FROM tracks WHERE album_id = ?1")?
             .query_map([album], |r| r.get(0))?

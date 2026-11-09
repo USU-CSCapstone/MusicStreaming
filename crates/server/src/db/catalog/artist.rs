@@ -12,15 +12,15 @@ use crate::db::feed::{self, Entity, Op};
 /// credits it. Whether one does is read from the credits themselves, so a wrong count can never
 /// delete a credited artist. The unknown artist has no image or biography. A changed sort key
 /// reaches the albums the artist heads and the tracks crediting it first
-/// ([`follow_artist_sort_key`]).
+/// ([`follow_artist_sort_key`]), and a changed name every album it is an album artist of.
 pub(super) fn refresh_artist(tx: &Transaction<'_>, lib: i64, artist: i64, now: i64) -> Result<()> {
-    let Some((credited, name, tagged_sort, old_sort)) = tx
+    let Some((credited, name, tagged_sort, old_sort, old_name)) = tx
         .prepare_cached(
             "SELECT EXISTS (SELECT 1 FROM track_artists WHERE artist_id = ?1) \
                  OR EXISTS (SELECT 1 FROM track_album_artists WHERE artist_id = ?1), \
              (SELECT name FROM artist_spellings WHERE artist_id = ?1 ORDER BY uses DESC, name LIMIT 1), \
              (SELECT sort_key FROM artist_sort_keys WHERE artist_id = ?1 ORDER BY uses DESC, sort_key LIMIT 1), \
-             sort_key FROM artists WHERE id = ?1",
+             sort_key, name FROM artists WHERE id = ?1",
         )?
         .query_row([artist], |r| {
             Ok((
@@ -28,6 +28,7 @@ pub(super) fn refresh_artist(tx: &Transaction<'_>, lib: i64, artist: i64, now: i
                 r.get::<_, Option<String>>(1)?,
                 r.get::<_, Option<Vec<u8>>>(2)?,
                 r.get::<_, Vec<u8>>(3)?,
+                r.get::<_, Option<String>>(4)?,
             ))
         })
         .optional()?
@@ -47,6 +48,15 @@ pub(super) fn refresh_artist(tx: &Transaction<'_>, lib: i64, artist: i64, now: i
         .execute(params![artist, name, sort_key])?;
     if sort_key != old_sort {
         follow_artist_sort_key(tx, lib, artist, &sort_key, now)?;
+    }
+    // Plugins see an album's artists by name, so a renamed artist changes albums the batch may
+    // not have touched.
+    if name != old_name {
+        let mut albums =
+            tx.prepare_cached("SELECT album_id FROM album_artists WHERE artist_id = ?1")?;
+        for album in albums.query_map([artist], |r| r.get::<_, i64>(0))? {
+            feed::record(tx, lib, Entity::Album, album?, Op::Upsert, now)?;
+        }
     }
     art::artist(tx, artist, name.is_some())?;
     feed::record(tx, lib, Entity::Artist, artist, Op::Upsert, now)
