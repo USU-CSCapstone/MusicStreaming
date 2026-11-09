@@ -19,7 +19,7 @@ use super::albums::{self, AlbumSummary};
 use super::artists::{self, ArtistSummary};
 use super::extract::Query;
 use super::scope::Scope;
-use super::tag_filter::TagFilter;
+use super::tag_filter::{TagFilter, Tags};
 use super::tracks::{self, TrackSummary};
 use super::{Problem, hidden, page};
 use crate::db::{Database, by_ids};
@@ -89,15 +89,29 @@ pub async fn search(
     let tagged = indexes.tagged.get(&db, library, &filter, &kinds).await?;
     let index = indexes.index(&db, library).await?;
     // What the caller hid is gone from their library, so a search finds it nowhere: tracks, and
-    // albums and artists every track of which they hid.
+    // albums and artists every track of which they hid. The tagged sets are everyone's, so the
+    // albums and artists the tags reach only through hidden tracks are left out here too.
+    let tags = filter.clone();
     let hid: [HashSet<i64>; 3] = db
         .read(move |conn| {
             // By `Kind`, as the tagged sets are.
-            Ok::<_, rusqlite::Error>([
+            let mut hid: [HashSet<i64>; 3] = [
                 hidden::ids(conn, user, library)?,
                 hidden::albums(conn, user, library)?.into_iter().collect(),
                 hidden::artists(conn, user, library)?.into_iter().collect(),
-            ])
+            ];
+            if !tags.is_empty() && !hid[Kind::Track as usize].is_empty() {
+                let losses = hidden::losses(conn, user, library)?;
+                let albums = losses.albums.iter().map(|(&album, loss)| (album, &loss.tags));
+                let tagged = &albums::TAGGED;
+                let lost = Tags::read(conn, library, tagged, &tags)?.lost(conn, tagged, albums)?;
+                hid[Kind::Album as usize].extend(lost);
+                let artists = losses.artists.iter().map(|(&artist, loss)| (artist, &loss.tags));
+                let tagged = &artists::TAGGED;
+                let lost = Tags::read(conn, library, tagged, &tags)?.lost(conn, tagged, artists)?;
+                hid[Kind::Artist as usize].extend(lost);
+            }
+            Ok::<_, rusqlite::Error>(hid)
         })
         .await?;
     let found = index.search_within(&query.q, &kinds, limit, |kind, id| {

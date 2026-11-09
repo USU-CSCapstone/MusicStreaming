@@ -15,7 +15,7 @@ use super::credit::{ArtistCredit, Credits};
 use super::extract::{Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Table, Unknown};
 use super::scope::Scope;
-use super::tag_filter::{self, LEAD_SHARE, TagFilter, Tagged};
+use super::tag_filter::{self, LEAD_SHARE, TagFilter, Tagged, Tags};
 use super::{AnyId, Id, Problem, hidden};
 use crate::db::Database;
 
@@ -86,7 +86,7 @@ pub struct ListQuery {
 
 /// The library's albums, or those credited to `artistId` as `artistCredit` says and whose
 /// tracks carry the tags `tagAll` and `tagAny` name, a page at a time; without those the caller
-/// hid whole ([`hidden::albums`]).
+/// hid whole ([`hidden::albums`]), and those the filters reach only through tracks they hid.
 pub async fn list(
     State(db): State<Arc<Database>>,
     Scope { user, library }: Scope,
@@ -98,14 +98,18 @@ pub async fn list(
     let page = db
         .read(move |conn| {
             let mut source = source(conn, library, artist, credit, &tags)?;
-            hidden::leave_out_ids(
-                conn,
-                &mut source,
-                "al.id",
-                &hidden::albums(conn, user, library)?,
-            )?;
-            let mut page = request.read(conn, &source, summary)?;
             let losses = hidden::losses(conn, user, library)?;
+            let mut gone = hidden::albums(conn, user, library)?;
+            let owners = losses.albums.iter().map(|(&album, loss)| (album, &loss.tags));
+            gone.extend(Tags::read(conn, library, &TAGGED, &tags)?.lost(conn, &TAGGED, owners)?);
+            if let (Some(AnyId(Some(artist))), ArtistCredit::Featured | ArtistCredit::Any) =
+                (artist, credit)
+                && let Some(loss) = losses.artists.get(&artist)
+            {
+                gone.extend(&loss.featured_albums);
+            }
+            hidden::leave_out_ids(conn, &mut source, "al.id", &gone)?;
+            let mut page = request.read(conn, &source, summary)?;
             page.items.iter_mut().for_each(|item| item.lose(&losses));
             Ok(page)
         })

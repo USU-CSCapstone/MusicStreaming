@@ -14,7 +14,7 @@ pub use representation::{Artist, ArtistSummary, SELECT, summary};
 use super::extract::{Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Table, Unknown};
 use super::scope::Scope;
-use super::tag_filter::{self, LEAD_SHARE, TagFilter, Tagged};
+use super::tag_filter::{self, LEAD_SHARE, TagFilter, Tagged, Tags};
 use super::{Id, Problem, hidden};
 use crate::db::Database;
 
@@ -64,7 +64,8 @@ pub struct ListQuery {
 
 /// Every artist credited in the library, featured-only ones included
 /// (`requirements/artists.md` §5), or those whose work carries the tags `tagAll` and
-/// `tagAny` name.
+/// `tagAny` name; without those the caller hid every track of, and those the tags reach only
+/// through tracks they hid.
 pub async fn list(
     State(db): State<Arc<Database>>,
     Scope { user, library }: Scope,
@@ -75,10 +76,12 @@ pub async fn list(
     let page = db
         .read(move |conn| {
             let mut source = source(conn, library, &tags)?;
-            let whole = hidden::artists(conn, user, library)?;
-            hidden::leave_out_ids(conn, &mut source, "ar.id", &whole)?;
-            let mut page = request.read(conn, &source, summary)?;
             let losses = hidden::losses(conn, user, library)?;
+            let mut gone = hidden::artists(conn, user, library)?;
+            let owners = losses.artists.iter().map(|(&artist, loss)| (artist, &loss.tags));
+            gone.extend(Tags::read(conn, library, &TAGGED, &tags)?.lost(conn, &TAGGED, owners)?);
+            hidden::leave_out_ids(conn, &mut source, "ar.id", &gone)?;
+            let mut page = request.read(conn, &source, summary)?;
             page.items.iter_mut().for_each(|item| item.lose(&losses));
             Ok(page)
         })
