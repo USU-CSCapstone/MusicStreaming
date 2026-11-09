@@ -302,17 +302,17 @@ fn golden_bytes(name: &str, bytes: &[u8]) {
 }
 
 /// The library's rows as a snapshot file, which holds none of the account's playlists, written
-/// by `VACUUM INTO` as the server writes one.
+/// as the server writes one: the database file itself, closed.
 fn snapshot(rows: &[Rows]) -> Vec<u8> {
     let temp = tempfile::tempdir().unwrap();
-    let conn = Connection::open(temp.path().join("device.db")).unwrap();
+    let path = temp.path().join("device.db");
+    let conn = Connection::open(&path).unwrap();
     create_schema(&conn).unwrap();
     for rows in rows.iter().filter(|r| !matches!(r.kind, Kind::Playlist | Kind::PlaylistItem)) {
         apply(&conn, rows).unwrap();
     }
-    let out = temp.path().join("served.db");
-    conn.execute("VACUUM INTO ?1", [out.to_str().unwrap()]).unwrap();
-    std::fs::read(out).unwrap()
+    conn.close().unwrap();
+    std::fs::read(path).unwrap()
 }
 
 #[tokio::test]
