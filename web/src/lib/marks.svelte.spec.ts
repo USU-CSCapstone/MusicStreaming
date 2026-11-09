@@ -7,13 +7,24 @@ const track = { id: '5', title: 'Signal', liked: false };
 
 let requests: string[];
 let status: number;
+/** What the server holds: the tracks liked, and those hidden. */
+let held: { liked: string[]; hidden: string[] };
 /** Answers each request with `status`, once it settles, which it does at once by default. */
 let release: Promise<void>;
 const fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
 	const path = new URL(String(input), 'http://test').pathname.replace(/^.*\/api\/v1/, '');
-	requests.push(`${init.method} ${path}`);
+	const method = init.method ?? 'GET';
+	requests.push(`${method} ${path}`);
 	const answer = status;
 	await release;
+	if (method === 'GET' && answer === 204) {
+		const summary = (id: string) => ({ ...track, id, liked: held.liked.includes(id) });
+		const ids = path.endsWith('/hidden-tracks')
+			? held.hidden
+			: (new URL(String(input), 'http://test').searchParams.get('ids')?.split(',') ?? []);
+		const items = ids.map(summary);
+		return Response.json({ items, nextCursor: null, total: items.length });
+	}
 	return answer === 204
 		? new Response(null, { status: answer })
 		: new Response(JSON.stringify({ status: answer, code: 'internal', detail: 'Try later.' }), {
@@ -28,6 +39,9 @@ function hold(): () => void {
 	return open;
 }
 
+/** What the server sends as the connection opens. */
+const hello = { type: 'hello', deviceId: '1', serverTime: '2026-01-01T00:00:00.000Z' } as const;
+
 /** Whether track 5 of library 1 shows as liked, and as hidden. */
 const shown = (read = track) => [marks.liked('1', read), marks.hidden('1', '5')];
 
@@ -35,6 +49,7 @@ beforeEach(() => {
 	marks.clear();
 	requests = [];
 	status = 204;
+	held = { liked: [], hidden: [] };
 	release = Promise.resolve();
 });
 
@@ -82,6 +97,41 @@ describe('marks', () => {
 		flushSync();
 		expect(seen.map((list) => list.map((t) => t.id))).toEqual([['5', '6'], ['6']]);
 		stop();
+	});
+
+	it('takes the server’s word on each marked track once the connection is back', async () => {
+		// Hidden here, then unhidden elsewhere while the connection was down; liked here, and
+		// still; liked here, then hidden elsewhere.
+		const other = { ...track, id: '6' };
+		const third = { ...track, id: '7' };
+		await marks.hide(fetch, '1', track, true);
+		await marks.like(fetch, '1', other, true);
+		await marks.like(fetch, '1', third, true);
+		held = { liked: ['6'], hidden: ['7'] };
+		requests = [];
+		await marks.receive(hello, fetch);
+		expect(requests.toSorted()).toEqual([
+			'GET /libraries/1/hidden-tracks',
+			'GET /libraries/1/tracks'
+		]);
+		expect(shown()).toEqual([false, false]);
+		expect(marks.unhidden('1', [track, other, third]).map((t) => t.id)).toEqual(['5', '6']);
+		expect([marks.liked('1', other), marks.liked('1', third)]).toEqual([true, false]);
+	});
+
+	it('keeps what changes while it checks, and what it could not check', async () => {
+		await marks.hide(fetch, '1', track, true);
+		const open = hold();
+		const checking = marks.receive(hello, fetch);
+		marks.receive({ type: 'trackLiked', libraryId: '1', trackId: '5', liked: true });
+		open();
+		await checking;
+		expect(shown(), 'told of after the check began').toEqual([true, false]);
+
+		await marks.hide(fetch, '1', track, true);
+		status = 500;
+		await marks.receive(hello, fetch);
+		expect(shown(), 'the server could not say').toEqual([false, true]);
 	});
 
 	it('hides and unhides', async () => {

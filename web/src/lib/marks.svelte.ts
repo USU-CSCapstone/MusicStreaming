@@ -2,10 +2,20 @@
 // (`requirements/playlists.md` §11, `requirements/conventions.md` §8). A track is read with
 // `liked`; a like, an unlike, a hide or an unhide made here, or one the server tells of from
 // another device, holds from then on over what was read. A change here shows at once and is sent
-// after, and one the server refuses is undone, with why (`requirements/general.md` §3.4).
+// after, and one the server refuses is undone, with why (`requirements/general.md` §3.4). The
+// server tells nothing of what changed while the connection was down, so each time it comes
+// back, every track marked here takes the server's word on it again.
 
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
-import { ApiError, hideTrack, likeTrack, unhideTrack, unlikeTrack } from './api/client';
+import {
+	ApiError,
+	getTracksByIds,
+	hideTrack,
+	likeTrack,
+	listHiddenTracks,
+	unhideTrack,
+	unlikeTrack
+} from './api/client';
 import type { Playlist, RealtimeServerMessage } from './api/types';
 import { realtime } from './realtime.svelte';
 import { toast } from './toast.svelte';
@@ -33,6 +43,12 @@ class Marks {
 	 */
 	#sending = new Map<string, number>();
 	#sent = 0;
+	/**
+	 * When each mark was last written, by `{library}/{track}`, counting every write, so a check of
+	 * the server's word can tell a mark written while it was under way. Nothing reacts to it.
+	 */
+	#written = new Map<string, number>();
+	#writes = 0;
 	/**
 	 * What the server has confirmed of each track, by `{library}/{track}`: the changes it took and
 	 * what it told of. A refusal goes back to this, never to a change still unconfirmed.
@@ -105,9 +121,15 @@ class Marks {
 		return this.#change(library, track, mark, () => send(f, library, track.id), what);
 	}
 
-	/** Takes what the server says changed on another device, or on this one. */
-	receive(message: RealtimeServerMessage) {
-		if (message.type === 'trackLiked') {
+	/**
+	 * Takes what the server says changed on another device, or on this one. A `hello`, sent as the
+	 * connection opens again, has every marked track checked with the server, through `f`; the
+	 * promise settles once that is done.
+	 */
+	async receive(message: RealtimeServerMessage, f: Fetch = fetch): Promise<void> {
+		if (message.type === 'hello') {
+			await this.#recheck(f);
+		} else if (message.type === 'trackLiked') {
 			const { libraryId, trackId, liked } = message;
 			this.#confirm(key(libraryId, trackId), liked ? { liked, hidden: false } : { liked });
 		} else if (message.type === 'trackHidden') {
@@ -125,6 +147,7 @@ class Marks {
 		this.#marks.clear();
 		this.#hides.clear();
 		this.#sending.clear();
+		this.#written.clear();
 		this.#confirmed.clear();
 		this.#cleared.clear();
 		this.#likedSongs.clear();
@@ -173,12 +196,58 @@ class Marks {
 		this.#put(at, { ...this.#marks.get(at), ...mark });
 	}
 
+	/**
+	 * Has each track marked here, with no change of this device's under way, take the server's word
+	 * on whether it is liked, read with the track, and hidden, from Hidden Songs. A track neither
+	 * returns is gone, and so neither. A mark written while this is under way is newer, so stays.
+	 * A library that cannot be read keeps its marks until the next time.
+	 */
+	async #recheck(f: Fetch) {
+		const since = this.#writes;
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- the check's own, not shown
+		const libraries = new Map<string, string[]>();
+		for (const at of this.#marks.keys()) {
+			if (this.#sending.has(at)) continue;
+			const [library, track] = split(at);
+			libraries.set(library, [...(libraries.get(library) ?? []), track]);
+		}
+		await Promise.all(
+			[...libraries].map(async ([library, tracks]) => {
+				try {
+					// eslint-disable-next-line svelte/prefer-svelte-reactivity -- the check's own, not shown
+					const hidden = new Set<string>();
+					let cursor: string | undefined;
+					do {
+						const page = await listHiddenTracks(f, library, { limit: 1000, cursor });
+						for (const track of page.items) hidden.add(track.id);
+						cursor = page.nextCursor ?? undefined;
+					} while (cursor);
+					// eslint-disable-next-line svelte/prefer-svelte-reactivity -- the check's own, not shown
+					const liked = new Set<string>();
+					for (let i = 0; i < tracks.length; i += 100) {
+						const page = await getTracksByIds(f, library, tracks.slice(i, i + 100));
+						for (const track of page.items) if (track.liked) liked.add(track.id);
+					}
+					for (const track of tracks) {
+						const at = key(library, track);
+						if (this.#sending.has(at) || (this.#written.get(at) ?? 0) > since) continue;
+						const mark = { liked: liked.has(track), hidden: hidden.has(track) };
+						this.#confirmed.set(at, mark);
+						this.#put(at, mark);
+					}
+				} catch {
+					// Kept as they are; the next connection checks again.
+				}
+			})
+		);
+	}
+
 	/** Sets the mark at `at`, or with none forgets it, and its hide with it. */
 	#put(at: string, mark: Mark | undefined) {
+		this.#written.set(at, ++this.#writes);
 		if (mark) this.#marks.set(at, mark);
 		else this.#marks.delete(at);
-		const split = at.indexOf('/');
-		const [library, track] = [at.slice(0, split), at.slice(split + 1)];
+		const [library, track] = split(at);
 		const hides = this.#hides.get(library);
 		if (mark?.hidden === undefined) hides?.delete(track);
 		else if (hides) hides.set(track, mark.hidden);
@@ -188,5 +257,11 @@ class Marks {
 
 const key = (library: string, track: string) => `${library}/${track}`;
 
+/** The library and the track of a key. */
+function split(at: string): [string, string] {
+	const slash = at.indexOf('/');
+	return [at.slice(0, slash), at.slice(slash + 1)];
+}
+
 export const marks = new Marks();
-realtime.on((message) => marks.receive(message));
+realtime.on((message) => void marks.receive(message));
