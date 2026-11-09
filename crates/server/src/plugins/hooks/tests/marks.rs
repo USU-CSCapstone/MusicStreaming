@@ -2,7 +2,7 @@
 //! first those they have, then each change.
 
 use jewelcase_plugins::MarkKind::{Hidden, Liked, Unliked};
-use jewelcase_plugins::Permission::{LikesAndHides, ListeningActivity, Marked};
+use jewelcase_plugins::Permission::{LibraryRead, LikesAndHides, ListeningActivity, Marked};
 use jewelcase_plugins::{Event, Mark, MarkKind};
 use rusqlite::OptionalExtension;
 use serde_json::json;
@@ -13,7 +13,7 @@ use super::{HANDLED, Received, connected, deliver, plan, setup};
 use crate::api::testing::eventually;
 use crate::db::Database;
 use crate::db::retention::{WINDOW_MS, sweep};
-use crate::db::testing::Track;
+use crate::db::testing::{Track, access};
 use crate::plugins::personal::disconnect;
 use crate::plugins::testing::{caller, connect};
 use crate::plugins::tests::HEARER;
@@ -260,6 +260,140 @@ async fn a_delivery_under_way_as_the_sweep_runs_starts_the_user_again() {
     sweep(&db, 210 + WINDOW_MS + 1).await;
     handled(&db, due, next).await;
     assert_eq!(summary(deliver(&db, 0, HANDLED).await), [(11, Liked, 200), (12, Hidden, 210)]);
+}
+
+/// `user` likes `track` of `library`, in a Liked Songs made for them there, and the feed records
+/// it, at `at`.
+async fn liked_in(db: &Database, user: i64, library: i64, track: i64, at: i64) {
+    db.write(move |tx| {
+        let id = 900 + 10 * library + user;
+        tx.execute(
+            "INSERT OR IGNORE INTO playlists (id, library_id, user_id, kind, title, folded, \
+             sort_key, version, created_at, modified_at) \
+             VALUES (?1, ?2, ?3, 'liked', 'Liked Songs', 'liked songs', x'6c', 1, 0, 0)",
+            rusqlite::params![id, library, user],
+        )?;
+        tx.execute(
+            "INSERT INTO playlist_items (playlist_id, key, library_id, track_id, added_at) \
+             VALUES (?1, ?2, ?3, ?2, ?4)",
+            rusqlite::params![id, track, library, at],
+        )?;
+        tx.execute(
+            "INSERT INTO mark_events (user_id, library_id, track_id, kind, created_at) \
+             VALUES (?1, ?2, ?3, 'liked', ?4)",
+            rusqlite::params![user, library, track, at],
+        )
+    })
+    .await
+    .unwrap();
+}
+
+/// The plugin as [`connected`] leaves it, reading library 2 too and enabled there, where user 7
+/// reaches.
+async fn in_two_libraries(plugins: &crate::plugins::Plugins, db: &Database) {
+    connected(plugins, db, &[LikesAndHides, Marked]).await;
+    let per_library = vec![(1, vec![LibraryRead]), (2, vec![LibraryRead])];
+    plugins.set_grants("plugin".into(), vec![LikesAndHides, Marked], per_library).await.unwrap();
+    plugins.set_enabled("plugin".into(), 2, true).await.unwrap();
+    db.write(|tx| access(tx, 7, 2)).await.unwrap();
+}
+
+/// Each delivery that sent marks, as its user, its library, and the tracks they name.
+fn sent(received: Vec<Received>) -> Vec<(i64, i64, Vec<u64>)> {
+    let mut sent: Vec<_> = received
+        .into_iter()
+        .filter_map(|r| match r.event? {
+            Event::Marked(marks) => {
+                Some((r.user, r.library, marks.iter().map(|m| m.track.id).collect()))
+            }
+            other => panic!("not marks: {other:?}"),
+        })
+        .collect();
+    sent.sort();
+    sent
+}
+
+/// A user's likes and hides in one library, those they have and each change, reach only that
+/// library's delivery, though their connection holds in every library.
+#[tokio::test]
+async fn a_users_marks_reach_only_the_library_they_were_made_in() {
+    let (_temp, db, plugins) = setup().await;
+    in_two_libraries(&plugins, &db).await;
+    liked_in(&db, 7, 1, 11, 150).await;
+    liked_in(&db, 7, 2, 21, 160).await;
+    let first = sent(deliver(&db, 0, HANDLED).await);
+    assert_eq!(first, [(7, 1, vec![11]), (7, 2, vec![21])], "as they stand, each in its own");
+
+    marked(&db, 7, 12, "hidden", 300).await;
+    hides(&db, 7, 12, 300).await;
+    db.write(|tx| {
+        tx.execute(
+            "INSERT INTO mark_events (user_id, library_id, track_id, kind, created_at) \
+             VALUES (7, 2, 21, 'unliked', 310)",
+            [],
+        )
+    })
+    .await
+    .unwrap();
+    assert_eq!(sent(deliver(&db, 0, HANDLED).await), [(7, 1, vec![12]), (7, 2, vec![21])]);
+}
+
+/// Nothing is sent from a library the user does not reach: neither their likes and hides there
+/// as they stand, for one who never did, nor what they do there after they lose it.
+#[tokio::test]
+async fn nothing_is_sent_from_a_library_the_user_no_longer_reaches() {
+    let (_temp, db, plugins) = setup().await;
+    in_two_libraries(&plugins, &db).await;
+    // User 8 reaches library 1 alone, yet has a like in library 2, as one who once reached it.
+    connect(&db, "plugin", 8, json!({}), 100).await;
+    liked_in(&db, 8, 2, 21, 150).await;
+    liked_in(&db, 7, 2, 21, 160).await;
+    let first = sent(deliver(&db, 0, HANDLED).await);
+    assert_eq!(first, [(7, 2, vec![21])], "nothing of user 8's from library 2");
+
+    db.write(|tx| {
+        tx.execute("DELETE FROM library_access WHERE user_id = 7 AND library_id = 2", [])
+    })
+    .await
+    .unwrap();
+    db.write(|tx| {
+        tx.execute(
+            "INSERT INTO mark_events (user_id, library_id, track_id, kind, created_at) \
+             VALUES (7, 2, 21, 'unliked', 300), (8, 2, 21, 'unliked', 300)",
+            [],
+        )
+    })
+    .await
+    .unwrap();
+    marked(&db, 7, 11, "liked", 310).await;
+    assert_eq!(sent(deliver(&db, 0, HANDLED).await), [(7, 1, vec![11])], "library 1's alone");
+}
+
+/// Nothing is sent for a suspended account, neither its likes and hides as they stand nor each
+/// change, until it is active again.
+#[tokio::test]
+async fn nothing_is_sent_for_a_suspended_account() {
+    let (_temp, db, plugins) = setup().await;
+    connected(&plugins, &db, &[LikesAndHides, Marked]).await;
+    likes(&db, 7, vec![11], 150).await;
+    let suspended = |status: &'static str| {
+        let db = db.clone();
+        async move {
+            db.write(move |tx| tx.execute("UPDATE users SET status = ?1 WHERE id = 7", [status]))
+                .await
+                .unwrap();
+        }
+    };
+    suspended("suspended").await;
+    assert_eq!(sent(deliver(&db, 0, HANDLED).await), [], "not as they stand");
+    suspended("active").await;
+    assert_eq!(sent(deliver(&db, 0, HANDLED).await), [(7, 1, vec![11])]);
+
+    suspended("suspended").await;
+    marked(&db, 7, 11, "unliked", 300).await;
+    assert_eq!(sent(deliver(&db, 0, HANDLED).await), [], "nor from the feed");
+    suspended("active").await;
+    assert_eq!(sent(deliver(&db, 0, HANDLED).await), [(7, 1, vec![11])]);
 }
 
 /// The hook needs likes and hides granted, which listening activity does not stand in for.
