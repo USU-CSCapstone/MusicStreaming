@@ -1,3 +1,4 @@
+import { flushSync } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { marks } from './marks.svelte';
 import { toaster } from './toast.svelte';
@@ -60,6 +61,27 @@ describe('marks', () => {
 		await marks.hide(fetch, '1', track, true);
 		expect(marks.unhidden('1', read).map((t) => t.id)).toEqual(['6']);
 		expect(marks.hidden('1', '6', true)).toBe(true);
+	});
+
+	it('leaves a list the same list until a song in it is hidden', async () => {
+		const read = [track, { ...track, id: '6' }];
+		const seen: (typeof read)[] = [];
+		const stop = $effect.root(() => {
+			const shown = $derived(marks.unhidden('1', read));
+			$effect(() => void seen.push(shown));
+		});
+		flushSync();
+		await marks.like(fetch, '1', track, true);
+		await marks.hide(fetch, '1', { ...track, id: '7' }, true);
+		await marks.hide(fetch, '2', track, true);
+		flushSync();
+		expect(seen).toEqual([read]);
+		expect(seen[0]).toBe(read);
+
+		await marks.hide(fetch, '1', track, true);
+		flushSync();
+		expect(seen.map((list) => list.map((t) => t.id))).toEqual([['5', '6'], ['6']]);
+		stop();
 	});
 
 	it('hides and unhides', async () => {
