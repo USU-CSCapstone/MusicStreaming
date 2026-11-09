@@ -18,7 +18,7 @@ import type {
 	PlaylistOp,
 	TrackSummary
 } from './api/types';
-import { type Resolve, applyOps, invertOps } from './playlist-ops';
+import { type Resolve, applyOps, invertOps, onlyNew } from './playlist-ops';
 import { toast } from './toast.svelte';
 
 type Fetch = typeof fetch;
@@ -101,7 +101,16 @@ export class EditablePlaylist {
 	#edit(change: PlaylistChange, resolve: Resolve<PlaylistItem>): () => void {
 		const before = { playlist: this.playlist, items: this.items };
 		const { ops } = change;
-		const apply = (items: PlaylistItem[]) => (ops ? applyOps(items, ops, resolve) : items);
+		// The server reshapes adds to a Liked Songs, so this does as it does, and both reach the
+		// same items, at the same positions for the edits after.
+		const liked = this.playlist.kind === 'liked';
+		const rule = (items: readonly PlaylistItem[], ops: PlaylistOp[]) =>
+			liked ? onlyNew(items, ops, resolve, (item) => item.track?.id) : { ops, resolve };
+		const apply = (items: PlaylistItem[]) => {
+			if (!ops) return items;
+			const applied = rule(items, ops);
+			return applyOps(items, applied.ops, applied.resolve);
+		};
 
 		this.items = apply(this.items);
 		if (ops?.some((op) => op.op === 'add')) this.#added = true;
@@ -113,7 +122,10 @@ export class EditablePlaylist {
 		if (change.title !== undefined) undo.title = before.playlist.title;
 		if (change.description !== undefined) undo.description = before.playlist.description;
 		if (change.pinned !== undefined) undo.pinned = before.playlist.pinned;
-		const inverse = ops ? invertOps(before.items, ops, resolve, toPlayable) : { ops: [], resolve };
+		const applied = ops && rule(before.items, ops);
+		const inverse = applied
+			? invertOps(before.items, applied.ops, applied.resolve, toPlayable)
+			: { ops: [], resolve };
 		if (inverse.ops.length) undo.ops = inverse.ops;
 		const after = this.items;
 		return () => {

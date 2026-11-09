@@ -261,6 +261,59 @@ describe('undo', () => {
 	});
 });
 
+describe('a Liked Songs', () => {
+	const add = (...tracks: number[]): PlaylistItem[] => {
+		const items = tracks.map((n) => ({ type: 'track' as const, id: String(n) }));
+		liked.edit({ ops: [{ op: 'add', items }] }, tracks.map(track));
+		return liked.items;
+	};
+	let liked: EditablePlaylist;
+	beforeEach(() => {
+		const kind = 'liked' as const;
+		liked = new EditablePlaylist(api.fetch, {
+			playlist: { ...playlist, kind, title: 'Liked Songs' },
+			items: [item(1), item(2), item(3)]
+		});
+	});
+
+	it('puts adds at the top, leaving out what it holds, as the server does', async () => {
+		expect(ids(add(2, 9, 9, 4))).toEqual(['9', '4', '1', '2', '3']);
+		await liked.idle();
+		// What the server confirmed is what shows: a refused edit falls back to it.
+		api.next.push(() => ({ status: 422, body: { status: 422, code: 'validation_failed' } }));
+		liked.edit({ ops: [{ op: 'remove', positions: [0] }] });
+		await liked.idle();
+		expect(ids(liked.items)).toEqual(['9', '4', '1', '2', '3']);
+	});
+
+	it('adds nothing for a song liked already, so later edits name the right positions', async () => {
+		expect(ids(add(2))).toEqual(['1', '2', '3']);
+		liked.edit({ ops: [{ op: 'remove', positions: [2] }] });
+		await liked.idle();
+		expect(api.edits().at(-1)?.body.ops).toEqual([{ op: 'remove', positions: [2] }]);
+		expect(ids(liked.items)).toEqual(['1', '2']);
+	});
+
+	it('undoes an add by taking out only what it put in', () => {
+		const undo = liked.edit(
+			{
+				ops: [
+					{
+						op: 'add',
+						items: [
+							{ type: 'track', id: '1' },
+							{ type: 'track', id: '9' }
+						]
+					}
+				]
+			},
+			[track(1), track(9)]
+		);
+		undo();
+		expect(ids(liked.items)).toEqual(['1', '2', '3']);
+	});
+});
+
 describe('when the server refuses', () => {
 	it('reloads after a conflict, drops what was pending, and says why', async () => {
 		// Another device moved the playlist on, and left one track.
