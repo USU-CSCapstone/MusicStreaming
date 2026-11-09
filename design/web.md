@@ -34,7 +34,7 @@ state.
 | `pnpm check`                  | Type-check, including the mock                                 |
 | `pnpm lint` / `pnpm format`   | ESLint and oxfmt                                               |
 | `pnpm test:unit`              | Vitest, in Node and in a headless browser                      |
-| `pnpm test:e2e`               | Playwright, against `preview`, with fixture data               |
+| `pnpm test:e2e`               | Playwright, against real servers on generated music            |
 | `pnpm gen:api`                | Regenerate `src/lib/api/schema.d.ts` from `api/openapi.yaml`   |
 
 API types are generated, never hand-written. After editing the OpenAPI spec, run `pnpm gen:api`
