@@ -75,11 +75,7 @@ pub fn source(
     if let Some(total) = plan.total {
         source.total = total;
     }
-    if let Some((lead, check)) = plan.counting {
-        let by_tags = table.source(conn, library, Some(lead), check)?;
-        source.counting =
-            Some(Counting { from: by_tags.from, filter: by_tags.filter, params: by_tags.params });
-    }
+    source.counting = plan.counting;
     Ok(source)
 }
 
@@ -144,9 +140,11 @@ pub struct Plan {
     pub check: Option<Check>,
     /// The page's total, when the filter changes how it is known: `None` for no filter.
     pub total: Option<Total>,
-    /// How to count the rows when the page walks and the total is counted: the smallest group
-    /// leads and the others check, so the count costs what that group holds, not the library.
-    pub counting: Option<(Lead, Option<Check>)>,
+    /// How to count the rows when the tags are all that filters the list and the total is counted:
+    /// from the link table alone, the smallest group leading and the others checking, so the count
+    /// costs what that group holds and reads no row of the list's own table. The links already
+    /// name only rows of the tags' library (see [`Tags::plan`]).
+    pub counting: Option<Counting>,
 }
 
 impl Tags {
@@ -211,8 +209,10 @@ impl Tags {
     /// list at most ([`LEAD_SHARE`], [`RESOLVE_SHARE`]): 0 has the smallest always lead, and
     /// `i64::MAX` has every group checked. Every other group becomes a check. The total is the one
     /// tag's stored count where it is all that filters the list, which `alone` says, and is
-    /// counted otherwise; a list `alone` that walks counts from its smallest group all the same
-    /// ([`Plan::counting`]).
+    /// counted otherwise; a list `alone` counts from the link table ([`Plan::counting`]). That
+    /// count never reads the list's table: `Tags::read` took only tags of the library, and a
+    /// link's row and tag share a library (the server's foreign keys, one library per device
+    /// file), so each link counts a row of that library alone.
     pub fn plan(
         self,
         tagged: &Tagged,
@@ -239,19 +239,19 @@ impl Tags {
             [one] if alone && one.ids.len() == 1 => Total::Stored(one.size),
             _ => Total::Counted,
         };
+        let counting = (alone && matches!(total, Total::Counted))
+            .then(|| smallest_first(groups.clone(), tagged))
+            .flatten()
+            .map(|(from, condition, params)| Counting {
+                from,
+                filter: condition.unwrap_or_else(|| "1".to_owned()),
+                params,
+            });
         let lead = lead.or_else(|| {
             let smallest = (0..groups.len()).min_by_key(|&i| groups[i].size)?;
             (groups[smallest].size.saturating_mul(share) <= rows)
                 .then(|| groups.swap_remove(smallest).lead(tagged))
         });
-        let counting = (lead.is_none() && alone && matches!(total, Total::Counted))
-            .then(|| {
-                let mut rest = groups.clone();
-                let smallest = (0..rest.len()).min_by_key(|&i| rest[i].size)?;
-                let lead = rest.swap_remove(smallest).lead(tagged);
-                Some((lead, Check::all(rest.iter().map(|group| group.check(tagged, alias)))))
-            })
-            .flatten();
         let checks: Vec<Check> = groups.iter().map(|group| group.check(tagged, alias)).collect();
         Plan { lead, check: Check::all(checks), total: Some(total), counting }
     }
@@ -262,24 +262,39 @@ impl Tags {
     /// tags: none for a tag the library does not have. Read from the smallest group's rows, each
     /// checked against the others, so it costs what that group holds.
     pub fn ids(self, conn: &Connection, tagged: &Tagged) -> rusqlite::Result<Option<HashSet<i64>>> {
-        let mut groups = match self {
+        let groups = match self {
             Tags::Unfiltered => return Ok(None),
             Tags::Nothing => return Ok(Some(HashSet::new())),
             Tags::Groups(groups) => groups,
         };
-        let Some(smallest) = (0..groups.len()).min_by_key(|&i| groups[i].size) else {
+        let Some((from, condition, params)) = smallest_first(groups, tagged) else {
             return Ok(None);
         };
-        let Lead { ids, mut params, .. } = groups.swap_remove(smallest).lead(tagged);
-        let mut sql = format!("SELECT lead.id FROM ({ids}) lead");
-        if let Some(check) = Check::all(groups.iter().map(|group| group.check(tagged, "lead"))) {
-            sql += &format!(" WHERE {}", check.condition);
-            params.extend(check.params);
+        let mut sql = format!("SELECT lead.id FROM {from}");
+        if let Some(condition) = condition {
+            sql += &format!(" WHERE {condition}");
         }
         let mut statement = conn.prepare_cached(&sql)?;
         let ids = statement.query_map(params_from_iter(params), |row| row.get(0))?;
         Ok(Some(ids.collect::<rusqlite::Result<_>>()?))
     }
+}
+
+/// The smallest group's rows as `lead`, the condition that they match every other group, and
+/// the parameters of both: where a count or a read of the matching IDs starts, so it costs what
+/// that group holds. None without groups.
+fn smallest_first(
+    mut groups: Vec<Group>,
+    tagged: &Tagged,
+) -> Option<(String, Option<String>, Vec<Value>)> {
+    let smallest = (0..groups.len()).min_by_key(|&i| groups[i].size)?;
+    let Lead { ids, mut params, .. } = groups.swap_remove(smallest).lead(tagged);
+    let condition =
+        Check::all(groups.iter().map(|group| group.check(tagged, "lead"))).map(|check| {
+            params.extend(check.params);
+            check.condition
+        });
+    Some((format!("({ids}) lead"), condition, params))
 }
 
 impl Group {
@@ -357,17 +372,20 @@ mod tests {
         assert!(plan.lead.is_none());
         assert_eq!(plan.check.unwrap().params.len(), 3);
         // The page walks, but the count starts from the smaller group and checks the other.
-        let (lead, check) = plan.counting.expect("a counted total leads from its smallest group");
-        assert_eq!((lead.size, lead.params.len()), (100, 1));
-        assert_eq!(check.unwrap().params.len(), 2);
+        let counting = plan.counting.expect("a counted total leads from its smallest group");
+        assert_eq!(counting.from, "(SELECT track_id AS id FROM track_tags WHERE tag_id = ?) lead");
+        assert!(counting.filter.contains("track_id = lead.id"));
+        assert!(!counting.from.contains("tracks t") && !counting.filter.contains("library_id"));
+        assert_eq!(counting.params.len(), 3);
     }
 
     #[test]
-    fn a_count_keeps_the_page_source_where_the_page_already_leads_or_another_filter_does() {
+    fn a_count_reads_the_link_table_whether_or_not_the_page_leads_unless_another_filter_applies() {
         let tags = || {
             Tags::Groups(vec![group(&[1], TagMatch::Any, 50_000), group(&[3], TagMatch::Any, 100)])
         };
-        assert!(tags().plan(&TAGGED, "t", None, 300_000, true, LEAD_SHARE).counting.is_none());
+        let leading = tags().plan(&TAGGED, "t", None, 300_000, true, LEAD_SHARE);
+        assert!(leading.lead.is_some() && leading.counting.is_some());
         assert!(tags().plan(&TAGGED, "t", None, 10_000, false, LEAD_SHARE).counting.is_none());
     }
 
@@ -438,6 +456,36 @@ mod tests {
         assert!(ids(Tags::Groups(vec![genres(TagMatch::All)])).is_empty());
         assert!(Tags::Unfiltered.ids(&conn, &TAGGED).unwrap().is_none());
         assert!(Tags::Nothing.ids(&conn, &TAGGED).unwrap().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_count_on_the_device_schema_searches_the_links_and_reads_no_row_of_the_list() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::create_schema(&conn).unwrap();
+        let groups = || {
+            Tags::Groups(vec![
+                group(&[1, 2], TagMatch::Any, 50_000),
+                group(&[3], TagMatch::All, 100),
+                group(&[4, 5], TagMatch::All, 200),
+            ])
+        };
+        let counting = groups().plan(&TAGGED, "t", None, 300_000, true, LEAD_SHARE).counting;
+        let counting = counting.expect("a counted total reads the links");
+        let sql = format!(
+            "EXPLAIN QUERY PLAN SELECT count(*) FROM {} WHERE {}",
+            counting.from, counting.filter
+        );
+        let params = params_from_iter(counting.params.iter());
+        let plan: Vec<String> = conn
+            .prepare(&sql)
+            .unwrap()
+            .query_map(params, |row| row.get(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let plan = plan.join(" | ");
+        assert!(plan.contains("SEARCH track_tags"), "{plan}");
+        assert!(!plan.contains("tracks") && !plan.contains("SCAN track_tags"), "{plan}");
     }
 
     #[test]
