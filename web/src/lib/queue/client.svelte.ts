@@ -60,12 +60,12 @@ export class QueueClient {
 		this.#spawn = create;
 	}
 
-	/** Starts the worker and feeds it the queue's realtime messages, until [`disconnect`](#disconnect). */
-	connect(realtime: Pick<Realtime, 'on'>) {
+	/** Starts the worker for `user`'s queue and feeds it the queue's realtime messages, until [`disconnect`](#disconnect). */
+	connect(realtime: Pick<Realtime, 'on'>, user: string) {
 		if (this.#worker) return;
 		const worker = (this.#worker = this.#spawn());
 		worker.onmessage = ({ data }: MessageEvent<FromWorker>) => this.#heard(data);
-		this.#send({ type: 'init', api: API, wasm: wasmUrl });
+		this.#send({ type: 'init', api: API, wasm: wasmUrl, user });
 		this.#unsubscribe = realtime.on((message: RealtimeServerMessage) => {
 			if (QUEUE_MESSAGES.has(message.type)) this.#send({ type: 'message', message });
 		});

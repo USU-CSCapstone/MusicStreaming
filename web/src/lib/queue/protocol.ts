@@ -101,8 +101,8 @@ export type RowsWindow = {
 
 /** The page to the worker. */
 export type ToWorker =
-	/** First: where the API is. */
-	| { type: 'init'; api: string; wasm: string }
+	/** First: where the API is, and the account signed in. */
+	| { type: 'init'; api: string; wasm: string; user: string }
 	| { type: 'message'; message: RealtimeServerMessage }
 	| { type: 'edit'; edit: SentEdit; length?: number; offline?: boolean }
 	/** Starts a queue; answered with `started` carrying the same `id`. */

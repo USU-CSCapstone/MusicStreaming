@@ -21,6 +21,7 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 				new QueueStore({
 					api: data.api,
 					catalog: new CatalogRouter(),
+					user: data.user,
 					changed: (summary) => post({ type: 'state', summary }),
 					refused: (refusal) => post({ type: 'refused', refusal })
 				})

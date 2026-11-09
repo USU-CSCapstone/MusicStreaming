@@ -46,7 +46,7 @@ vi.mock('$lib/realtime.svelte', () => ({ realtime: fake.realtime }));
 vi.mock('$lib/queue/client.svelte', async (actual) => {
 	const { QueueClient } = await actual<typeof import('$lib/queue/client.svelte')>();
 	const queue = new QueueClient(() => fake.worker());
-	queue.connect({ on: () => () => {} });
+	queue.connect({ on: () => () => {} }, '7');
 	return { queue };
 });
 vi.mock('$lib/api/client', async (actual) => ({

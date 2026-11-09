@@ -311,7 +311,7 @@ class FakeCatalog {
 	answer: { ids: string[]; hash: string } | null | 'fails' = 'fails';
 	/** Holds back the answer until it is opened. */
 	gate: Promise<void> | null = null;
-	asked: { library: string; name: string; offline?: boolean }[] = [];
+	asked: { library: string; name: string; offline?: boolean; user?: string }[] = [];
 
 	/** Answers a query as the catalog's owner does, with JSON; rejects as it does when it cannot. */
 	ask = async (request: {
@@ -319,8 +319,14 @@ class FakeCatalog {
 		library?: string;
 		name?: string;
 		offline?: boolean;
+		user?: string;
 	}): Promise<string> => {
-		this.asked.push({ library: request.library!, name: request.name!, offline: request.offline });
+		this.asked.push({
+			library: request.library!,
+			name: request.name!,
+			offline: request.offline,
+			user: request.user
+		});
 		await this.gate;
 		if (this.answer === 'fails') throw new Error('the library is not on this device');
 		return JSON.stringify(this.answer && { ...this.answer, recipe: { type: 'album' } });
@@ -376,6 +382,7 @@ beforeEach(() => {
 	// A store from an earlier test can still be retrying; only this test's store reports here.
 	const created: QueueStore = new QueueStore({
 		api: API,
+		user: '7',
 		fetch: server.fetch as typeof fetch,
 		retryMs: 0,
 		storage: caches as unknown as CacheStorage,
@@ -1262,6 +1269,7 @@ describe('QueueStore lists and rows', () => {
 	it('works with no Cache Storage at all', async () => {
 		store = new QueueStore({
 			api: API,
+			user: '7',
 			fetch: server.fetch as typeof fetch,
 			retryMs: 0,
 			storage: undefined,
@@ -1536,7 +1544,10 @@ describe('QueueStore lists and rows', () => {
 			expect(now()).toEqual(['201', '202', '203', '204']);
 			expect(server.listGets()).toEqual(['h']);
 			expect(server.rowGets()).toEqual(pages);
-			expect(device.asked).toEqual([{ library: 'lib', name: 'resolveRecipe', offline: false }]);
+			// The account goes with it, so an owner signed in as another account does not answer.
+			expect(device.asked).toEqual([
+				{ library: 'lib', name: 'resolveRecipe', offline: false, user: '7' }
+			]);
 			expect(caches.hashes()).toEqual([SERVER_LIST]);
 		});
 

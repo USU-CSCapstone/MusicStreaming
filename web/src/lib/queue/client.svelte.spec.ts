@@ -30,17 +30,20 @@ function setup() {
 	const worker = new FakeWorker();
 	const client = new QueueClient(() => worker as unknown as Worker);
 	let hear: (message: RealtimeServerMessage) => void = () => {};
-	client.connect({
-		on: (listener) => {
-			hear = listener;
-			return () => {};
-		}
-	});
+	client.connect(
+		{
+			on: (listener) => {
+				hear = listener;
+				return () => {};
+			}
+		},
+		'7'
+	);
 	return { worker, client, hear: (message: object) => hear(message as RealtimeServerMessage) };
 }
 
 describe('QueueClient', () => {
-	it('tells the worker where the API is, and passes on only the queue messages and edits', () => {
+	it('tells the worker where the API is and whose queue it is, and passes on only the queue messages and edits', () => {
 		const { worker, client, hear } = setup();
 		hear({ type: 'hello', deviceId: '1', serverTime: '' });
 		hear({ type: 'devices', devices: [] });
@@ -48,6 +51,7 @@ describe('QueueClient', () => {
 		client.edit({ type: 'next' });
 
 		expect(worker.sent.map((m) => m.type)).toEqual(['init', 'message', 'message', 'edit']);
+		expect(worker.sent[0]).toMatchObject({ type: 'init', user: '7' });
 	});
 
 	it('shows what the worker says the queue is, and the edit that did not stay', () => {

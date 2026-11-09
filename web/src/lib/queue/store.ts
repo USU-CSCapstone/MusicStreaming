@@ -34,6 +34,8 @@ import type {
 export type Options = {
 	/** The API's base path, such as `/api/v1`. */
 	api: string;
+	/** The account signed in, whose files alone the catalog's owner answers the queue from. */
+	user: string;
 	fetch?: typeof fetch;
 	/** How long to wait before sending again what could not be sent. */
 	retryMs?: number;
@@ -93,6 +95,7 @@ type ProblemBody = { code?: string; detail?: string; title?: string } | null;
 
 export class QueueStore {
 	#api: string;
+	#user: string;
 	#fetch: typeof fetch;
 	#retryMs: number;
 	#changed: (summary: Summary) => void;
@@ -146,6 +149,7 @@ export class QueueStore {
 	/** Makes an empty store; it loads the server's queue when the connection says hello. */
 	constructor({
 		api,
+		user,
 		fetch: fetcher = (...args) => fetch(...args),
 		retryMs = 2000,
 		storage = globalThis.caches,
@@ -155,6 +159,7 @@ export class QueueStore {
 	}: Options) {
 		this.catalog = catalog;
 		this.#api = api;
+		this.#user = user;
 		this.#fetch = fetcher;
 		this.#retryMs = retryMs;
 		this.#changed = changed;
@@ -358,7 +363,8 @@ export class QueueStore {
 				library: libraryId,
 				name: 'resolveRecipe',
 				params,
-				offline
+				offline,
+				user: this.#user
 			} as const;
 			return JSON.parse(await this.catalog.ask(request));
 		} catch {
