@@ -170,7 +170,7 @@ Stage 10 is two plans. The first makes the catalog, search and queue building wo
 - **Accepted until Part 2**: tombstones never age out; a device offline before its first sync says the library is not on it yet; edits made offline are lost if the app closes before it reconnects; nothing plays offline.
 
 **Open questions:**
-1. ~~The on-device catalog and index format~~ Answered: SQLite on the device, with the catalog's SQL shared with the server. A 500,000-track copy is about 310 MB, within [`performance.md` §6](requirements/performance.md#6-client-footprint)'s goal of well under 0.1% of the music.
+1. ~~The on-device catalog and index format~~ Answered: SQLite on the device, with the catalog's SQL shared with the server. A 500,000-track copy is about 360 MB, within [`performance.md` §6](requirements/performance.md#6-client-footprint)'s goal of well under 0.1% of the music.
 2. How long change-feed tombstones are kept, and what triggers a full resync. Carried: nothing is dropped and no horizon exists. A device whose cursor the server refuses (`410`, including one from beyond a restored backup) downloads the snapshot again, keeping its copy until the new one is in, and the same happens when a catch-up would change more than a tenth of a library.
 3. ~~Whether album changes in the feed carry their tracks~~ Answered: no. A device's tables are normalized, so a track's album, artist and tag names are joins and an album change sends only the album.
 
