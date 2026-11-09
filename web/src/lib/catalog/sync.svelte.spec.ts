@@ -518,6 +518,16 @@ describe('catalog sync', () => {
 		expect(await h.cursor('1', 'account')).toBe(1);
 	});
 
+	it('410 from the account feed on a hello downloads the library once, though the hello pulls it too', async () => {
+		await started('1');
+		await h.api.setAccount([], 1);
+		await h.message(hello);
+		await h.idle();
+
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
+		expect(await h.cursor('1', 'account')).toBe(1);
+	});
+
 	it('410 keeps the old copy until the new snapshot is in', async () => {
 		await started('1');
 		await h.api.setSeq('1', 5);

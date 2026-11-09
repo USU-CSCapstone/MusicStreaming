@@ -484,7 +484,9 @@ export class CatalogSync {
 			void this.#pullLibrary(id);
 			return;
 		}
-		if (expired) void this.#run(`lib:${id}`, () => this.#syncLibrary(id, true));
+		// A repeat of the run once the new file is in is a catch-up, not another download.
+		if (expired)
+			void this.#run(`lib:${id}`, () => this.#syncLibrary(id, this.catalogs.get(id) === catalog));
 	}
 
 	/**
