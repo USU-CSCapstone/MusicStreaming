@@ -177,7 +177,7 @@ const HID: &str =
 /// The albums of `library` every track of which `user` hid, which are gone from their library
 /// with them (`requirements/conventions.md` §8). Only the albums of hidden tracks can be, and
 /// each is kept unless a probe of `tracks_by_album_order` finds a track left, which it stops at.
-pub fn albums(conn: &Connection, user: i64, library: i64) -> rusqlite::Result<Vec<i64>> {
+fn albums(conn: &Connection, user: i64, library: i64) -> rusqlite::Result<Vec<i64>> {
     wholly(
         conn,
         user,
@@ -190,7 +190,7 @@ pub fn albums(conn: &Connection, user: i64, library: i64) -> rusqlite::Result<Ve
 
 /// The artists of `library` every track of which `user` hid: those that credit them and those
 /// on their albums, each probed through its index until one is found left, as for [`albums`].
-pub fn artists(conn: &Connection, user: i64, library: i64) -> rusqlite::Result<Vec<i64>> {
+fn artists(conn: &Connection, user: i64, library: i64) -> rusqlite::Result<Vec<i64>> {
     wholly(
         conn,
         user,

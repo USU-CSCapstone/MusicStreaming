@@ -77,7 +77,7 @@ pub async fn list(
         .read(move |conn| {
             let mut source = source(conn, library, &tags)?;
             let losses = hidden::losses(conn, user, library)?;
-            let mut gone = hidden::artists(conn, user, library)?;
+            let mut gone = losses.whole_artists.clone();
             let owners = losses.artists.iter().map(|(&artist, loss)| (artist, &loss.tags));
             gone.extend(Tags::read(conn, library, &TAGGED, &tags)?.lost(conn, &TAGGED, owners)?);
             hidden::leave_out_ids(conn, &mut source, "ar.id", &gone)?;
@@ -97,12 +97,13 @@ pub async fn get(
     Path((_, Id(artist))): Path<(Id, Id)>,
 ) -> Result<Json<Artist>, Problem> {
     db.read(move |conn| {
-        if hidden::artists(conn, user, library)?.contains(&artist) {
+        let losses = hidden::losses(conn, user, library)?;
+        if losses.whole_artists.contains(&artist) {
             return Ok(None);
         }
         let mut found = representation::artist(conn, library, artist)?;
         if let Some(artist) = &mut found {
-            artist.lose(&hidden::losses(conn, user, library)?);
+            artist.lose(&losses);
         }
         Ok(found)
     })
