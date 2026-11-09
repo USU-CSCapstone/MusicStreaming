@@ -169,7 +169,14 @@ pub async fn edit(
                     }
                     write(tx, user, library, id, base, &plan)?;
                     // A track added to Liked Songs is liked, and so not hidden; one removed is
-                    // unliked.
+                    // unliked. Unhidden first, so a plugin applying the marks in order ends on the
+                    // like, as the like endpoint's do.
+                    let mut unhidden = Vec::new();
+                    for &track in plan.added.iter().filter(|_| liked) {
+                        if hidden::unhide_in(tx, user, library, track)? {
+                            unhidden.push(track);
+                        }
+                    }
                     let likes = if liked {
                         // Liked Songs holds each track once, so each removed is unliked once.
                         // In track order, which the plan's set of adds lacks.
@@ -182,12 +189,6 @@ pub async fn edit(
                     } else {
                         Default::default()
                     };
-                    let mut unhidden = Vec::new();
-                    for &track in plan.added.iter().filter(|_| liked) {
-                        if hidden::unhide_in(tx, user, library, track)? {
-                            unhidden.push(track);
-                        }
-                    }
                     // An edit of details alone leaves the items, and so the artwork.
                     if plan.totals.is_some() {
                         catalog::playlist_artwork(tx, id)?;

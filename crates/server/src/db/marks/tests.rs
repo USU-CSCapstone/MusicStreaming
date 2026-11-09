@@ -61,9 +61,10 @@ async fn each_like_and_hide_records_what_the_track_now_is() {
     send(&app, "PUT", "/tracks/1/like", None).await;
     assert_eq!(marks(recorded(&temp, &mut seq)), [(1, "liked")], "liked once");
 
-    // Hiding a liked track unlikes it, and liking it again unhides it.
+    // Hiding a liked track unlikes it, and liking it again unhides it: the undo first each time,
+    // so a plugin applying them in order ends on what was asked for.
     send(&app, "PUT", "/tracks/1/hidden", None).await;
-    assert_eq!(marks(recorded(&temp, &mut seq)), [(1, "hidden"), (1, "unliked")]);
+    assert_eq!(marks(recorded(&temp, &mut seq)), [(1, "unliked"), (1, "hidden")]);
     send(&app, "PUT", "/tracks/1/like", None).await;
     assert_eq!(marks(recorded(&temp, &mut seq)), [(1, "unhidden"), (1, "liked")]);
 
@@ -91,8 +92,8 @@ async fn edits_of_liked_songs_record_likes_and_unlikes_and_nothing_else_does() {
     let edited = send(&app, "PATCH", &uri, Some(add)).await;
     assert_eq!(
         marks(recorded(&temp, &mut seq)),
-        [(1, "liked"), (2, "liked"), (2, "unhidden")],
-        "an add likes, and unhides"
+        [(2, "unhidden"), (1, "liked"), (2, "liked")],
+        "an add unhides, then likes"
     );
 
     // A move keeps every track liked, so it records nothing.

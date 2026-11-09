@@ -56,6 +56,8 @@ pub async fn hide(
                 if !found {
                     return Err(Problem::not_found());
                 }
+                // Unliked first, so a plugin applying the marks in order ends on the hide.
+                let unliked = playlists::unlike_in(tx, user, library, track)?;
                 let hid = tx
                     .prepare_cached(
                         "INSERT OR IGNORE INTO hidden_tracks (user_id, library_id, track_id, \
@@ -66,7 +68,7 @@ pub async fn hide(
                 if hid {
                     marks::record(tx, user, library, [track], Mark::Hidden)?;
                 }
-                Ok((hid, playlists::unlike_in(tx, user, library, track)?))
+                Ok((hid, unliked))
             })
             .await?;
         if unliked.is_some() {
