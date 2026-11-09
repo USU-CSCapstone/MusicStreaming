@@ -187,9 +187,10 @@ fn quick_check(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 /// Builds `library`'s file in `dir` from the server database at `database`, replacing the older
-/// ones: the device rows and the feed position read in one snapshot, compacted with
-/// `VACUUM INTO`, checked by `verify`, hashed, and gzipped. Nothing is left in `dir` if any step
-/// fails.
+/// ones: the device rows and the feed position read in one snapshot, checked by `verify`, hashed,
+/// and gzipped. The file served is the database as built, closed before it is read, not a
+/// compacted copy: a copy is 3.5% smaller on the wire but is another write of the whole file.
+/// Nothing is left in `dir` if any step fails.
 fn build(
     database: &Path,
     dir: &Path,
@@ -198,17 +199,15 @@ fn build(
 ) -> anyhow::Result<()> {
     fs::create_dir_all(dir)?;
     let work = tempfile::Builder::new().prefix(BUILDING).tempdir_in(dir)?;
-    let mut conn = Connection::open(work.path().join("copy.db"))?;
+    let served = work.path().join("served.db");
+    let mut conn = Connection::open(&served)?;
     conn.execute_batch(&format!("PRAGMA page_size = {PAGE_SIZE}; PRAGMA journal_mode = DELETE"))?;
     create_schema(&conn)?;
     // Read-only, and attached before the transaction `copy` makes, which SQLite requires.
     conn.execute("ATTACH DATABASE ?1 AS server", [read_only_uri(database)])?;
     let seq = snapshot::copy(&mut conn, library)?;
     conn.execute_batch("DETACH DATABASE server")?;
-    let served = work.path().join("served.db");
-    conn.execute("VACUUM INTO ?1", [served.to_str()])?;
-    drop(conn);
-    fs::remove_file(work.path().join("copy.db"))?;
+    conn.close().map_err(|(_, error)| error)?;
     verify(&Connection::open_with_flags(&served, OpenFlags::SQLITE_OPEN_READ_ONLY)?)?;
 
     let zipped = work.path().join("served.db.gz");
