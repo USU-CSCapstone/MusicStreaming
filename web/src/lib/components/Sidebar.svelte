@@ -9,8 +9,10 @@
 	import SearchBox from './SearchBox.svelte';
 
 	const library = $derived(page.data.library);
+	const onLibraries = $derived(page.route.id?.startsWith('/admin/libraries') ?? false);
 	const onPlugins = $derived(page.route.id?.startsWith('/admin/plugins') ?? false);
-	// Plugins are administered, so only admins and the owner see them (`requirements/users.md` §1).
+	// Libraries and plugins are administered, so only admins and the owner see them
+	// (`requirements/users.md` §1).
 	const admin = $derived(page.data.me !== null && page.data.me.role !== 'user');
 	// A section for each type of tag the library's music carries, under Songs: its list, and the
 	// page of each of its tags (`requirements/tags.md` §7).
@@ -49,6 +51,16 @@
 	</ul>
 	{#if admin}
 		<ul class="bottom">
+			<li>
+				<a
+					href={resolve('/admin/libraries')}
+					class:active={onLibraries}
+					aria-current={onLibraries ? 'page' : undefined}
+				>
+					<Icon name="folder" size={18} />
+					Libraries
+				</a>
+			</li>
 			<li>
 				<a
 					href={resolve('/admin/plugins')}
@@ -114,7 +126,7 @@
 		color: var(--accent);
 	}
 
-	/* Pinned to the bottom: the Plugins link if it shows, and the footer under it. */
+	/* Pinned to the bottom: the admin links if they show, and the footer under it. */
 	.bottom,
 	footer {
 		margin-top: auto;
