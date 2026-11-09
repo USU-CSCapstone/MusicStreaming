@@ -79,6 +79,10 @@ from [Without Docker](#without-docker). CI runs them again on every pull request
 | | `pnpm test` |
 | `api/` | `npx @redocly/cli@2.65.1 lint openapi.yaml` |
 
+`pnpm test` includes the end-to-end tests, which build the server and run a real one for each
+Playwright worker on generated music, so they need ffmpeg and the Rust toolchain. The first run
+is slow because of the server build.
+
 Code outside tests may not use `unwrap()`. Use `expect("why it can't fail")` only where failure
 is impossible, and handle anything that depends on input, files, configuration, or the
 environment. `unsafe` is not allowed anywhere.
