@@ -452,3 +452,39 @@ async fn filters_leave_out_what_only_hidden_tracks_bring() {
     assert_eq!(found("q=beatles&tagAny=32&types=artists").await, Vec::<String>::new());
     assert_eq!(found("q=beatles&tagAny=31&types=artists").await, ["artists"], "Pop is left");
 }
+
+/// An album hidden whole leaves the library's album count and its owner's, and an artist hidden
+/// whole the library's artist count; an artist-filtered list of albums loses it from its stored
+/// total too.
+#[tokio::test]
+async fn an_album_hidden_whole_leaves_every_count() {
+    let (_temp, _db, app) = super::super::testing::catalog::app().await;
+    let library = get(&app, "").await;
+    let radiohead = get(&app, "/artists/11").await;
+    let radiohead_albums = "/api/v1/libraries/1/albums?artistId=11";
+    let (listed, totals) = walk(&app, radiohead_albums, 100).await;
+    assert_eq!((listed, totals[0]), (vec!["101".to_owned(), "102".to_owned()], 2), "Bonus, Kid A");
+
+    // Kid A's one track, by Radiohead, who keep their credit on Bonus; and the unknown album's
+    // one track, by the unknown artist, who has nothing else.
+    for track in ["1005", "1006"] {
+        hide(&app, TOKEN, "PUT", track).await;
+    }
+    let count = |page: &Value, field: &str| page[field].as_i64().unwrap();
+    let now = get(&app, "").await;
+    assert_eq!(count(&now, "albumCount"), count(&library, "albumCount") - 2);
+    assert_eq!(count(&now, "artistCount"), count(&library, "artistCount") - 1);
+    let now = get(&app, "/artists/11").await;
+    assert_eq!(count(&now, "albumCount"), count(&radiohead, "albumCount") - 1, "Kid A");
+    let (_, artists) = call(&app, TOKEN, "GET", "/api/v1/libraries/1/artists", None).await;
+    let listed = artists["items"].as_array().unwrap().iter().find(|a| a["id"] == "11").unwrap();
+    assert_eq!(listed["albumCount"], now["albumCount"], "listed as shown");
+
+    for limit in [1, 100] {
+        let (listed, totals) = walk(&app, radiohead_albums, limit).await;
+        assert_eq!(listed, ["101"], "by {limit}");
+        assert!(totals.iter().all(|total| *total == 1), "by {limit}: {totals:?}");
+    }
+    let (owned, totals) = walk(&app, &format!("{radiohead_albums}&artistCredit=owned"), 1).await;
+    assert_eq!((owned.len(), totals), (0, vec![0]));
+}
