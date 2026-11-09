@@ -665,7 +665,13 @@ describe('CatalogClient', () => {
 		const again = performance.now();
 		expect(await second.client.onDevice('1')).toBe(false);
 		expect(performance.now() - again).toBeLessThan(150);
+
+		// Once this tab serves the catalog itself, its reads go to the device again at once.
+		b.silence(false);
+		second.client.connect(b.realtime, '7');
 		first.client.disconnect();
+		await vi.waitFor(async () => expect(await second.client.onDevice('1')).toBe(true));
+		second.client.disconnect();
 	});
 
 	it('an owner that has to check who the session is makes no request while working offline', async () => {
