@@ -405,7 +405,7 @@ export interface paths {
          * List hidden tracks
          * @description Hidden Songs: the tracks the caller hid in this library, by when they were hidden,
          *     newest first unless `order` is `asc` (`requirements/conventions.md` §8). The one place a
-         *     hidden track is listed. None is `liked`, since hiding unlikes.
+         *     hidden track is listed. Each is `hidden`, and none is `liked`, since hiding unlikes.
          */
         get: operations["listHiddenTracks"];
         put?: never;
