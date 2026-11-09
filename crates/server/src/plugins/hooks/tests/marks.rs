@@ -282,6 +282,34 @@ async fn the_marked_hook_reads_its_feed_by_user() {
     assert!(steps.iter().any(reads), "{steps:#?}");
 }
 
+/// A page of a user's likes and hides as they stand finds each side's next tracks by its index,
+/// and joins only those to their tracks, so it costs what it holds, never what the user likes.
+#[tokio::test]
+async fn a_page_of_likes_and_hides_reads_from_their_indexes() {
+    let (_temp, db, _plugins) = setup().await;
+    let steps: Vec<String> = db
+        .read(|conn| {
+            conn.prepare(&format!("EXPLAIN QUERY PLAN {}", super::super::marks::standing_query()))?
+                .query_map(rusqlite::params![1, 7, 0, 100], |row| row.get(3))?
+                .collect()
+        })
+        .await
+        .unwrap();
+    let has = |step: &str| steps.iter().any(|s| s.contains(step));
+    assert!(
+        has("SEARCH i USING INDEX playlist_items_by_playlist_track (playlist_id=? AND track_id>?)"),
+        "{steps:#?}"
+    );
+    assert!(
+        has("SEARCH h USING PRIMARY KEY (user_id=? AND library_id=? AND track_id>?)"),
+        "{steps:#?}"
+    );
+    // Only the pages each side found are scanned, and the page they make, `m`; no table.
+    let scans_a_table =
+        |s: &String| s.starts_with("SCAN ") && !s.starts_with("SCAN (") && s != "SCAN m";
+    assert!(!steps.iter().any(scans_a_table), "{steps:#?}");
+}
+
 /// The whole path, with a plugin compiled from its component: a user's likes reach its `handle`
 /// as a `marked` event, whose first mark names the track, and what it answers is recorded.
 #[tokio::test]
