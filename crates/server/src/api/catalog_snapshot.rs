@@ -176,9 +176,7 @@ fn newest(dir: &Path) -> io::Result<Option<Current>> {
             let version = parts.next()?.parse::<i32>().ok()?;
             let epoch = parts.next()?.parse::<i64>().ok()?;
             let position = parts.next()?.parse::<i64>().ok()?;
-            // Only a hash: a name of an earlier layout, such as `….db.gz`, is not this one.
-            let sha256 = parts.next().filter(|s| s.len() == 64 && s.bytes().all(is_hex))?;
-            Some((version, epoch, position, sha256.to_owned()))
+            Some((version, epoch, position, parts.next()?.to_owned()))
         });
         if let Some((version, epoch, position, sha256)) = parsed
             && version == SCHEMA_VERSION
@@ -188,11 +186,6 @@ fn newest(dir: &Path) -> io::Result<Option<Current>> {
         }
     }
     Ok(newest)
-}
-
-/// Whether `byte` is a lowercase hex digit, as a file name's hash is written.
-fn is_hex(byte: u8) -> bool {
-    matches!(byte, b'0'..=b'9' | b'a'..=b'f')
 }
 
 /// SQLite's `quick_check` on the file, which fails unless it reports `ok`.

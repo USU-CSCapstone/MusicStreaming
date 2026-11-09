@@ -49,8 +49,8 @@ const WIPE_WAIT_MS = 300;
  * the gzipped snapshot of library `id` whose ETag is `etag`, or as much of it as has arrived.
  */
 const DOWNLOAD = (id: string, etag: string) => `download-${id}-${etag}.tmp`;
-/** Matches every download's name, giving the library and ETag of one `DOWNLOAD` made. */
-const DOWNLOADS = /^download-(?:(\d+)-([0-9a-f]+))?.*\.tmp$/;
+/** Matches a `DOWNLOAD` name, giving its library and ETag. */
+const DOWNLOADS = /^download-(\d+)-([0-9a-f]+)\.tmp$/;
 /** An ETag the device can check a snapshot against: a SHA-256 in lowercase hex. */
 const ETAG = /^[0-9a-f]{64}$/;
 
@@ -969,7 +969,7 @@ export class CatalogSync {
 		const root = await navigator.storage.getDirectory();
 		for await (const name of root.keys()) {
 			const match = DOWNLOADS.exec(name);
-			if (match && !(match[1] && keep(match[1]))) await root.removeEntry(name);
+			if (match && !keep(match[1])) await root.removeEntry(name);
 		}
 	}
 

@@ -624,28 +624,6 @@ async fn a_file_of_another_schema_version_is_not_served_and_a_build_replaces_it(
 }
 
 #[tokio::test]
-async fn files_of_the_earlier_layout_are_not_served_and_a_build_replaces_them() {
-    let (temp, _db, app, snapshots) = catalog::app_with_snapshots().await;
-    let (first, _) = built(&app).await;
-    eventually("the builds to finish", async || {
-        snapshots.building.lock().unwrap().is_empty().then_some(())
-    })
-    .await;
-    let dir = temp.path().join("cache/catalog/1");
-    let old = newest(&dir).unwrap().unwrap();
-    // The database and its gzip, named for the database's hash.
-    let name = format!("{SCHEMA_VERSION}-{}-{}-{}.db", old.epoch, old.position, "d".repeat(64));
-    std::fs::rename(&old.path, dir.join(format!("{name}.gz"))).unwrap();
-    std::fs::write(dir.join(&name), b"database").unwrap();
-
-    let (status, ..) = fetch(&app, URI).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    let (headers, _) = built(&app).await;
-    assert_eq!(feed_position(&headers), feed_position(&first));
-    eventually("the earlier files deleted", async || (files(&dir).len() == 1).then_some(())).await;
-}
-
-#[tokio::test]
 async fn no_account_playlist_is_in_a_snapshot_every_account_shares() {
     let (temp, db, app) = catalog::app().await;
     add_user(&conn(&temp), 2, "user");

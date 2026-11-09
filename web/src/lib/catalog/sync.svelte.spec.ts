@@ -449,6 +449,17 @@ describe('catalog sync', () => {
 		expect(await h.libraries()).toEqual([]);
 	});
 
+	it('sign-out deletes a download cut short', async () => {
+		await serve('1');
+		await h.api.cutBody();
+		await h.start();
+		await h.idle();
+		expect(await h.downloads()).toHaveLength(1);
+
+		await h.signOut();
+		expect(await h.downloads()).toEqual([]);
+	});
+
 	it('a file kept for another account is deleted', async () => {
 		await started('1');
 		await h.stop();
@@ -834,9 +845,8 @@ describe('catalog sync', () => {
 	it('clears the downloads a closed worker left behind of the libraries it holds', async () => {
 		await started('1');
 		await h.stop();
-		await h.leaveDownload('download-1.tmp');
 		await h.leaveDownload(`download-1-${'a'.repeat(64)}.tmp`, new Uint8Array(8));
-		expect(await h.downloads()).toHaveLength(2);
+		expect(await h.downloads()).toHaveLength(1);
 		await h.start();
 		await h.idle();
 		expect(await h.downloads()).toEqual([]);
