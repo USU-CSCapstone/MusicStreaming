@@ -58,6 +58,9 @@ CREATE TABLE playlist_items (
 ) STRICT, WITHOUT ROWID;
 
 CREATE INDEX playlist_items_by_track ON playlist_items (library_id, track_id);
+-- A playlist's items in track order, so a user's likes are read a page at a time by track, as
+-- the `marked` hook first sends them (plugins/hooks/marks.rs)
+CREATE INDEX playlist_items_by_playlist_track ON playlist_items (playlist_id, track_id);
 
 -- Each library a user deleted their Liked Songs in, so it is not made again until they next like
 -- a track there (requirements/playlists.md §11)

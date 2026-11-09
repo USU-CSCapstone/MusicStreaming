@@ -50,27 +50,42 @@ fn standing(
     } else {
         due.position
     };
-    // Liking and hiding undo each other, so a track is one or the other, never both.
     let marks: Vec<(i64, Mark)> = conn
-        .prepare_cached(&format!(
-            "SELECT {}, m.kind, m.at FROM ( \
-               SELECT i.track_id, 'liked' AS kind, i.added_at AS at FROM playlists p \
-               JOIN playlist_items i ON i.playlist_id = p.id \
-               WHERE p.user_id = ?2 AND p.library_id = ?1 AND p.kind = 'liked' \
-                 AND i.track_id > ?3 \
-               UNION ALL \
-               SELECT h.track_id, 'hidden', h.hidden_at FROM hidden_tracks h \
-               WHERE h.user_id = ?2 AND h.library_id = ?1 AND h.track_id > ?3) m \
-             JOIN tracks t ON t.id = m.track_id AND t.library_id = ?1 \
-             JOIN albums al ON al.id = t.album_id \
-             ORDER BY m.track_id LIMIT ?4",
-            TRACK_COLUMNS.join(", ")
-        ))?
+        .prepare_cached(&standing_query())?
         .query_map(params![due.library, user, after, BATCH], |row| Ok((row.get(0)?, mark(row)?)))?
         .collect::<rusqlite::Result<_>>()?;
     let full = i64::try_from(marks.len()).is_ok_and(|n| n == BATCH);
     let after = if full { marks.last().map(|(track, _)| *track) } else { None };
     Ok((Next { position: head, after }, marks.into_iter().map(|(_, mark)| mark).collect()))
+}
+
+/// The query for a page of [`standing`]: the first `?4` of user `?2`'s likes and hides in library
+/// `?1` after track `?3`, by track. Each side finds its own first `?4` by its index on track, the
+/// likes through `playlist_items_by_playlist_track` and the hides through their key, and only
+/// the page of them is joined to its tracks, so a page costs what it holds and never what the
+/// user likes. Liking and hiding undo each other, so a track is one or the other, never both.
+pub(super) fn standing_query() -> String {
+    format!(
+        "SELECT {}, m.kind, m.at FROM ( \
+           SELECT * FROM ( \
+             SELECT * FROM ( \
+               SELECT i.track_id, 'liked' AS kind, i.added_at AS at \
+               FROM playlist_items i INDEXED BY playlist_items_by_playlist_track \
+               WHERE i.playlist_id = (SELECT id FROM playlists \
+                                      WHERE user_id = ?2 AND library_id = ?1 AND kind = 'liked') \
+                 AND i.track_id > ?3 \
+               ORDER BY i.track_id LIMIT ?4) \
+             UNION ALL \
+             SELECT * FROM ( \
+               SELECT h.track_id, 'hidden', h.hidden_at FROM hidden_tracks h \
+               WHERE h.user_id = ?2 AND h.library_id = ?1 AND h.track_id > ?3 \
+               ORDER BY h.track_id LIMIT ?4)) \
+           ORDER BY track_id LIMIT ?4) m \
+         CROSS JOIN tracks t ON t.id = m.track_id AND t.library_id = ?1 \
+         JOIN albums al ON al.id = t.album_id \
+         ORDER BY m.track_id",
+        TRACK_COLUMNS.join(", ")
+    )
 }
 
 /// The next batch of marks `user` made in `library` after `position`, from the feed.
