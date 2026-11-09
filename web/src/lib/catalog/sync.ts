@@ -31,9 +31,10 @@ const BUILD_TRIES = 10;
 /** Seconds between asks for a snapshot newer than the copy, unless the server says otherwise. */
 const REBUILD_WAIT = 5;
 /**
- * Staged changes applied in one transaction, the worker answering between chunks. A chunk takes
- * about 14 ms on average and 41 ms at worst natively at 500,000 tracks, so roughly 85 ms and
- * 250 ms on a phone (wasm, 4× slower CPU). Online reads of the applying library go to the server
+ * Staged changes applied in one transaction, the worker answering between chunks. At 500,000
+ * tracks a chunk takes about 14 ms on average and 41 ms at worst natively; in the browser bench
+ * (wasm on OPFS) it averages 50 to 100 ms, or 130 to 190 ms with the CPU throttled, but the
+ * slowest take 2 to 3 s and up to 10 s. Online reads of the applying library go to the server
  * meanwhile, so a chunk holds up only other libraries' reads and offline reads; smaller chunks
  * would cost more per-transaction work and journal writes for that.
  */

@@ -84,11 +84,11 @@ fn epoch(headers: &HeaderMap) -> &str {
     headers["x-jewelcase-epoch"].to_str().unwrap()
 }
 
-/// Every table's columns, as `table.column`.
+/// Every table's columns, as `table.column`, leaving out the planner's statistics.
 fn columns(conn: &Connection) -> Vec<String> {
     conn.prepare(
         "SELECT m.name || '.' || p.name FROM sqlite_schema AS m, pragma_table_info(m.name) AS p \
-         WHERE m.type = 'table' ORDER BY 1",
+         WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_stat%' ORDER BY 1",
     )
     .unwrap()
     .query_map([], |r| r.get(0))
@@ -201,7 +201,9 @@ async fn no_server_only_column_and_no_other_librarys_row_is_in_the_file() {
     assert_eq!(columns(&snapshot), columns(&device), "exactly the device schema's columns");
 
     let tables: Vec<String> = snapshot
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table'")
+        .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_stat%'",
+        )
         .unwrap()
         .query_map([], |r| r.get(0))
         .unwrap()
@@ -533,7 +535,9 @@ async fn the_file_has_the_device_schema_with_every_index() {
     let device = Connection::open_in_memory().unwrap();
     jewelcase_catalog::create_schema(&device).unwrap();
     let schema = |conn: &Connection| -> Vec<(String, String, Option<String>)> {
-        conn.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY name")
+        conn.prepare(
+            "SELECT type, name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_stat%' ORDER BY name",
+        )
             .unwrap()
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .unwrap()
@@ -543,6 +547,9 @@ async fn the_file_has_the_device_schema_with_every_index() {
     let indexes = schema(&snapshot).iter().filter(|(kind, ..)| kind == "index").count();
     assert!(indexes >= 22, "schema.sql's indexes: {indexes}");
     assert_eq!(schema(&snapshot), schema(&device));
+    let statistics: i64 =
+        snapshot.query_row("SELECT count(*) FROM sqlite_stat1", [], |r| r.get(0)).unwrap();
+    assert!(statistics > 0, "the planner's statistics travel in the file");
 }
 
 #[tokio::test]

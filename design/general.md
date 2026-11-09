@@ -162,7 +162,7 @@ jewelcase/
 ## 11. Open Decisions
 
 1. **Audio delivery** — gapless background playback in the browser, above all in an installed iOS web app, and the stream format that serves it.
-2. ~~**On-device catalog and index format**~~ Settled: SQLite with the catalog's SQL shared ([§3.1](#31-the-catalog-queries), [ADR 0008](../adr/0008-sqlite-device-catalog.md)). A 500,000-track copy is about 310 MB, within [`requirements/performance.md` §6](../requirements/performance.md#6-client-footprint).
+2. ~~**On-device catalog and index format**~~ Settled: SQLite with the catalog's SQL shared ([§3.1](#31-the-catalog-queries), [ADR 0008](../adr/0008-sqlite-device-catalog.md)). A 500,000-track copy is about 360 MB, within [`requirements/performance.md` §6](../requirements/performance.md#6-client-footprint).
 3. **Track identity** that survives retags and moves ([`requirements/scanning.md` §6](../requirements/scanning.md#6-track-identity)) without slowing cold scans ([`requirements/performance.md` §5](../requirements/performance.md#5-scanning--analysis)).
 4. **Plugin UI description** ([§8](#8-plugins)). The execution model is settled ([`plugins.md`](plugins.md)); its remaining questions are listed there.
 5. **Project license.**

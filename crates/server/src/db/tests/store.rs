@@ -50,7 +50,6 @@ mod artist_sort;
 mod artists;
 mod benchmark;
 mod derived;
-mod device_files;
 mod fails_loudly;
 mod failures;
 mod groups;
