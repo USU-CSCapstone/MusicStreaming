@@ -72,25 +72,34 @@ pub fn losses(conn: &Connection, user: i64, library: i64) -> rusqlite::Result<Lo
     }
     let query = |sql: &str| conn.prepare_cached(&format!("{HID}{sql}"));
 
-    // By album and disc, with what the disc holds, which a disc of only hidden tracks loses.
+    // By album and disc: what each disc the album lists loses.
     let mut discs = query(
-        "SELECT t.album_id, t.disc_number, count(*), sum(t.duration_us), d.track_count \
-         FROM hid CROSS JOIN tracks t ON t.id = hid.track_id \
-         LEFT JOIN album_discs d ON d.album_id = t.album_id AND d.disc_number = t.disc_number \
-         GROUP BY t.album_id, t.disc_number",
+        "SELECT t.album_id, t.disc_number, count(*), sum(t.duration_us) \
+         FROM hid CROSS JOIN tracks t ON t.id = hid.track_id GROUP BY t.album_id, t.disc_number",
     )?;
     let mut rows = discs.query(params![user, library])?;
     while let Some(row) = rows.next()? {
         let (album, disc, tracks, duration): (i64, i64, i64, i64) =
             (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?);
-        let held: Option<i64> = row.get(4)?;
         let loss = losses.albums.entry(album).or_default();
         loss.tracks += tracks;
         loss.duration_us += duration;
         loss.discs.insert(disc, tracks);
-        loss.discs_gone += i64::from(held.is_some_and(|held| tracks >= held));
         losses.library.tracks += tracks;
         losses.library.duration_us += duration;
+    }
+    // The discs left with no tracks, counted as `albums.disc_count` counts them: an unnumbered
+    // disc is disc 1, so disc 1 is gone only once both are.
+    let mut gone = query(
+        "SELECT g.album_id FROM (SELECT t.album_id, max(t.disc_number, 1) AS disc, \
+         count(*) AS hidden FROM hid CROSS JOIN tracks t ON t.id = hid.track_id \
+         GROUP BY t.album_id, disc) g \
+         WHERE g.hidden >= (SELECT sum(d.track_count) FROM album_discs d \
+         WHERE d.album_id = g.album_id AND d.disc_number BETWEEN g.disc - (g.disc = 1) AND g.disc)",
+    )?;
+    let mut rows = gone.query(params![user, library])?;
+    while let Some(row) = rows.next()? {
+        losses.albums.entry(row.get(0)?).or_default().discs_gone += 1;
     }
 
     // The tags an album, or an artist, holds only through hidden tracks: as many of them carry it
