@@ -1,4 +1,4 @@
-// The tag filter's rules, in no framework's terms, so the app and its test fixtures match tags
+// The tag filter's rules, in no framework's terms, so the app and its tests match tags
 // alike (`requirements/tags.md` §2, §7).
 
 import type { TagsByType } from './api/types';

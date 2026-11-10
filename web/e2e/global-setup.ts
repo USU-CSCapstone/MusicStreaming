@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { RUN_ENV, buildServer, generateMusic } from './server';
 
 /**
- * Builds the server and generates the music once for the run, in a folder that also holds every
- * server's folders. The returned function removes it.
+ * Builds the web app and the server, and generates the music once for the run, in a folder that
+ * also holds every server's folders. The returned function removes it.
  */
 export default function globalSetup() {
 	buildServer();
