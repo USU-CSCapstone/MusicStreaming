@@ -153,19 +153,10 @@ function sortedAsAsked(query: URLSearchParams): TrackSummary[] {
 }
 
 /**
- * The tracks a start's recipe resolves to, as the server runs it, without those the user hid
- * (`hidden`); what the fixture does not know is empty.
+ * The tracks a start's recipe resolves to, as the server runs it; what the fixture does not know
+ * is empty.
  */
 function resolveRecipe(
-	recipe: NonNullable<StartQueue['source']['recipe']>,
-	playlistRows: PlaylistRows,
-	hidden: readonly string[]
-): TrackSummary[] {
-	return resolveShown(recipe, playlistRows).filter((t) => !hidden.includes(t.id));
-}
-
-/** The tracks a recipe's view holds, hidden ones included. */
-function resolveShown(
 	recipe: NonNullable<StartQueue['source']['recipe']>,
 	playlistRows: PlaylistRows
 ): TrackSummary[] {
@@ -212,8 +203,6 @@ class FixtureQueue {
 	edits: SentEdit[] = [];
 	/** The playlists a playlist recipe resolves, set once the page's playlists are served. */
 	playlistRows: PlaylistRows = () => [];
-	/** The tracks the user hid, which a recipe leaves out, set once the page's library is served. */
-	hiddenIds: () => string[] = () => [];
 	/** While set, a start is not answered until it settles. */
 	holdStarts: Promise<void> | null = null;
 	/** Where `queueEdit` goes, as the realtime connection would send it; unset with none. */
@@ -245,8 +234,7 @@ class FixtureQueue {
 	start(body: StartQueue) {
 		this.starts.push(body);
 		const { key, libraryId, tracks: sent, recipe } = body.source;
-		const ids =
-			sent ?? resolveRecipe(recipe!, this.playlistRows, this.hiddenIds()).map((t) => t.id);
+		const ids = sent ?? resolveRecipe(recipe!, this.playlistRows).map((t) => t.id);
 		// As the server: `start` if the list holds the track there, else its first place.
 		const at = sent
 			? body.start
@@ -344,8 +332,7 @@ class FixtureQueue {
 	#registered(edit: SentEdit): QueueEdit {
 		if (edit.type !== 'add') return edit;
 		const { key, libraryId, tracks: sent, recipe } = edit.source;
-		const ids =
-			sent ?? resolveRecipe(recipe!, this.playlistRows, this.hiddenIds()).map((t) => t.id);
+		const ids = sent ?? resolveRecipe(recipe!, this.playlistRows).map((t) => t.id);
 		const list = `list-add-${key}`;
 		this.lists.set(list, ids);
 		const source = { key, libraryId, list, length: ids.length, ...(recipe ? { recipe } : {}) };
@@ -525,22 +512,7 @@ export async function serveLibrary(page: Page, { playlists = [] as Generated[] }
 			playlistStore.items(BigInt(library.id), id, new URLSearchParams({ limit: '1000' }))?.items ??
 			[]
 		).flatMap((i) => (i.track ? [{ track: i.track, addedAt: i.addedAt ?? '' }] : []));
-	queueOf(page).hiddenIds = () => playlistStore.hiddenIds(BigInt(library.id)).map(String);
 	const plays: PlayReport[] = [];
-	// The tracks as this user sees them, through the store, which keeps their likes and hides:
-	// copies marked liked or not, and hidden on a lookup, and in a list, without those hidden
-	// (`requirements/playlists.md` §11, `requirements/conventions.md` §8).
-	const libraryKey = BigInt(library.id);
-	const marked = (of: TrackSummary[]) => {
-		const copies = of.map((t) => ({ ...t }));
-		playlistStore.markLiked(libraryKey, copies);
-		playlistStore.markHidden(libraryKey, copies);
-		return copies;
-	};
-	const seen = (of: TrackSummary[]) => {
-		const hidden = playlistStore.hiddenIds(libraryKey);
-		return marked(of.filter((t) => !hidden.includes(BigInt(t.id))));
-	};
 	await page.route('**/api/v1/**', async (route: Route) => {
 		const url = new URL(route.request().url());
 		const path = url.pathname.replace(/^.*\/api\/v1/, '');
@@ -579,7 +551,7 @@ export async function serveLibrary(page: Page, { playlists = [] as Generated[] }
 		if (path === `${lib}/tracks` && url.searchParams.has('ids')) {
 			// A lookup by IDs: the tracks held, in the order named.
 			const named = url.searchParams.get('ids')!.split(',');
-			return json(pageOf(marked(named.flatMap((id) => tracks.filter((t) => t.id === id)))));
+			return json(pageOf(named.flatMap((id) => tracks.filter((t) => t.id === id))));
 		}
 		if (path === `${lib}/tracks`) {
 			const listed = tagged(
@@ -587,7 +559,7 @@ export async function serveLibrary(page: Page, { playlists = [] as Generated[] }
 				filterOf(url.searchParams),
 				(t) => t.tags
 			);
-			return json(pageOf(seen(listed)));
+			return json(pageOf(listed));
 		}
 		if (path === `${lib}/tag-types`) {
 			return json([
@@ -637,12 +609,10 @@ export async function serveLibrary(page: Page, { playlists = [] as Generated[] }
 		if (path === `${lib}/recent-searches`) return json({ items: [] });
 		if (path === `${lib}/search`) {
 			const q = url.searchParams.get('q') ?? '';
-			const hits = seen(
-				tagged(
-					tracks.filter((t) => t.title.toLowerCase().includes(q.toLowerCase())),
-					filterOf(url.searchParams),
-					(t) => t.tags
-				)
+			const hits = tagged(
+				tracks.filter((t) => t.title.toLowerCase().includes(q.toLowerCase())),
+				filterOf(url.searchParams),
+				(t) => t.tags
 			);
 			return json({
 				query: q,
@@ -660,29 +630,9 @@ export async function serveLibrary(page: Page, { playlists = [] as Generated[] }
 				libraryEmpty: false
 			});
 		}
-		const marking = new RegExp(`^${lib}/tracks/(\\d+)/(like|hidden)$`).exec(path);
-		if (marking) {
-			const [method, id, liking] = [
-				route.request().method(),
-				BigInt(marking[1]),
-				marking[2] === 'like'
-			];
-			if (method === 'DELETE') {
-				if (liking) playlistStore.unlike(libraryKey, id);
-				else playlistStore.unhide(libraryKey, id);
-			} else if (
-				!(liking ? playlistStore.like(libraryKey, id) : playlistStore.hide(libraryKey, id))
-			) {
-				return problem(404, 'not_found');
-			}
-			return route.fulfill({ status: 204 });
-		}
-		if (path === `${lib}/hidden-tracks`) {
-			return json(playlistStore.hiddenTracks(libraryKey, url.searchParams));
-		}
 		const one = tracks.find((t) => path === `${lib}/tracks/${t.id}`);
 		if (one) {
-			return json({ ...marked([one])[0], lyrics: 'none', loudness: null, identifiers: {} });
+			return json({ ...one, lyrics: 'none', loudness: null, identifiers: {} });
 		}
 		const media = /^\/libraries\/\d+\/tracks\/(\d+)\/(playback|waveform|audio)$/.exec(path);
 		if (media?.[2] === 'playback') {
