@@ -16,6 +16,7 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import SettingsDialog from '$lib/components/SettingsDialog.svelte';
 	import { prefs } from '$lib/prefs.svelte';
+	import { realtime } from '$lib/realtime.svelte';
 	import { tagTypeName } from '$lib/tags';
 
 	let { data } = $props();
@@ -31,9 +32,13 @@
 	let error = $state('');
 	let busy = $state(false);
 
+	/** Ends the session and loads the login page; on failure shows the error and keeps the realtime connection running. */
 	async function logOut() {
 		busy = true;
 		error = '';
+		// Ending the session closes the socket; left running, the client would take that for a
+		// sign-out elsewhere and race this page to the login page.
+		realtime.stop();
 		try {
 			await logout(fetch);
 		} catch (e) {
@@ -41,6 +46,7 @@
 			if (!isRedirect(e)) {
 				error = e instanceof Error ? e.message : String(e);
 				busy = false;
+				realtime.start();
 				return;
 			}
 		}
