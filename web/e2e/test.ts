@@ -1,6 +1,7 @@
 // `test` for specs that run against the real server: one server per worker, and the page logged
 // in unless `loggedIn` is off.
 
+import { randomUUID } from 'node:crypto';
 import { type Page, test as base } from '@playwright/test';
 import { type Launched, type Server, launch, startServer } from './server';
 
@@ -54,9 +55,9 @@ export const test = base.extend<
 		},
 		{ scope: 'worker', timeout: 120_000 }
 	],
-	// Every test starts with no playlists but Liked Songs, which every user has and the server
-	// would not make again once deleted, and no recent searches or plugins, as the server is shared
-	// with the tests before it.
+	// Every test starts with no playlists but an empty Liked Songs, which every user has and the
+	// server would not make again once deleted, no hidden songs, and no recent searches or
+	// plugins, as the server is shared with the tests before it.
 	cleanAccount: [
 		async ({ server }, use) => {
 			const path = `/libraries/${server.ids.library}`;
@@ -70,6 +71,35 @@ export const test = base.extend<
 				await Promise.all(
 					items.map((p) => server.api(`${path}/playlists/${p.id}`, { method: 'DELETE' }))
 				);
+			}
+			// Liked Songs stays, emptied; the server keeps it for as long as it is not deleted.
+			for (const id of Object.values(server.ids.tracks)) {
+				await server.api(`${path}/tracks/${id}/like`, { method: 'DELETE' });
+				await server.api(`${path}/tracks/${id}/hidden`, { method: 'DELETE' });
+			}
+			// The active queue cannot be deleted, so one left by a test is replaced by one on a song
+			// the specs never look for in the player.
+			const hadQueue = await server.api('/me/queue').then(
+				() => true,
+				(e: Error) => {
+					if (e.message.includes(': 404 ')) return false;
+					throw e;
+				}
+			);
+			if (hadQueue) {
+				await server.api('/me/queue', {
+					method: 'POST',
+					body: {
+						queueId: randomUUID(),
+						context: { type: 'songs' },
+						source: {
+							key: randomUUID(),
+							libraryId: server.ids.library,
+							tracks: [server.ids.tracks.Kindling]
+						},
+						start: 0
+					}
+				});
 			}
 			await server.api(`${path}/recent-searches`, { method: 'DELETE' });
 			const { items: plugins } = await server.api('/admin/plugins');
