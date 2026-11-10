@@ -55,8 +55,8 @@ export const test = base.extend<
 		{ scope: 'worker', timeout: 120_000 }
 	],
 	// Every test starts with no playlists but Liked Songs, which every user has and the server
-	// would not make again once deleted, and no recent searches, as the server is shared with the
-	// tests before it.
+	// would not make again once deleted, and no recent searches or plugins, as the server is shared
+	// with the tests before it.
 	cleanAccount: [
 		async ({ server }, use) => {
 			const path = `/libraries/${server.ids.library}`;
@@ -72,6 +72,15 @@ export const test = base.extend<
 				);
 			}
 			await server.api(`${path}/recent-searches`, { method: 'DELETE' });
+			const { items: plugins } = await server.api('/admin/plugins');
+			// Uninstalling keeps a plugin's grants and settings for one installed again, so they are
+			// cleared first, in every library.
+			for (const { id } of plugins) {
+				const body = { granted: [], libraries: [{ libraryId: server.ids.library, granted: [] }] };
+				await server.api(`/admin/plugins/${id}/permissions`, { method: 'PUT', body });
+				await server.api(`/admin/plugins/${id}/settings`, { method: 'PUT', body: { values: {} } });
+				await server.api(`/admin/plugins/${id}`, { method: 'DELETE' });
+			}
 			await use();
 		},
 		{ auto: true }

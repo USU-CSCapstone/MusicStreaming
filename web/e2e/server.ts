@@ -76,13 +76,21 @@ const TRACKS = [
 /** Part 1's synced lyrics, as the `.lrc` beside its file holds them. */
 const LYRICS = '[00:00.00]First line of the song\n[00:01.00]Second line of the song\n';
 
-/** Builds the debug server the tests run. The web app it serves is built by `webServer`. */
+/** The packed test plugin, which `buildServer` makes, for the tests to install. */
+export const TEST_PLUGIN = join(root, 'web/e2e/test-plugin/target/e2e-test-plugin.wasm');
+
+/**
+ * Builds the debug server the tests run, then the test plugin, one cargo build after the other.
+ * The web app the server serves is built by `webServer`.
+ */
 export function buildServer() {
+	const env = { ...process.env, CARGO_BUILD_JOBS: '4' };
 	execFileSync('cargo', ['build', '-q', '-p', 'jewelcase-server'], {
 		cwd: root,
-		env: { ...process.env, CARGO_BUILD_JOBS: '4' },
+		env,
 		stdio: 'inherit'
 	});
+	execFileSync(join(root, 'web/e2e/test-plugin/build.sh'), { env, stdio: 'inherit' });
 }
 
 /**

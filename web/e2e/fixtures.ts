@@ -1,10 +1,6 @@
 // A tiny library served by intercepting /api/v1, so the tests need no music folder.
 
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import type { Page, Route } from '@playwright/test';
-import type { PluginManifest } from '../src/lib/api/plugins';
 import type {
 	AlbumSummary,
 	Library,
@@ -24,14 +20,12 @@ import { Queue } from '../src/lib/core-wasm/jewelcase_core_wasm.js';
 import { PLAYLIST_FIELDS, type SortField, sortName } from '../src/lib/sorting';
 import { sortRows, sortTracks } from '../src/lib/track-sort';
 import { type TagFilter, filterByTags } from '../src/lib/tag-match';
-import { withManifest } from '../../tools/plugin-pack/manifest.mjs';
 import {
 	type Generated,
 	type PlaylistLibrary,
 	PlaylistStore,
 	playlistRoute
 } from '../mock/playlists';
-import { PluginStore, adminRoute } from '../mock/plugins';
 
 export const library: Library = {
 	id: '11',
@@ -519,64 +513,12 @@ const owner = { id: '1', username: 'sam', displayName: 'Sam', role: 'owner', has
 
 const pageOf = <T>(items: T[]) => ({ items, total: items.length, nextCursor: null });
 
-export const pluginManifest: PluginManifest = {
-	id: 'lrclib-lyrics',
-	name: 'LRCLIB Lyrics',
-	version: '0.1.0',
-	apiVersion: '0.1',
-	description: 'Fetches synced lyrics for tracks that have none.',
-	settings: {
-		properties: {
-			syncedOnly: { type: 'boolean', title: 'Synced lyrics only', default: false },
-			apiKey: { type: 'string', title: 'API key', writeOnly: true }
-		}
-	},
-	permissions: [
-		{ permission: 'libraryRead', required: true, reason: 'To find tracks without lyrics.' },
-		{
-			permission: 'network',
-			required: true,
-			reason: 'To fetch lyrics.',
-			destinations: ['lrclib.net']
-		},
-		{ permission: 'libraryAdd', required: false, reason: 'To save .lrc files beside tracks.' }
-	]
-};
-
-/** A packed plugin: an empty component carrying the manifest. */
-export function pluginFile() {
-	const component = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00]);
-	return {
-		name: 'lrclib-lyrics.wasm',
-		mimeType: 'application/wasm',
-		buffer: Buffer.from(withManifest(component, pluginManifest))
-	};
-}
-
-/** Stands in for a plugin run, which needs the server, so tests never touch a real library. */
-async function fakeRun(id: string) {
-	return {
-		ok: true,
-		summary: `Saved lyrics for 2 of 3 tracks (2 synced, 0 plain); 1 not found.`,
-		log: [
-			`✓ Signal Part 1 — Aurora Lane: saved synced lyrics (${id})`,
-			'· Signal Remix — Aurora Lane: not found'
-		],
-		saved: 2,
-		scannerRunning: true
-	};
-}
-
 /**
  * Serves the library by intercepting `/api/v1`, with this browser logged in as the owner, plus
  * the playlists in `playlists`. Returns every play reported to it.
  */
 export async function serveLibrary(page: Page, { playlists = [] as Generated[] } = {}) {
-	// Plugin administration runs through the mock's own logic, on a fresh directory per test.
-	const plugins = new PluginStore(mkdtempSync(join(tmpdir(), 'jc-e2e-plugins-')), () => [
-		library.id
-	]);
-	// Playlists, too, run through the mock's own store.
+	// Playlists run through the mock's own store.
 	const playlistStore = new PlaylistStore(playlistLibrary(playlists));
 	queueOf(page).playlistRows = (id) =>
 		(
@@ -620,18 +562,6 @@ export async function serveLibrary(page: Page, { playlists = [] as Generated[] }
 		}
 		if (path === '/me/plugins') return json({ items: [] });
 		if (path === '/me') return json(owner);
-		if (path.startsWith('/admin/plugins')) {
-			const req = route.request();
-			const out = await adminRoute(
-				plugins,
-				req.method(),
-				path + url.search,
-				req.headers()['content-type'] ?? '',
-				new Uint8Array(req.postDataBuffer() ?? []),
-				fakeRun
-			);
-			return reply(out);
-		}
 
 		if (path === '/libraries') return json({ items: [library] });
 		if (path === `${lib}/albums`)

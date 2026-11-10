@@ -27,7 +27,7 @@ jobs:
       - run: rustup toolchain install
       - run: cargo fmt --check
       - name: cargo fmt --check, example plugins
-        run: for plugin in plugins/*/; do cargo fmt --check --manifest-path "$plugin/Cargo.toml"; done
+        run: for plugin in plugins/*/ web/e2e/test-plugin/; do cargo fmt --check --manifest-path "$plugin/Cargo.toml"; done
 
   rust-lint:
     name: Rust Lint
@@ -42,7 +42,7 @@ jobs:
       - run: cargo clippy --workspace --lib --bins --locked -- -D clippy::unwrap_used
       - name: cargo clippy, example plugins
         run: |
-          for plugin in plugins/*/; do
+          for plugin in plugins/*/ web/e2e/test-plugin/; do
             cargo clippy --manifest-path "$plugin/Cargo.toml" --all-targets --locked -- -D warnings
             cargo clippy --manifest-path "$plugin/Cargo.toml" --target wasm32-wasip2 --locked -- -D warnings
           done

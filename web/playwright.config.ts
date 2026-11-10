@@ -7,7 +7,8 @@ const migrated = [
 	'**/sorting.e2e.ts',
 	'**/scanning.e2e.ts',
 	'**/app.e2e.ts',
-	'**/playlists.e2e.ts'
+	'**/playlists.e2e.ts',
+	'**/plugins.e2e.ts'
 ];
 
 export default defineConfig({
