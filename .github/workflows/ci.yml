@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@v7
       - run: rustup toolchain install
       - run: cargo fmt --check
-      - name: cargo fmt --check, example plugins
+      - name: cargo fmt --check, plugins
         run: for plugin in plugins/*/ web/e2e/test-plugin/; do cargo fmt --check --manifest-path "$plugin/Cargo.toml"; done
 
   rust-lint:
@@ -40,7 +40,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo clippy --workspace --lib --bins --locked -- -D clippy::unwrap_used
-      - name: cargo clippy, example plugins
+      - name: cargo clippy, plugins
         run: |
           for plugin in plugins/*/ web/e2e/test-plugin/; do
             cargo clippy --manifest-path "$plugin/Cargo.toml" --all-targets --locked -- -D warnings
