@@ -9,15 +9,22 @@ export { expect } from '@playwright/test';
 
 const CLIENT = { 'X-Jewelcase-Client': 'web' };
 
-/** Logs the page's context in to the server at `url`, as the web app does. */
-export async function login(page: Page, url: string, username: string, password: string) {
+const DESKTOP = { name: 'Chrome on Linux', type: 'desktop', platform: 'web' };
+
+/**
+ * Logs the page's context in to the server at `url`, as the web app does, registering `device`
+ * (a desktop browser unless given).
+ */
+export async function login(
+	page: Page,
+	url: string,
+	username: string,
+	password: string,
+	device: { name: string; type: string; platform?: string } = DESKTOP
+) {
 	const res = await page.request.post(`${url}/api/v1/auth/login`, {
 		headers: CLIENT,
-		data: {
-			username,
-			password,
-			device: { name: 'Chrome on Linux', type: 'desktop', platform: 'web' }
-		}
+		data: { username, password, device }
 	});
 	if (!res.ok()) throw new Error(`Login failed: ${res.status()} ${await res.text()}`);
 }
@@ -141,11 +148,14 @@ export const test = base.extend<
 	},
 	baseURL: async ({ server }, use) => use(server.url),
 	// Unless `loggedIn` is off, the page's context logs in as the owner, as the web app does, and
-	// logs out afterwards.
-	page: async ({ page, server, loggedIn }, use) => {
+	// logs out afterwards, unless the test failed: its page then stays as it was for the error
+	// context.
+	page: async ({ page, server, loggedIn }, use, testInfo) => {
 		if (!loggedIn) return use(page);
 		await login(page, server.url, server.username, server.password);
 		await use(page);
-		await page.request.post('/api/v1/auth/logout', { headers: CLIENT });
+		if (testInfo.status === testInfo.expectedStatus) {
+			await page.request.post('/api/v1/auth/logout', { headers: CLIENT });
+		}
 	}
 });

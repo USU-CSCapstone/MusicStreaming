@@ -80,11 +80,12 @@ const LYRICS = '[00:00.00]First line of the song\n[00:01.00]Second line of the s
 export const TEST_PLUGIN = join(root, 'web/e2e/test-plugin/target/e2e-test-plugin.wasm');
 
 /**
- * Builds the debug server the tests run, then the test plugin, one cargo build after the other.
- * The web app the server serves is built by `webServer`.
+ * Builds the web app the server serves, the debug server the tests run, then the test plugin, one
+ * build after the other.
  */
 export function buildServer() {
 	const env = { ...process.env, CARGO_BUILD_JOBS: '4' };
+	execFileSync('pnpm', ['build'], { cwd: join(root, 'web'), env, stdio: 'inherit' });
 	execFileSync('cargo', ['build', '-q', '-p', 'jewelcase-server'], {
 		cwd: root,
 		env,
