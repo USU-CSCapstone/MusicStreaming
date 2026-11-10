@@ -1,0 +1,35 @@
+{
+	"id": "e2e-test-plugin",
+	"name": "Test Plugin",
+	"version": "0.1.0",
+	"apiVersion": "0.1",
+	"description": "Saves a note into the library. Made for the end-to-end tests; it reaches no network.",
+	"settings": {
+		"properties": {
+			"verbose": { "type": "boolean", "title": "Verbose log", "default": false },
+			"apiKey": { "type": "string", "title": "API key", "writeOnly": true }
+		}
+	},
+	"personalSettings": {
+		"properties": {
+			"token": { "type": "string", "title": "User token", "writeOnly": true }
+		},
+		"required": ["token"]
+	},
+	"permissions": [
+		{ "permission": "libraryRead", "required": true, "reason": "To count the tracks." },
+		{
+			"permission": "network",
+			"required": true,
+			"reason": "To reach its service.",
+			"destinations": ["example.com"]
+		},
+		{
+			"permission": "libraryAdd",
+			"required": false,
+			"reason": "To save a note beside the tracks."
+		},
+		{ "permission": "searchActivity", "required": false, "reason": "To see what you search for." },
+		{ "permission": "searched", "required": false, "reason": "To hear of each search." }
+	]
+}

@@ -1,0 +1,19 @@
+# The plugin the end-to-end tests install: it makes no network calls. Its own workspace, built
+# for wasm32-wasip2 like the example plugins in plugins/.
+[package]
+name = "e2e-test-plugin"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wit-bindgen = "0.62"
+
+[workspace]
+
+[profile.release]
+debug = false
+strip = true

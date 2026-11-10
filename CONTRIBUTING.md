@@ -69,7 +69,7 @@ from [Without Docker](#without-docker). CI runs them again on every pull request
 | | `cargo clippy --workspace --all-targets -- -D warnings` |
 | | `cargo clippy --workspace --lib --bins -- -D clippy::unwrap_used` |
 | | `cargo test` |
-| Each `plugins/<id>/` | `cargo fmt --check` |
+| Each `plugins/<id>/` and `web/e2e/test-plugin/` | `cargo fmt --check` |
 | | `cargo clippy --all-targets -- -D warnings` |
 | | `cargo clippy --target wasm32-wasip2 -- -D warnings` |
 | | `cargo test` |
@@ -80,8 +80,9 @@ from [Without Docker](#without-docker). CI runs them again on every pull request
 | `api/` | `npx @redocly/cli@2.65.1 lint openapi.yaml` |
 
 `pnpm test` includes the end-to-end tests, which build the server and run a real one for each
-Playwright worker on generated music, so they need ffmpeg and the Rust toolchain. The first run
-is slow because of the server build.
+Playwright worker on generated music, so they need ffmpeg, Node, and the Rust toolchain with the
+`wasm32-wasip2` target, which builds the server and the test plugin in `web/e2e/test-plugin/`. The
+first run is slow because of those builds.
 
 Code outside tests may not use `unwrap()`. Use `expect("why it can't fail")` only where failure
 is impossible, and handle anything that depends on input, files, configuration, or the
