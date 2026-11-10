@@ -6,8 +6,11 @@ import { createPlaylist, expect, test } from './test';
 
 const SIGNAL = ['Signal Part 1', 'Signal Part 2', 'Signal Remix'];
 
+/** The song titles listed on the page, in order. */
 const titles = (page: Page) => page.locator('.track .title');
+/** The column heading button named `name`. */
 const heading = (page: Page, name: string) => page.getByRole('button', { name, exact: true });
+/** The title of the song now playing in the list. */
 const playing = (page: Page) => page.locator('.track.current .title');
 
 /** Every playlist edit the page sends. */
