@@ -59,8 +59,15 @@ export const test = base.extend<
 	cleanAccount: [
 		async ({ server }, use) => {
 			const path = `/libraries/${server.ids.library}`;
-			for (const { id } of (await server.api(`${path}/playlists?limit=200`)).items) {
-				await server.api(`${path}/playlists/${id}`, { method: 'DELETE' });
+			// A page at a time, as a test may have made more than one page of them.
+			for (;;) {
+				const { items } = await server.api(`${path}/playlists?limit=1000`);
+				if (!items.length) break;
+				await Promise.all(
+					items.map((p: { id: string }) =>
+						server.api(`${path}/playlists/${p.id}`, { method: 'DELETE' })
+					)
+				);
 			}
 			await server.api(`${path}/recent-searches`, { method: 'DELETE' });
 			await use();

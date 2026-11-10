@@ -1,8 +1,46 @@
-import { type Page, expect, test } from '@playwright/test';
-import { album, artist, longMix, roadTrip, serveLibrary, signalMix } from './fixtures';
+import type { Page } from '@playwright/test';
+import type { Server } from './server';
+import { createPlaylist, expect, test } from './test';
+
+const SIGNAL = ['Signal Part 1', 'Signal Part 2', 'Signal Remix'];
+
+/** The owner's playlist of the whole Signal album, as three songs. */
+const signalMix = (server: Server) => createPlaylist(server, 'Signal Mix', SIGNAL);
+
+/** The owner's playlist titled Road Trip, holding the songs titled `songs`. */
+const roadTrip = (server: Server, songs: string[] = []) =>
+	createPlaylist(server, 'Road Trip', songs);
+
+/** A playlist of the Signal album 15 times over, long enough to scroll. */
+async function longMix(server: Server) {
+	const made = await server.api(`/libraries/${server.ids.library}/playlists`, {
+		method: 'POST',
+		body: {
+			title: 'Long Mix',
+			items: Array.from({ length: 15 }, () => ({ type: 'album', id: server.ids.albums.Signal }))
+		}
+	});
+	return made.id as string;
+}
+
+/** The titles of the owner's playlists in the order the server lists them, as the menu shows them. */
+/**
+ * Waits until the server holds `count` songs in the owner's playlist titled `title`. An add shows
+ * at once and reaches the server after, so a playlist opened or a page loaded afresh waits for it.
+ */
+async function holds(server: Server, title: string, count: number) {
+	const path = `/libraries/${server.ids.library}/playlists?limit=1000`;
+	const songs = async () =>
+		(await server.api(path)).items.find((p: { title: string }) => p.title === title)?.trackCount;
+	await expect.poll(songs, `${title} holds ${count}`).toBe(count);
+}
+
+async function menuOrder(server: Server) {
+	const { items } = await server.api(`/libraries/${server.ids.library}/playlists`);
+	return items.map((p: { title: string }) => p.title);
+}
 
 test('creates a playlist and opens it', async ({ page }) => {
-	await serveLibrary(page);
 	await page.goto('/playlists');
 	// Every user has Liked Songs from the start (`requirements/playlists.md` §11).
 	await expect(page.getByText('1 playlist', { exact: true })).toBeVisible();
@@ -31,7 +69,6 @@ test('creates a playlist and opens it', async ({ page }) => {
 });
 
 test('cancelling creates nothing', async ({ page }) => {
-	await serveLibrary(page);
 	await page.goto('/playlists');
 
 	await page.getByRole('button', { name: 'New playlist' }).click();
@@ -51,7 +88,6 @@ test('cancelling creates nothing', async ({ page }) => {
 });
 
 test('edits a playlist’s details and pins it', async ({ page }) => {
-	await serveLibrary(page);
 	await page.goto('/playlists');
 	await page.getByRole('button', { name: 'New playlist' }).click();
 	const create = page.getByRole('dialog', { name: 'New playlist' });
@@ -90,7 +126,6 @@ test('edits a playlist’s details and pins it', async ({ page }) => {
 });
 
 test('cancelling an edit changes nothing', async ({ page }) => {
-	await serveLibrary(page);
 	await page.goto('/playlists');
 	await page.getByRole('button', { name: 'New playlist' }).click();
 	await page.getByRole('textbox', { name: 'Title' }).fill('Road Trip');
@@ -106,7 +141,6 @@ test('cancelling an edit changes nothing', async ({ page }) => {
 });
 
 test('deletes a playlist, with a moment to undo it', async ({ page }) => {
-	await serveLibrary(page);
 	await page.goto('/playlists');
 	await page.getByRole('button', { name: 'New playlist' }).click();
 	await page.getByRole('textbox', { name: 'Title' }).fill('Road Trip');
@@ -137,9 +171,9 @@ test('deletes a playlist, with a moment to undo it', async ({ page }) => {
 	await expect(page).toHaveURL(/\/playlists$/);
 });
 
-test('selects songs and removes them, with Undo', async ({ page }) => {
-	await serveLibrary(page, { playlists: [signalMix] });
-	await page.goto(`/playlists/${signalMix.id}`);
+test('selects songs and removes them, with Undo', async ({ page, server }) => {
+	const mix = await signalMix(server);
+	await page.goto(`/playlists/${mix}`);
 	const row = (title: string) => page.getByRole('button', { name: title, exact: true });
 	const bar = page.getByRole('toolbar', { name: 'Selected songs' });
 	const titles = () => page.locator('.track .title');
@@ -176,24 +210,31 @@ test('selects songs and removes them, with Undo', async ({ page }) => {
 	await page.keyboard.press('Space');
 	await expect(bar).toContainText('1 song selected');
 	await expect(page.getByRole('region', { name: 'Player' }).getByText('Signal Remix')).toBeHidden();
-	const saved = page.waitForResponse((r) => r.request().method() === 'PATCH');
 	await bar.getByRole('button', { name: 'Remove' }).click();
-	await saved;
+	// Edits are sent one at a time, so the next response may be the Undo's: wait for the server
+	// to hold the removal instead.
+	const items = `/libraries/${server.ids.library}/playlists/${mix}/items`;
+	const saved = async () =>
+		(await server.api(items)).items.map((i: { track: { title: string } }) => i.track.title);
+	await expect.poll(saved).toEqual(['Signal Part 1', 'Signal Part 2']);
 	await page.reload();
 	await expect(titles()).toHaveText(['Signal Part 1', 'Signal Part 2']);
 });
 
-test('a double click plays a song in a playlist, as a click there selects it', async ({ page }) => {
-	await serveLibrary(page, { playlists: [signalMix] });
-	await page.goto(`/playlists/${signalMix.id}`);
+test('a double click plays a song in a playlist, as a click there selects it', async ({
+	page,
+	server
+}) => {
+	const mix = await signalMix(server);
+	await page.goto(`/playlists/${mix}`);
 	await page.getByRole('button', { name: 'Signal Part 2', exact: true }).dblclick();
 	const player = page.getByRole('region', { name: 'Player' });
 	await expect(player.getByText('Signal Part 2')).toBeVisible();
 });
 
-test('reorders with Alt+arrows', async ({ page }) => {
-	await serveLibrary(page, { playlists: [signalMix] });
-	await page.goto(`/playlists/${signalMix.id}`);
+test('reorders with Alt+arrows', async ({ page, server }) => {
+	const mix = await signalMix(server);
+	await page.goto(`/playlists/${mix}`);
 	const row = (title: string) => page.getByRole('button', { name: title, exact: true });
 	const bar = page.getByRole('toolbar', { name: 'Selected songs' });
 	const titles = () => page.locator('.track .title');
@@ -246,9 +287,9 @@ test.describe('dragging', () => {
 		return side === 'top' ? box.y + 2 : box.y + box.height - 2;
 	}
 
-	test('drags a song from anywhere on it, and saves the order', async ({ page }) => {
-		await serveLibrary(page, { playlists: [signalMix] });
-		await page.goto(`/playlists/${signalMix.id}`);
+	test('drags a song from anywhere on it, and saves the order', async ({ page, server }) => {
+		const mix = await signalMix(server);
+		await page.goto(`/playlists/${mix}`);
 		const at = await grab(page, 0, '.title');
 		await page.mouse.move(at.x, await edgeOf(page, 2, 'bottom'), { steps: 8 });
 		const saved = page.waitForResponse((r) => r.request().method() === 'PATCH');
@@ -262,9 +303,12 @@ test.describe('dragging', () => {
 		await expect(titles(page)).toHaveText(['Signal Part 2', 'Signal Remix', 'Signal Part 1']);
 	});
 
-	test('drags a scattered selection together, showing where it will land', async ({ page }) => {
-		await serveLibrary(page, { playlists: [signalMix] });
-		await page.goto(`/playlists/${signalMix.id}`);
+	test('drags a scattered selection together, showing where it will land', async ({
+		page,
+		server
+	}) => {
+		const mix = await signalMix(server);
+		await page.goto(`/playlists/${mix}`);
 		await titles(page).nth(1).click();
 		await titles(page)
 			.nth(2)
@@ -285,12 +329,12 @@ test.describe('dragging', () => {
 		await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Remix', 'Signal Part 2']);
 		await expect(page.locator('.drop')).toBeHidden();
 		// A drag that starts on a link moves rows; it does not follow the link.
-		await expect(page).toHaveURL(new RegExp(`/playlists/${signalMix.id}$`));
+		await expect(page).toHaveURL(new RegExp(`/playlists/${mix}$`));
 	});
 
-	test('Escape, or a drop where it started, moves nothing', async ({ page }) => {
-		await serveLibrary(page, { playlists: [signalMix] });
-		await page.goto(`/playlists/${signalMix.id}`);
+	test('Escape, or a drop where it started, moves nothing', async ({ page, server }) => {
+		const mix = await signalMix(server);
+		await page.goto(`/playlists/${mix}`);
 		const edits: string[] = [];
 		page.on('request', (r) => r.method() === 'PATCH' && edits.push(r.url()));
 
@@ -308,10 +352,10 @@ test.describe('dragging', () => {
 		expect(edits).toEqual([]);
 	});
 
-	test('scrolls while held near the edge', async ({ page }) => {
+	test('scrolls while held near the edge', async ({ page, server }) => {
 		await page.setViewportSize({ width: 1280, height: 600 });
-		await serveLibrary(page, { playlists: [longMix] });
-		await page.goto(`/playlists/${longMix.id}`);
+		const long = await longMix(server);
+		await page.goto(`/playlists/${long}`);
 		const main = page.locator('main');
 		const bottom = (await main.boundingBox())!;
 		const at = await grab(page, 0);
@@ -330,10 +374,13 @@ test.describe('dragging', () => {
 	});
 });
 
-test('scrolling past the end of a long playlist leaves the app where it is', async ({ page }) => {
+test('scrolling past the end of a long playlist leaves the app where it is', async ({
+	page,
+	server
+}) => {
 	await page.setViewportSize({ width: 1280, height: 600 });
-	await serveLibrary(page, { playlists: [longMix] });
-	await page.goto(`/playlists/${longMix.id}`);
+	const long = await longMix(server);
+	await page.goto(`/playlists/${long}`);
 	await expect(page.locator('.track').first()).toBeVisible();
 	await page.locator('main').evaluate((m) => (m.scrollTop = m.scrollHeight));
 	await page.mouse.move(640, 300);
@@ -348,23 +395,25 @@ test.describe('adding to a playlist', () => {
 	const more = (page: Page, title: string) =>
 		page.getByRole('button', { name: `Actions for ${title}` });
 
-	test('adds a song from its ⋯, and opens the playlist', async ({ page }) => {
-		await serveLibrary(page, { playlists: [signalMix, roadTrip] });
-		await page.goto(`/albums/${album.id}`);
+	test('adds a song from its ⋯, and opens the playlist', async ({ page, server }) => {
+		await signalMix(server);
+		await roadTrip(server);
+		await page.goto(`/albums/${server.ids.albums.Signal}`);
 		await more(page, 'Signal Part 2').click();
 		const menu = page.getByRole('menu', { name: 'Actions for “Signal Part 2”' });
 		await menu.getByRole('menuitem', { name: /Road Trip/ }).click();
 		await expect(menu).toBeHidden();
 		await expect(page.getByRole('status')).toHaveText(/Added “Signal Part 2” to “Road Trip”/);
+		await holds(server, 'Road Trip', 1);
 
 		await page.getByRole('button', { name: 'Open' }).click();
 		await expect(page.getByRole('heading', { name: 'Road Trip' })).toBeVisible();
 		await expect(titles(page)).toHaveText(['Signal Part 2']);
 	});
 
-	test('warns about a song already there, and adds it only if asked', async ({ page }) => {
-		await serveLibrary(page, { playlists: [signalMix] });
-		await page.goto(`/albums/${album.id}`);
+	test('warns about a song already there, and adds it only if asked', async ({ page, server }) => {
+		const mix = await signalMix(server);
+		await page.goto(`/albums/${server.ids.albums.Signal}`);
 		const dialog = page.getByRole('dialog', { name: 'Already in this playlist' });
 
 		await more(page, 'Signal Part 1').click();
@@ -380,7 +429,7 @@ test.describe('adding to a playlist', () => {
 		const saved = page.waitForResponse((r) => r.request().method() === 'PATCH');
 		await dialog.getByRole('button', { name: 'Add anyway' }).click();
 		await saved;
-		await page.goto(`/playlists/${signalMix.id}`);
+		await page.goto(`/playlists/${mix}`);
 		await expect(titles(page)).toHaveText([
 			'Signal Part 1',
 			'Signal Part 2',
@@ -389,9 +438,8 @@ test.describe('adding to a playlist', () => {
 		]);
 	});
 
-	test('makes a new playlist with the song in it', async ({ page }) => {
-		await serveLibrary(page);
-		await page.goto(`/albums/${album.id}`);
+	test('makes a new playlist with the song in it', async ({ page, server }) => {
+		await page.goto(`/albums/${server.ids.albums.Signal}`);
 		await more(page, 'Signal Remix').click();
 		await page.getByRole('menuitem', { name: 'New playlist…' }).click();
 		const dialog = page.getByRole('dialog', { name: 'New playlist' });
@@ -401,16 +449,16 @@ test.describe('adding to a playlist', () => {
 		await expect(page.getByRole('status')).toHaveText(/Added “Signal Remix” to “Favorites”/);
 		// Still on the album.
 		await expect(page.getByRole('heading', { level: 1, name: 'Signal' })).toBeVisible();
+		await holds(server, 'Favorites', 1);
 
 		await page.goto('/playlists');
 		await expect(page.getByRole('link', { name: /Favorites/ })).toContainText('1 song');
 	});
 
-	test('adds the selection, skipping songs already there if asked', async ({ page }) => {
-		await serveLibrary(page, {
-			playlists: [signalMix, { ...roadTrip, trackIds: [BigInt(signalMix.trackIds[1])] }]
-		});
-		await page.goto(`/playlists/${signalMix.id}`);
+	test('adds the selection, skipping songs already there if asked', async ({ page, server }) => {
+		const mix = await signalMix(server);
+		await roadTrip(server, ['Signal Part 2']);
+		await page.goto(`/playlists/${mix}`);
 		await expect(titles(page)).toHaveCount(3);
 		await page.keyboard.press('ControlOrMeta+a');
 		const bar = page.getByRole('toolbar', { name: 'Selected songs' });
@@ -423,14 +471,15 @@ test.describe('adding to a playlist', () => {
 		await expect(page.getByRole('status')).toHaveText(/Added 2 songs to “Road Trip”/);
 		// The selection is still there, for whatever comes next.
 		await expect(bar).toContainText('3 songs selected');
+		await holds(server, 'Road Trip', 3);
 
 		await page.getByRole('button', { name: 'Open' }).click();
 		await expect(titles(page)).toHaveText(['Signal Part 2', 'Signal Part 1', 'Signal Remix']);
 	});
 
-	test('adds to the playlist open on screen at once', async ({ page }) => {
-		await serveLibrary(page, { playlists: [signalMix] });
-		await page.goto(`/playlists/${signalMix.id}`);
+	test('adds to the playlist open on screen at once', async ({ page, server }) => {
+		const mix = await signalMix(server);
+		await page.goto(`/playlists/${mix}`);
 		await more(page, 'Signal Remix').click();
 		await page.getByRole('menuitem', { name: /Signal Mix/ }).click();
 		await page.getByRole('button', { name: 'Add anyway' }).click();
@@ -454,15 +503,15 @@ test.describe('adding to a playlist', () => {
 		await expect(titles(page)).toHaveText(['Signal Part 2', 'Signal Remix', 'Signal Remix']);
 	});
 
-	test('scrolls through every playlist, a page at a time, staying open', async ({ page }) => {
+	test('scrolls through every playlist, a page at a time, staying open', async ({
+		page,
+		server
+	}) => {
 		// More than a page of them.
-		const playlists = Array.from({ length: 150 }, (_, i) => ({
-			...roadTrip,
-			id: `pl-${i}`,
-			title: `Playlist ${i + 1}`
-		}));
-		await serveLibrary(page, { playlists });
-		await page.goto(`/albums/${album.id}`);
+		await Promise.all(
+			Array.from({ length: 150 }, (_, i) => createPlaylist(server, `Playlist ${i + 1}`, []))
+		);
+		await page.goto(`/albums/${server.ids.albums.Signal}`);
 		await more(page, 'Signal Part 1').click();
 		const menu = page.getByRole('menu');
 		const items = menu.getByRole('menuitem');
@@ -478,9 +527,11 @@ test.describe('adding to a playlist', () => {
 		await expect(menu).toBeVisible();
 	});
 
-	test('works from the keyboard', async ({ page }) => {
-		await serveLibrary(page, { playlists: [signalMix, roadTrip] });
-		await page.goto(`/albums/${album.id}`);
+	test('works from the keyboard', async ({ page, server }) => {
+		await signalMix(server);
+		await roadTrip(server);
+		const [first, last] = await menuOrder(server);
+		await page.goto(`/albums/${server.ids.albums.Signal}`);
 		await more(page, 'Signal Part 1').focus();
 		await page.keyboard.press('Enter');
 		await expect(page.getByRole('menuitem', { name: 'Queue next' })).toBeFocused();
@@ -500,9 +551,9 @@ test.describe('adding to a playlist', () => {
 		await page.keyboard.press('ArrowDown');
 		await expect(page.getByRole('menuitem', { name: /^Liked Songs/ })).toBeFocused();
 		await page.keyboard.press('ArrowDown');
-		await expect(page.getByRole('menuitem', { name: /Signal Mix/ })).toBeFocused();
+		await expect(page.getByRole('menuitem', { name: first })).toBeFocused();
 		for (let i = 0; i < 8; i++) await page.keyboard.press('ArrowUp');
-		await expect(page.getByRole('menuitem', { name: /Road Trip/ })).toBeFocused();
+		await expect(page.getByRole('menuitem', { name: last })).toBeFocused();
 		await page.keyboard.press('Escape');
 		await expect(page.getByRole('menu')).toBeHidden();
 		await expect(more(page, 'Signal Part 1')).toBeFocused();
@@ -517,25 +568,24 @@ test.describe('adding a whole album, artist, or playlist', () => {
 			.waitForRequest((r) => r.method() === 'PATCH')
 			.then((r) => r.postDataJSON().ops as { items: unknown[] }[]);
 
-	test('adds an album, which the server expands', async ({ page }) => {
-		await serveLibrary(page, { playlists: [roadTrip] });
-		await page.goto(`/albums/${album.id}`);
+	test('adds an album, which the server expands', async ({ page, server }) => {
+		await roadTrip(server);
+		await page.goto(`/albums/${server.ids.albums.Signal}`);
 		await page.getByRole('button', { name: 'Actions for “Signal”' }).click();
 		const sent = nextEdit(page);
 		await page.getByRole('menuitem', { name: /Road Trip/ }).click();
-		expect((await sent)[0].items).toEqual([{ type: 'album', id: album.id }]);
+		expect((await sent)[0].items).toEqual([{ type: 'album', id: server.ids.albums.Signal }]);
 		await expect(page.getByRole('status')).toHaveText(/Added “Signal” to “Road Trip”/);
+		await holds(server, 'Road Trip', 3);
 
 		await page.getByRole('button', { name: 'Open' }).click();
 		await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
 	});
 
-	test('checks a filtered album by the songs shown', async ({ page }) => {
-		await serveLibrary(page, {
-			playlists: [{ ...roadTrip, trackIds: [BigInt(41), BigInt(42)] }]
-		});
+	test('checks a filtered album by the songs shown', async ({ page, server }) => {
+		await roadTrip(server, ['Signal Part 1', 'Signal Part 2']);
 		// Calm leaves out Part 2, which the playlist holds, so only Part 1 repeats.
-		await page.goto(`/albums/${album.id}?tagAny=63`);
+		await page.goto(`/albums/${server.ids.albums.Signal}?tagAny=${server.ids.tags.Calm}`);
 		await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Remix']);
 		await page.getByRole('button', { name: 'Actions for “Signal”' }).click();
 		await page.getByRole('menuitem', { name: /Road Trip/ }).click();
@@ -543,15 +593,16 @@ test.describe('adding a whole album, artist, or playlist', () => {
 		await expect(dialog).toContainText('1 of these 2 songs is already in “Road Trip”.');
 		const sent = nextEdit(page);
 		await dialog.getByRole('button', { name: 'Skip duplicates' }).click();
-		expect((await sent)[0].items).toEqual([{ type: 'track', id: '43' }]);
+		expect((await sent)[0].items).toEqual([
+			{ type: 'track', id: server.ids.tracks['Signal Remix'] }
+		]);
 	});
 
-	test('checks a filtered playlist by the songs shown', async ({ page }) => {
-		await serveLibrary(page, {
-			playlists: [signalMix, { ...roadTrip, trackIds: [BigInt(41)] }]
-		});
+	test('checks a filtered playlist by the songs shown', async ({ page, server }) => {
+		const mix = await signalMix(server);
+		await roadTrip(server, ['Signal Part 1']);
 		// Calm leaves out Part 2, so the two shown are Part 1, which Road Trip holds, and Remix.
-		await page.goto(`/playlists/${signalMix.id}?tagAny=63`);
+		await page.goto(`/playlists/${mix}?tagAny=${server.ids.tags.Calm}`);
 		await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Remix']);
 		await page.locator('main').getByRole('button', { name: 'Actions for “Signal Mix”' }).click();
 		await page.getByRole('menuitem', { name: /Road Trip/ }).click();
@@ -559,14 +610,14 @@ test.describe('adding a whole album, artist, or playlist', () => {
 		await expect(dialog).toContainText('1 of these 2 songs is already in “Road Trip”.');
 		const sent = nextEdit(page);
 		await dialog.getByRole('button', { name: 'Skip duplicates' }).click();
-		expect((await sent)[0].items).toEqual([{ type: 'track', id: '43' }]);
+		expect((await sent)[0].items).toEqual([
+			{ type: 'track', id: server.ids.tracks['Signal Remix'] }
+		]);
 	});
 
-	test('skips the songs of an album already there, if asked', async ({ page }) => {
-		await serveLibrary(page, {
-			playlists: [{ ...roadTrip, trackIds: [BigInt(signalMix.trackIds[1])] }]
-		});
-		await page.goto(`/albums/${album.id}`);
+	test('skips the songs of an album already there, if asked', async ({ page, server }) => {
+		await roadTrip(server, ['Signal Part 2']);
+		await page.goto(`/albums/${server.ids.albums.Signal}`);
 		await page.getByRole('button', { name: 'Actions for “Signal”' }).click();
 		await page.getByRole('menuitem', { name: /Road Trip/ }).click();
 		const dialog = page.getByRole('dialog', { name: 'Already in this playlist' });
@@ -577,17 +628,18 @@ test.describe('adding a whole album, artist, or playlist', () => {
 		await dialog.getByRole('button', { name: 'Skip duplicates' }).click();
 		// Only the others, by name, as the album would bring the repeat with it.
 		expect((await sent)[0].items).toEqual([
-			{ type: 'track', id: '41' },
-			{ type: 'track', id: '43' }
+			{ type: 'track', id: server.ids.tracks['Signal Part 1'] },
+			{ type: 'track', id: server.ids.tracks['Signal Remix'] }
 		]);
 		await expect(page.getByRole('status')).toHaveText(/Added 2 songs to “Road Trip”/);
+		await holds(server, 'Road Trip', 3);
 		await page.getByRole('button', { name: 'Open' }).click();
 		await expect(titles(page)).toHaveText(['Signal Part 2', 'Signal Part 1', 'Signal Remix']);
 	});
 
-	test('makes a new playlist from an artist', async ({ page }) => {
-		await serveLibrary(page);
-		await page.goto(`/artists/${artist.id}`);
+	test('makes a new playlist from an artist', async ({ page, server }) => {
+		const artist = server.ids.artists['Aurora Lane'];
+		await page.goto(`/artists/${artist}`);
 		await page.getByRole('button', { name: 'Actions for “Aurora Lane”' }).click();
 		await page.getByRole('menuitem', { name: 'New playlist…' }).click();
 		const dialog = page.getByRole('dialog', { name: 'New playlist' });
@@ -596,22 +648,24 @@ test.describe('adding a whole album, artist, or playlist', () => {
 			(r) => r.method() === 'POST' && r.url().endsWith('/playlists')
 		);
 		await dialog.getByRole('button', { name: 'Create' }).click();
-		expect((await created).postDataJSON().items).toEqual([{ type: 'artist', id: artist.id }]);
+		expect((await created).postDataJSON().items).toEqual([{ type: 'artist', id: artist }]);
 		await expect(page.getByRole('status')).toHaveText(/Added “Aurora Lane” to “All of Aurora”/);
+		await holds(server, 'All of Aurora', 3);
 
 		await page.goto('/playlists');
 		await expect(page.getByRole('link', { name: /All of Aurora/ })).toContainText('3 songs');
 	});
 
-	test('adds a playlist to another, or to itself at once', async ({ page }) => {
-		await serveLibrary(page, { playlists: [signalMix, roadTrip] });
-		await page.goto(`/playlists/${signalMix.id}`);
+	test('adds a playlist to another, or to itself at once', async ({ page, server }) => {
+		const mix = await signalMix(server);
+		const road = await roadTrip(server);
+		await page.goto(`/playlists/${mix}`);
 		const more = page.getByRole('button', { name: 'Actions for “Signal Mix”' });
 
 		await more.click();
 		const sent = nextEdit(page);
 		await page.getByRole('menuitem', { name: /Road Trip/ }).click();
-		expect((await sent)[0].items).toEqual([{ type: 'playlist', id: signalMix.id }]);
+		expect((await sent)[0].items).toEqual([{ type: 'playlist', id: mix }]);
 
 		await more.click();
 		await page.getByRole('menuitem', { name: /Signal Mix/ }).click();
@@ -621,8 +675,9 @@ test.describe('adding a whole album, artist, or playlist', () => {
 		await dialog.getByRole('button', { name: 'Add anyway' }).click();
 		await expect(titles(page)).toHaveCount(6);
 		await expect(page.getByText('6 songs · ')).toBeVisible();
+		await holds(server, 'Road Trip', 3);
 
-		await page.goto(`/playlists/${roadTrip.id}`);
+		await page.goto(`/playlists/${road}`);
 		await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
 	});
 });
@@ -630,9 +685,9 @@ test.describe('adding a whole album, artist, or playlist', () => {
 test.describe('on a touch screen', () => {
 	test.use({ hasTouch: true });
 
-	test('drags a song after a long press', async ({ page }) => {
-		await serveLibrary(page, { playlists: [signalMix] });
-		await page.goto(`/playlists/${signalMix.id}`);
+	test('drags a song after a long press', async ({ page, server }) => {
+		const mix = await signalMix(server);
+		await page.goto(`/playlists/${mix}`);
 		const rows = page.locator('.track');
 		const start = (await rows.nth(0).locator('.duration').boundingBox())!;
 		const target = (await rows.nth(2).boundingBox())!;
@@ -656,9 +711,9 @@ test.describe('on a touch screen', () => {
 		]);
 	});
 
-	test('a tap plays, a long press selects, and then a tap selects', async ({ page }) => {
-		await serveLibrary(page, { playlists: [signalMix] });
-		await page.goto(`/playlists/${signalMix.id}`);
+	test('a tap plays, a long press selects, and then a tap selects', async ({ page, server }) => {
+		const mix = await signalMix(server);
+		await page.goto(`/playlists/${mix}`);
 		const row = (title: string) => page.getByRole('button', { name: title, exact: true });
 		const bar = page.getByRole('toolbar', { name: 'Selected songs' });
 
