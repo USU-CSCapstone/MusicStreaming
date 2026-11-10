@@ -1,14 +1,14 @@
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RUN_ENV, buildServer, generateMusic } from './server';
+import { RUN_ENV, buildAll, generateMusic } from './server';
 
 /**
  * Builds the web app and the server, and generates the music once for the run, in a folder that
  * also holds every server's folders. The returned function removes it.
  */
 export default function globalSetup() {
-	buildServer();
+	buildAll();
 	const run = mkdtempSync(join(tmpdir(), 'jewelcase-e2e-'));
 	process.env[RUN_ENV] = run;
 	try {

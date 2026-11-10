@@ -1,5 +1,5 @@
-// `test` for specs that run against the real server: one server per worker, and the page logged
-// in unless `loggedIn` is off.
+// `test` for the end-to-end specs: a real server per worker, and the page logged in unless
+// `loggedIn` is off.
 
 import { randomUUID } from 'node:crypto';
 import { type Page, test as base } from '@playwright/test';
