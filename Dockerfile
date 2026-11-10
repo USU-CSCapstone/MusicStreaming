@@ -39,7 +39,5 @@ COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml web/.npmrc ./
 RUN pnpm install --frozen-lockfile
 COPY web .
 COPY --from=web-wasm /src/web/src/lib/core-wasm src/lib/core-wasm
-# The mock validates plugin files with the pack tool, which it imports from beside the app.
-COPY tools /src/tools
 # Not `pnpm dev`, which would rebuild the module here, where there is no Rust.
 CMD ["pnpm", "exec", "vite", "dev", "--host"]

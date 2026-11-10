@@ -35,7 +35,7 @@ export default defineConfig(
 		}
 	},
 	{
-		files: ['*.config.{js,ts}', '**/*.e2e.{js,ts}', 'mock/**/*.ts'],
+		files: ['*.config.{js,ts}', '**/*.e2e.{js,ts}'],
 		languageOptions: { globals: globals.node }
 	},
 	{

@@ -4,14 +4,13 @@ The responsive web app: Svelte 5 + TypeScript on SvelteKit in SPA mode (`design/
 
 ## Running it
 
-The client talks only to the public API (`api/openapi.yaml`). Until the Rust server implements
-that API, `vite dev` and `vite preview` answer `/api/v1` with a **mock** (`mock/`) that reads the
-database the real scanner writes. So you first scan a music folder with the server, then run the
-client.
+The client talks only to the public API (`api/openapi.yaml`), and `vite dev` and `vite preview`
+forward `/api` (the realtime connection included) to a running server: `http://localhost:8080`, or
+`API_PROXY` if set. So start the server on a music folder, then the client.
 
 ```sh
-# 1. Scan once from the repository root. Leave it running if you want waveforms and loudness: analysis
-#    runs in the background and starts about 30 seconds after launch.
+# 1. From the repository root. Waveforms and loudness come from analysis, which runs in the
+#    background and starts about 30 seconds after launch.
 JEWELCASE_MUSIC=/path/to/music JEWELCASE_DATA_DIR=./data cargo run -p jewelcase-server
 
 # 2. In another terminal, start the client.
@@ -20,18 +19,17 @@ pnpm install
 pnpm dev            # http://localhost:5173
 ```
 
-The mock reads `$JEWELCASE_DATA_DIR/state/jewelcase.db`, with `JEWELCASE_DATA_DIR` defaulting to
-the repository's `data/`. The server defaults to `/data`, the path inside its container, so step 1
-sets it. With no database the mock serves an empty server, and the client shows its "No music yet"
-state.
+The server must be running: without it the page loads, but every API request fails with `502`.
+
+`docker compose up` runs both, with the client reloading as the source changes.
 
 ## Scripts
 
 | Command                       | What it does                                                   |
 | ----------------------------- | -------------------------------------------------------------- |
-| `pnpm dev`                    | Dev server with the mock API                                   |
+| `pnpm dev`                    | Dev server, forwarding the API to the server                  |
 | `pnpm build` / `pnpm preview` | Static production build in `build/`, and a local preview of it |
-| `pnpm check`                  | Type-check, including the mock                                 |
+| `pnpm check`                  | Type-check                                                     |
 | `pnpm lint` / `pnpm format`   | ESLint and oxfmt                                               |
 | `pnpm test:unit`              | Vitest, in Node and in a headless browser                      |
 | `pnpm test:e2e`               | Playwright, against real servers on generated music            |
@@ -54,26 +52,6 @@ and commit the result.
 | `src/lib/track-sort.ts`    | Sorting a list the page holds by the core's comparator through `core-wasm`, the order the server reproduces for a recipe (`design/general.md` §3). Only the pages that sort locally import it, so no other page waits for the core; they and the queue worker download the one WebAssembly file between them (`design/general.md` §7.1) |
 | `src/lib/components/`      | Shell (sidebar, tab bar, player), collection and track views, waveform                                                                                  |
 | `src/routes/`              | One route per view: `/albums`, `/albums/[id]`, `/artists/…`, `/playlists/…`, `/songs`, `/search`, `/account`; `/setup` and `/login` without the shell   |
-| `mock/`                    | The dev-only mock API. Never bundled into the client.                                                                                                   |
-
-## What the mock does not do
-
-It is a stand-in for the server, so it has these limits. None of them are client behaviour.
-
-- **Search** is a case-insensitive substring match, not the real typo-tolerant search.
-- **Audio** is always the original file with no transcoding, so formats the browser can't decode
-  (AIFF in Chrome, for example) are skipped.
-- **Playlists** are kept in memory, so they reset when the dev server restarts, and a few are
-  generated from the library to start with. They can be created, edited, and deleted, but have
-  no custom artwork, mixes to save, or external tracks.
-- **Personal data** (play counts, listening history) doesn't exist, so sorts that need it fall back
-  to album or name order.
-- Only the read endpoints the client uses are implemented; any other write answers `405`.
-- **The queue** has no endpoints (`/me/queue*`, `/me/queues*`, the tracks-by-IDs lookup), so the queue panel and the player work only against the real server, or in the end-to-end tests, which stub them.
-- **Accounts** don't exist: the mock reports setup as done, everyone is one user, and logging in
-  accepts any password.
-- **Plugins** can be installed, granted, and enabled, but never run: **Run now** needs the server,
-  which hosts them (`crates/plugins`).
 
 ## Not built yet
 

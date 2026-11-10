@@ -1,5 +1,5 @@
-// Plugin administration types, shared by the client and the mock: the spec's, and the
-// manifest a plugin file carries (`design/plugins.md` §6), which is not part of the API.
+// Plugin administration types: the spec's, and the manifest a plugin file
+// carries (`design/plugins.md` §6), which is not part of the API.
 
 import type { components } from './schema';
 

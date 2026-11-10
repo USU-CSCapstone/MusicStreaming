@@ -2,14 +2,13 @@ import { defineConfig } from 'vitest/config';
 import { playwright } from '@vitest/browser-playwright';
 import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
-import { mockApi } from './mock/plugin.ts';
 
-// Under `docker compose up`, the Rust server answers the API, realtime connection included; run
-// on its own, the mock does, and the app works without one.
-const apiProxy = process.env.API_PROXY;
+// `vite dev` and `vite preview` forward the API, realtime connection included, to the Rust server:
+// the one on this machine unless `API_PROXY` names another (`docker compose up` does).
+const apiProxy = process.env.API_PROXY ?? 'http://localhost:8080';
 
 export default defineConfig({
-	server: apiProxy ? { proxy: { '/api': { target: apiProxy, ws: true } } } : {},
+	server: { proxy: { '/api': { target: apiProxy, ws: true } } },
 	plugins: [
 		sveltekit({
 			compilerOptions: {
@@ -20,8 +19,7 @@ export default defineConfig({
 
 			// SPA mode: static files served by the Rust server, unknown paths fall back to index.html
 			adapter: adapter({ fallback: 'index.html' })
-		}),
-		apiProxy ? [] : mockApi()
+		})
 	],
 	test: {
 		expect: { requireAssertions: true },
@@ -46,7 +44,7 @@ export default defineConfig({
 					name: 'server',
 					environment: 'node',
 					setupFiles: ['./core-node.ts'],
-					include: ['src/**/*.{test,spec}.{js,ts}', 'mock/**/*.{test,spec}.ts'],
+					include: ['src/**/*.{test,spec}.{js,ts}'],
 					exclude: ['src/**/*.svelte.{test,spec}.{js,ts}']
 				}
 			}
