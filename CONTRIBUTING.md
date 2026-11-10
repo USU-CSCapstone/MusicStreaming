@@ -72,7 +72,7 @@ from [Without Docker](#without-docker). CI runs them again on every pull request
 | Each `plugins/<id>/` and `web/e2e/test-plugin/` | `cargo fmt --check` |
 | | `cargo clippy --all-targets -- -D warnings` |
 | | `cargo clippy --target wasm32-wasip2 -- -D warnings` |
-| | `cargo test` |
+| | `cargo test` (`plugins/<id>/` only; the test plugin has no tests) |
 | `web/` | `pnpm lint` and `pnpm format:check` |
 | | `pnpm check` |
 | | `pnpm gen:api`, which must leave `src/lib/api/schema.d.ts` unchanged |
