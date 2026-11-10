@@ -41,11 +41,12 @@ JEWELCASE_MUSIC=/path/to/music JEWELCASE_DATA_DIR=./data cargo run -p jewelcase-
 # The web app, in another terminal, against that server
 cd web
 pnpm install
-API_PROXY=http://localhost:8080 pnpm dev
+pnpm dev
 ```
 
-`pnpm dev` without `API_PROXY` runs the web app against a mock of the API, with no server
-needed.
+`pnpm dev` forwards the API to the server at `http://localhost:8080`; set `API_PROXY` to use
+another address. The server must be running: without it the page loads, but every API request
+fails with `502`.
 
 ### Plugins
 

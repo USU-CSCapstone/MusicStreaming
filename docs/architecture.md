@@ -125,7 +125,7 @@ Details: [`design/plugins.md`](../design/plugins.md) for how plugins run,
 | Folder | What's in it |
 |---|---|
 | [`crates/`](../crates/) | The Rust workspace: the pieces above |
-| [`web/`](../web/) | The web app, and a mock API for working on it without the server |
+| [`web/`](../web/) | The web app |
 | [`plugins/`](../plugins/) | Example plugins and the plugin guide |
 | [`tools/plugin-pack/`](../tools/plugin-pack/) | Packs a plugin's manifest into its WebAssembly file |
 | [`api/`](../api/) | The OpenAPI description of the HTTP API |

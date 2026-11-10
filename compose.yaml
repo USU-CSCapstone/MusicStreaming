@@ -79,9 +79,6 @@ services:
             - test-results/
             - package.json
             - pnpm-lock.yaml
-        - path: ./tools
-          target: /src/tools
-          action: sync
         # The wasm module is built into the image from the core's source.
         - path: ./crates/core
           action: rebuild

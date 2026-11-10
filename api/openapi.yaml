@@ -15,8 +15,7 @@ info:
     ## Conventions
 
     **Planned.** An operation whose description starts with **Planned:** is not served yet:
-    the server answers `404` or `405` to it, and for most of them the web client's
-    development mock answers in its place. A parameter, value, or property marked planned is
+    the server answers `404` or `405` to it. A parameter, value, or property marked planned is
     not built yet either: the server answers `422` to a planned parameter or value in a
     request, and never sends a planned property or value.
 
