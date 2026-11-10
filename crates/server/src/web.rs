@@ -11,6 +11,10 @@ use axum::http::{HeaderValue, header};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 
+/// Where the image puts the build, served unless `JEWELCASE_WEB_DIR` names another. With no
+/// build there, `run` serves the API alone.
+pub const DIR: &str = "/usr/share/jewelcase/web";
+
 /// Serves the build in `dir` at the root.
 pub fn router(dir: &Path) -> Router {
     let cache = |value| {
