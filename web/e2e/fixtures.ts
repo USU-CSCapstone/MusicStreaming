@@ -13,10 +13,7 @@ import type {
 	RealtimeClientMessage,
 	RealtimeServerMessage,
 	QueueEdit,
-	RecentSearch,
 	SentEdit,
-	Session,
-	SetupRequest,
 	StartQueue,
 	Tag,
 	TagsByType,
@@ -526,23 +523,8 @@ const device = { name: 'Chrome on Linux', type: 'desktop' as const, platform: 'w
 /** The ID the server gives this browser's device. */
 const deviceId = '2';
 
-/** The session a successful setup or login returns to the web client, which gets no token. */
-const session = (request: SetupRequest): Session => ({
-	user: {
-		id: '1',
-		username: request.username,
-		displayName: request.displayName ?? request.username,
-		role: 'owner',
-		hasAvatar: false
-	},
-	device: {
-		id: deviceId,
-		...request.device,
-		firstSeenAt: '2026-09-29T00:00:00.000Z',
-		lastSeenAt: '2026-09-29T00:00:00.000Z',
-		connected: false
-	}
-});
+/** The account the browser is logged in as. */
+const owner = { id: '1', username: 'sam', displayName: 'Sam', role: 'owner', hasAvatar: false };
 
 const pageOf = <T>(items: T[]) => ({ items, total: items.length, nextCursor: null });
 
@@ -580,16 +562,6 @@ export function pluginFile() {
 	};
 }
 
-/** Lyrics for the first track, as the scanner stores them from a `.lrc`. */
-export const syncedLyrics = {
-	kind: 'synced',
-	plain: null,
-	lines: [
-		{ startMs: 0, text: 'First line of the song' },
-		{ startMs: 1000, text: 'Second line of the song' }
-	]
-};
-
 /** Stands in for a plugin run, which needs the server, so tests never touch a real library. */
 async function fakeRun(id: string) {
 	return {
@@ -604,29 +576,15 @@ async function fakeRun(id: string) {
 	};
 }
 
-/** The password `POST /auth/login` accepts, for any username. */
-export const PASSWORD = 'correct horse battery staple';
-
 /**
- * A server whose setup is done unless `setupRequired`, when `POST /setup` completes it, and
- * with this browser logged in, as an account with `role`, unless `signedIn` is false. Until
- * then, anything but setup and login answers `401`. Returns every play reported to it, and its
- * recent searches, newest first.
+ * Serves the library by intercepting `/api/v1`, with this browser logged in as the owner, plus
+ * the playlists in `playlists`. Returns every play reported to it.
  */
-export async function serveLibrary(
-	page: Page,
-	{
-		empty = false,
-		setupRequired = false,
-		signedIn = true,
-		role = 'owner' as 'owner' | 'admin' | 'user',
-		playlists = [] as Generated[]
-	} = {}
-) {
+export async function serveLibrary(page: Page, { playlists = [] as Generated[] } = {}) {
 	// Plugin administration runs through the mock's own logic, on a fresh directory per test.
-	const plugins = new PluginStore(mkdtempSync(join(tmpdir(), 'jc-e2e-plugins-')), () =>
-		empty ? [] : [library.id]
-	);
+	const plugins = new PluginStore(mkdtempSync(join(tmpdir(), 'jc-e2e-plugins-')), () => [
+		library.id
+	]);
 	// Playlists, too, run through the mock's own store.
 	const playlistStore = new PlaylistStore(playlistLibrary(playlists));
 	queueOf(page).playlistRows = (id) =>
@@ -636,20 +594,6 @@ export async function serveLibrary(
 		).flatMap((i) => (i.track ? [{ track: i.track, addedAt: i.addedAt ?? '' }] : []));
 	queueOf(page).hiddenIds = () => playlistStore.hiddenIds(BigInt(library.id)).map(String);
 	const plays: PlayReport[] = [];
-	const searches: RecentSearch[] = [];
-	// A scrobbler this user can connect with their own token, which it never shows again, and
-	// share their searches with once connected.
-	let token: string | null = null;
-	let sharesSearches = false;
-	const mySettings = () => ({
-		schema: {
-			type: 'object',
-			properties: { token: { type: 'string', title: 'User token', writeOnly: true } },
-			required: ['token']
-		},
-		values: {},
-		secretsSet: token ? ['token'] : []
-	});
 	// The tracks as this user sees them, through the store, which keeps their likes and hides:
 	// copies marked liked or not, and hidden on a lookup, and in a list, without those hidden
 	// (`requirements/playlists.md` §11, `requirements/conventions.md` §8).
@@ -678,79 +622,13 @@ export async function serveLibrary(
 		const problem = (status: number, code: string, detail?: string) =>
 			route.fulfill({ status, json: { type: 'about:blank', title: '', status, code, detail } });
 
-		if (path === '/server') return json({ version: 'test', apiVersion: '1', setupRequired });
-		if (path === '/setup' && setupRequired) {
-			const request = route.request().postDataJSON();
-			if (request.password.length < 12) {
-				return problem(422, 'weak_password', 'This is a very common password.');
-			}
-			setupRequired = false;
-			signedIn = true;
-			return route.fulfill({ status: 201, json: session(request) });
-		}
-		if (setupRequired) return problem(503, 'setup_required');
-		if (path === '/auth/login') {
-			const request = route.request().postDataJSON();
-			if (request.password !== PASSWORD) return problem(401, 'invalid_credentials');
-			signedIn = true;
-			return json(session(request));
-		}
-		if (!signedIn) return problem(401, 'unauthenticated');
-		if (path === '/auth/logout') {
-			signedIn = false;
-			return route.fulfill({ status: 204 });
-		}
+		if (path === '/server') return json({ version: 'test', apiVersion: '1', setupRequired: false });
 		if (path === '/me/plays') {
 			plays.push(...route.request().postDataJSON().items);
 			return route.fulfill({ status: 204 });
 		}
-		if (path === '/me/plugins') {
-			return json({
-				items: [
-					{
-						id: 'scrobbler',
-						name: 'Scrobbler',
-						connected: token !== null,
-						asksForSearches: true,
-						sharesSearches,
-						hearsLikes: false
-					}
-				]
-			});
-		}
-		if (path === '/me/plugins/scrobbler/search-sharing') {
-			const { sharing } = route.request().postDataJSON();
-			if (sharing && token === null) {
-				return problem(
-					422,
-					'validation_failed',
-					'Connect it before sharing your searches with it.'
-				);
-			}
-			sharesSearches = sharing;
-			return route.fulfill({ status: 204 });
-		}
-		if (path === '/me/plugins/scrobbler/settings') {
-			const method = route.request().method();
-			if (method === 'DELETE') {
-				token = null;
-				sharesSearches = false;
-				return route.fulfill({ status: 204 });
-			}
-			if (method === 'PUT') {
-				const entered = route.request().postDataJSON().values.token ?? token;
-				if (entered !== 'good-token') {
-					return problem(422, 'plugin_settings_invalid', 'The scrobbler refused this token.');
-				}
-				token = entered;
-			}
-			return json(mySettings());
-		}
-		if (path === '/me') {
-			return json({ ...session({ username: 'sam', password: '', device }).user, role });
-		}
-		// Plugins are administered, so a user is refused (`requirements/users.md` §10).
-		if (path.startsWith('/admin/') && role === 'user') return problem(403, 'forbidden');
+		if (path === '/me/plugins') return json({ items: [] });
+		if (path === '/me') return json(owner);
 		if (path.startsWith('/admin/plugins')) {
 			const req = route.request();
 			const out = await adminRoute(
@@ -764,7 +642,7 @@ export async function serveLibrary(
 			return reply(out);
 		}
 
-		if (path === '/libraries') return json({ items: empty ? [] : [library] });
+		if (path === '/libraries') return json({ items: [library] });
 		if (path === `${lib}/albums`)
 			return json(pageOf(tagged([album], filterOf(url.searchParams), (a) => a.tags)));
 		if (path === `${lib}/albums/${album.id}`) {
@@ -835,29 +713,7 @@ export async function serveLibrary(
 				)
 			);
 		}
-		const recent = new RegExp(`^${lib}/recent-searches(?:/(\\d+))?$`).exec(path);
-		if (recent) {
-			const method = route.request().method();
-			if (method === 'POST') {
-				const { query, selected } = route.request().postDataJSON();
-				const at = searches.findIndex((r) => r.query.toLowerCase() === query.toLowerCase());
-				if (at >= 0) searches.splice(at, 1);
-				const search = {
-					id: String(Date.now() + searches.length),
-					query,
-					selected: selected ?? null,
-					searchedAt: new Date().toISOString()
-				};
-				searches.unshift(search);
-				return route.fulfill({ status: 201, json: search });
-			}
-			if (method === 'DELETE') {
-				const at = recent[1] ? searches.findIndex((r) => r.id === recent[1]) : 0;
-				searches.splice(at, recent[1] ? 1 : searches.length);
-				return route.fulfill({ status: 204 });
-			}
-			return json({ items: searches });
-		}
+		if (path === `${lib}/recent-searches`) return json({ items: [] });
 		if (path === `${lib}/search`) {
 			const q = url.searchParams.get('q') ?? '';
 			const hits = seen(
@@ -905,15 +761,9 @@ export async function serveLibrary(
 		}
 		const one = tracks.find((t) => path === `${lib}/tracks/${t.id}`);
 		if (one) {
-			const lyrics = one.id === tracks[0].id ? 'synced' : 'none';
-			return json({ ...marked([one])[0], lyrics, loudness: null, identifiers: {} });
+			return json({ ...marked([one])[0], lyrics: 'none', loudness: null, identifiers: {} });
 		}
-		const media = /^\/libraries\/\d+\/tracks\/(\d+)\/(playback|waveform|audio|lyrics)$/.exec(path);
-		if (media?.[2] === 'lyrics') {
-			return json(
-				media[1] === tracks[0].id ? syncedLyrics : { kind: 'none', lines: null, plain: null }
-			);
-		}
+		const media = /^\/libraries\/\d+\/tracks\/(\d+)\/(playback|waveform|audio)$/.exec(path);
 		if (media?.[2] === 'playback') {
 			return json({
 				variant: 'original',
@@ -931,7 +781,7 @@ export async function serveLibrary(
 	});
 	// After the rest, so it is asked first for the queue's paths.
 	await serveQueue(page, queueOf(page));
-	return { plays, searches };
+	return { plays };
 }
 
 /**

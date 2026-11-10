@@ -1,7 +1,15 @@
 // Builds, feeds and runs the real server for the E2E tests.
 
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, renameSync, rmSync } from 'node:fs';
+import {
+	cpSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	renameSync,
+	rmSync,
+	writeFileSync
+} from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 
@@ -65,6 +73,9 @@ const TRACKS = [
 	}
 ].map((track) => ({ ...track, file: `${track.artist}/${track.album}/${track.title}.flac` }));
 
+/** Part 1's synced lyrics, as the `.lrc` beside its file holds them. */
+const LYRICS = '[00:00.00]First line of the song\n[00:01.00]Second line of the song\n';
+
 /** Builds the debug server the tests run. The web app it serves is built by `webServer`. */
 export function buildServer() {
 	execFileSync('cargo', ['build', '-q', '-p', 'jewelcase-server'], {
@@ -77,7 +88,7 @@ export function buildServer() {
 /**
  * Writes the music into `dir` with ffmpeg: silent FLACs of 60 s, so no track ends during a test.
  * Album "Signal" by Aurora Lane has Part 1 (Ambient, Calm), Part 2 (Ambient) and, on disc 2,
- * Remix (Electronic, Calm); "Hearth" by Birch Hollow has one Folk track.
+ * Remix (Electronic, Calm); "Hearth" by Birch Hollow has one Folk track. Part 1 has a `.lrc`.
  */
 export function generateMusic(dir: string) {
 	for (const { file, artist, ...tags } of TRACKS) {
@@ -88,7 +99,11 @@ export function generateMusic(dir: string) {
 		for (const [key, value] of Object.entries(metadata)) args.push('-metadata', `${key}=${value}`);
 		execFileSync('ffmpeg', [...args, '-c:a', 'flac', path]);
 	}
+	writeFileSync(join(dir, sidecar(TRACKS[0].file)), LYRICS);
 }
+
+/** The `.lrc` beside a track's file. */
+const sidecar = (file: string) => file.replace(/\.flac$/, '.lrc');
 
 /** A free TCP port on the loopback; another process could take it before use, which is rare. */
 function freePort(): Promise<number> {
@@ -133,17 +148,23 @@ export interface Server {
 	stop: () => Promise<void>;
 }
 
+/** A server process that is running, not yet set up. */
+export interface Launched {
+	url: string;
+	/** Where the server's own folders are: `music`, the `waiting` copy to add from, and `data`. */
+	home: string;
+	/** Stops the process and removes its folders. Safe to call twice. */
+	stop: () => Promise<void>;
+}
+
 /**
- * Starts a server with its own data folder and a copy of the generated music (`RUN_ENV`),
- * completes setup with a random password, and adds the music one track at a time, so each
- * track's date added differs as it does for real. Call `stop` when done, also on failure.
+ * Starts a server with its own data folder, on a free port, and waits until it answers. With
+ * `withMusic`, its music folder holds Part 1, and the rest of the generated music (`RUN_ENV`) waits
+ * in `home/waiting`; without it, the server has no music folder. Call `stop` when done, also on
+ * failure.
  */
-export async function startServer(): Promise<Server> {
+export async function launch(withMusic = true): Promise<Launched> {
 	const home = mkdtempSync(join(process.env[RUN_ENV]!, 'server-'));
-	const music = join(home, 'music');
-	const waiting = join(home, 'waiting');
-	mkdirSync(music);
-	cpSync(join(process.env[RUN_ENV]!, 'music'), waiting, { recursive: true });
 	let log = '';
 	let child: ChildProcess | undefined;
 	const stop = async () => {
@@ -157,15 +178,19 @@ export async function startServer(): Promise<Server> {
 		rmSync(home, { recursive: true, force: true });
 	};
 	try {
+		const env = { ...inherited };
+		if (withMusic) {
+			mkdirSync(join(home, 'music'));
+			cpSync(join(process.env[RUN_ENV]!, 'music'), join(home, 'waiting'), { recursive: true });
+			moveIn(join(home, 'waiting'), join(home, 'music'), TRACKS[0].file);
+			env.JEWELCASE_MUSIC = join(home, 'music');
+		}
 		const port = await freePort();
 		const url = `http://127.0.0.1:${port}`;
-		// The first track is there at start; the rest are moved in once setup is done.
-		moveIn(waiting, music, TRACKS[0].file);
 		child = spawn(binary, [], {
 			env: {
-				...inherited,
+				...env,
 				JEWELCASE_DATA_DIR: join(home, 'data'),
-				JEWELCASE_MUSIC: music,
 				JEWELCASE_PORT: String(port),
 				JEWELCASE_WEB_DIR: join(root, 'web/build')
 			},
@@ -181,17 +206,37 @@ export async function startServer(): Promise<Server> {
 			until('the server to answer', 60_000, () => fetch(`${url}${API}/health`).then((r) => r.ok)),
 			died
 		]);
+		return { url, home, stop };
+	} catch (error) {
+		await stop();
+		throw error;
+	}
+}
 
-		const username = 'owner';
-		const password = `e2e-${crypto.randomUUID()}`;
-		const setup = await fetch(`${url}${API}/setup`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ username, password, device: { name: 'E2E harness', type: 'desktop' } })
-		});
-		if (setup.status !== 201)
-			throw new Error(`Setup failed: ${setup.status} ${await setup.text()}`);
-		const { token } = (await setup.json()) as { token: string };
+/** Completes a new server's setup with a random password, and returns the owner's login and token. */
+export async function setupOwner(url: string) {
+	const username = 'owner';
+	const password = `e2e-${crypto.randomUUID()}`;
+	const setup = await fetch(`${url}${API}/setup`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ username, password, device: { name: 'E2E harness', type: 'desktop' } })
+	});
+	if (setup.status !== 201) throw new Error(`Setup failed: ${setup.status} ${await setup.text()}`);
+	const { token } = (await setup.json()) as { token: string };
+	return { username, password, token };
+}
+
+/**
+ * Starts a server, sets up its owner, and adds the music one track at a time, so each track's date
+ * added differs as it does for real. Call `stop` when done, also on failure.
+ */
+export async function startServer(): Promise<Server> {
+	const { url, home, stop } = await launch();
+	const music = join(home, 'music');
+	const waiting = join(home, 'waiting');
+	try {
+		const { username, password, token } = await setupOwner(url);
 
 		const api: Server['api'] = async (path, { method = 'GET', body } = {}) => {
 			const res = await fetch(`${url}${API}${path}`, {
@@ -248,8 +293,13 @@ export async function startServer(): Promise<Server> {
 	}
 }
 
-/** Moves a generated file from one folder tree to the same place in another. */
+/**
+ * Moves a generated file, and the `.lrc` beside it if there is one, from one folder tree to the
+ * same place in another.
+ */
 function moveIn(from: string, to: string, file: string) {
 	mkdirSync(dirname(join(to, file)), { recursive: true });
-	renameSync(join(from, file), join(to, file));
+	for (const name of [file, sidecar(file)]) {
+		if (existsSync(join(from, name))) renameSync(join(from, name), join(to, name));
+	}
 }
