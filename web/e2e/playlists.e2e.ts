@@ -530,7 +530,9 @@ test.describe('adding to a playlist', () => {
 	test('works from the keyboard', async ({ page, server }) => {
 		await signalMix(server);
 		await roadTrip(server);
-		const [first, last] = await menuOrder(server);
+		// Liked Songs is pinned, so the server lists it first.
+		const [liked, next, last] = await menuOrder(server);
+		expect(liked).toBe('Liked Songs');
 		await page.goto(`/albums/${server.ids.albums.Signal}`);
 		await more(page, 'Signal Part 1').focus();
 		await page.keyboard.press('Enter');
@@ -547,11 +549,10 @@ test.describe('adding to a playlist', () => {
 			await page.keyboard.press('ArrowDown');
 			await expect(page.getByRole('menuitem', { name })).toBeFocused();
 		}
-		// Liked Songs is pinned, so it comes first.
 		await page.keyboard.press('ArrowDown');
-		await expect(page.getByRole('menuitem', { name: /^Liked Songs/ })).toBeFocused();
+		await expect(page.getByRole('menuitem', { name: new RegExp(`^${liked}`) })).toBeFocused();
 		await page.keyboard.press('ArrowDown');
-		await expect(page.getByRole('menuitem', { name: first })).toBeFocused();
+		await expect(page.getByRole('menuitem', { name: next })).toBeFocused();
 		for (let i = 0; i < 8; i++) await page.keyboard.press('ArrowUp');
 		await expect(page.getByRole('menuitem', { name: last })).toBeFocused();
 		await page.keyboard.press('Escape');

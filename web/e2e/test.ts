@@ -54,19 +54,21 @@ export const test = base.extend<
 		},
 		{ scope: 'worker', timeout: 120_000 }
 	],
-	// Every test starts with no playlists or recent searches, as the server is shared with the
+	// Every test starts with no playlists but Liked Songs, which every user has and the server
+	// would not make again once deleted, and no recent searches, as the server is shared with the
 	// tests before it.
 	cleanAccount: [
 		async ({ server }, use) => {
 			const path = `/libraries/${server.ids.library}`;
 			// A page at a time, as a test may have made more than one page of them.
 			for (;;) {
-				const { items } = await server.api(`${path}/playlists?limit=1000`);
+				const all: { id: string; kind: string }[] = (
+					await server.api(`${path}/playlists?limit=1000`)
+				).items;
+				const items = all.filter((p) => p.kind !== 'liked');
 				if (!items.length) break;
 				await Promise.all(
-					items.map((p: { id: string }) =>
-						server.api(`${path}/playlists/${p.id}`, { method: 'DELETE' })
-					)
+					items.map((p) => server.api(`${path}/playlists/${p.id}`, { method: 'DELETE' }))
 				);
 			}
 			await server.api(`${path}/recent-searches`, { method: 'DELETE' });
