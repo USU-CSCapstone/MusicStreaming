@@ -668,11 +668,7 @@ test.describe('on a server of its own, with no queue', () => {
 		freshServer
 	}) => {
 		const { url } = await freshServer();
-		const { username, password, token } = await setupOwner(url);
-		const api = async (path: string) =>
-			(
-				await fetch(`${url}/api/v1${path}`, { headers: { Authorization: `Bearer ${token}` } })
-			).json();
+		const { username, password, api } = await setupOwner(url);
 		const library = (await api('/libraries')).items[0].id;
 		await expect.poll(async () => (await api(`/libraries/${library}`)).trackCount).toBe(1);
 		const album = (await api(`/libraries/${library}/albums`)).items[0].id;
