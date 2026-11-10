@@ -9,7 +9,8 @@ const migrated = [
 	'**/app.e2e.ts',
 	'**/playlists.e2e.ts',
 	'**/plugins.e2e.ts',
-	'**/likes.e2e.ts'
+	'**/likes.e2e.ts',
+	'**/queue.e2e.ts'
 ];
 
 export default defineConfig({

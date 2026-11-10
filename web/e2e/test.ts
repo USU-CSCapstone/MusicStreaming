@@ -101,6 +101,14 @@ export const test = base.extend<
 					}
 				});
 			}
+			// Kept after the replacement above, which keeps a queue that was adjusted.
+			for (;;) {
+				const { items } = await server.api('/me/queues?limit=100');
+				if (!items.length) break;
+				for (const { queueId } of items) {
+					await server.api(`/me/queues/${queueId}`, { method: 'DELETE' });
+				}
+			}
 			await server.api(`${path}/recent-searches`, { method: 'DELETE' });
 			const { items: plugins } = await server.api('/admin/plugins');
 			// Uninstalling keeps a plugin's grants and settings for one installed again, so they are
