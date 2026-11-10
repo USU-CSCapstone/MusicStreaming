@@ -5,7 +5,9 @@ import { createPlaylist, expect, test } from './test';
 // Liking and hiding songs, and Liked Songs, against a real server (`requirements/playlists.md`
 // §11, `requirements/conventions.md` §8).
 
+/** The like button of the song titled `title`. */
 const heart = (page: Page, title: string) => page.getByRole('button', { name: `Like “${title}”` });
+/** The row of the song titled `title` in the page's main content. */
 const row = (page: Page, title: string) =>
 	page.locator('main').getByRole('button', { name: title, exact: true });
 

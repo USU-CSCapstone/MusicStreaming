@@ -25,8 +25,10 @@ const manifest: PluginManifest = {
 	]
 };
 
+/** `EMPTY_COMPONENT` with `m` packed in as its manifest. */
 const packed = (m: unknown = manifest) => withManifest(EMPTY_COMPONENT, m);
 
+/** The message `readManifest` rejects `bytes` with; fails the test if it accepts them. */
 function invalid(bytes: Uint8Array): string {
 	try {
 		readManifest(bytes);
