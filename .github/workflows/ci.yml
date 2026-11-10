@@ -94,7 +94,7 @@ jobs:
           - { check: Types, run: pnpm check, wasm: true }
           - { check: Generated API Types, run: pnpm gen:api && git diff --exit-code src/lib/api/schema.d.ts }
           - { check: Unit Tests, run: pnpm test:unit --run, browser: true, wasm: true }
-          - { check: E2E Tests, run: pnpm exec playwright test, browser: true, wasm: true }
+          - { check: E2E Tests, run: pnpm exec playwright test, browser: true, wasm: true, server: true }
     defaults:
       run:
         working-directory: web
@@ -116,12 +116,16 @@ jobs:
       - if: matrix.wasm
         uses: Swatinem/rust-cache@v2
         with:
-          key: web-wasm
+          # The end-to-end tests also build the server, so their cache is their own.
+          key: ${{ matrix.server && 'web-server' || 'web-wasm' }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - if: matrix.wasm
         run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
       - if: matrix.browser
         run: pnpm exec playwright install --with-deps chromium
+      # The end-to-end tests run the real server, which needs ffmpeg, as does making their music.
+      - if: matrix.server
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends ffmpeg
       - run: ${{ matrix.run }}
 
   api-lint:
