@@ -8,8 +8,6 @@ import type {
 	PlayerState,
 	RealtimeClientMessage,
 	RealtimeServerMessage,
-	QueueEdit,
-	SentEdit,
 	StartQueue,
 	Tag,
 	TagsByType,
@@ -17,15 +15,9 @@ import type {
 } from '../src/lib/api/types';
 import '../core-node';
 import { Queue } from '../src/lib/core-wasm/jewelcase_core_wasm.js';
-import { PLAYLIST_FIELDS, type SortField, sortName } from '../src/lib/sorting';
-import { sortRows, sortTracks } from '../src/lib/track-sort';
+import type { SortField } from '../src/lib/sorting';
+import { sortTracks } from '../src/lib/track-sort';
 import { type TagFilter, filterByTags } from '../src/lib/tag-match';
-import {
-	type Generated,
-	type PlaylistLibrary,
-	PlaylistStore,
-	playlistRoute
-} from '../mock/playlists';
 
 export const library: Library = {
 	id: '11',
@@ -153,190 +145,50 @@ function sortedAsAsked(query: URLSearchParams): TrackSummary[] {
 }
 
 /**
- * The tracks a start's recipe resolves to, as the server runs it; what the fixture does not know
- * is empty.
- */
-function resolveRecipe(
-	recipe: NonNullable<StartQueue['source']['recipe']>,
-	playlistRows: PlaylistRows
-): TrackSummary[] {
-	const { tagAll, tagAny } = 'filters' in recipe ? (recipe.filters ?? {}) : {};
-	const filter = { all: tagAll ?? [], any: tagAny ?? [] };
-	/** `items` that carry the recipe's tags, as the list endpoints keep them. */
-	const kept = (items: TrackSummary[]) => tagged(items, filter, (t) => t.tags);
-	if (recipe.type === 'playlist') {
-		// The playlist's items, narrowed by the tags' real types, then in the core's order.
-		const rows = tagged(playlistRows(recipe.playlistId), filter, (r) => r.track.tags);
-		const field = PLAYLIST_FIELDS.find((field) => sortName(field) === recipe.sort);
-		const sort = field && { field, order: recipe.order! };
-		return sortRows(
-			rows,
-			sort ?? null,
-			(r) => r.track,
-			(r) => r.addedAt
-		).map((r) => r.track);
-	}
-	if (recipe.type === 'search') {
-		return kept(tracks.filter((t) => t.title.toLowerCase().includes(recipe.q.toLowerCase())));
-	}
-	return kept(sortedAsAsked(new URLSearchParams({ sort: recipe.sort, order: recipe.order })));
-}
-
-/** A playlist's items in its own order, with when each was added; empty for one the fixture lacks. */
-type PlaylistRows = (playlistId: string) => { track: TrackSummary; addedAt: string }[];
-
-/**
  * The account's queue as the server keeps it: the shared core in Node holds the state, and the
- * fixture answers the queue's endpoints for it. It sends nothing over the realtime connection.
- * One per page.
+ * fixture answers the queue's endpoints for it. One per page.
  */
 class FixtureQueue {
 	queue: Queue | null = null;
 	queueId = '';
-	version = 0;
 	context: object = {};
 	/** The lists held, by hash. */
 	lists = new Map<string, string[]>();
-	/** The starts received, as sent. */
-	starts: StartQueue[] = [];
-	/** The edits received, as sent. */
-	edits: SentEdit[] = [];
-	/** The playlists a playlist recipe resolves, set once the page's playlists are served. */
-	playlistRows: PlaylistRows = () => [];
-	/** While set, a start is not answered until it settles. */
-	holdStarts: Promise<void> | null = null;
-	/** Where `queueEdit` goes, as the realtime connection would send it; unset with none. */
-	broadcast: ((message: RealtimeServerMessage) => void) | null = null;
-	/** The kept queues, parked when a start or a restore replaced them: each with where its playback was left. */
-	kept = new Map<string, { queue: Queue; context: object; version: number; lastActive: string }>();
-	/** The progress reports the page sent over the realtime connection, as sent. */
-	reports: { itemId: string; positionMs: number; start: boolean; status: string }[] = [];
-	/** How long the lists and pages of rows take to arrive, as on a slow link. */
-	delayMs = 0;
-	/** The restores received, by queue. */
-	restores: string[] = [];
-	/** Where playback of the active queue is, as the server would have it from the device's reports. */
-	positionMs = 0;
-	/** The editIds answered, with the version each made. */
-	#answered = new Map<string, number>();
 
 	/** The queue as `GET /me/queue` answers it. */
 	snapshot() {
 		return {
 			queueId: this.queueId,
-			version: this.version,
+			version: 0,
 			context: this.context,
 			state: JSON.parse(this.queue!.toJson())
 		};
 	}
 
-	/** Starts a queue as `POST /me/queue` does: the list is the tracks sent, or what the recipe resolves to. */
+	/**
+	 * Starts a queue as `POST /me/queue` does: the list is the tracks sent, or the library's tracks
+	 * as the recipe sorts them, which is all the tests that send one ask for.
+	 */
 	start(body: StartQueue) {
-		this.starts.push(body);
 		const { key, libraryId, tracks: sent, recipe } = body.source;
-		const ids = sent ?? resolveRecipe(recipe!, this.playlistRows).map((t) => t.id);
+		const ids =
+			sent ??
+			sortedAsAsked(new URLSearchParams({ sort: recipe!.sort!, order: recipe!.order! })).map(
+				(t) => t.id
+			);
 		// As the server: `start` if the list holds the track there, else its first place.
-		const at = sent
-			? body.start
-			: ids[body.start] === body.startTrackId
-				? body.start
-				: ids.indexOf(body.startTrackId!);
-		const list = `list-${this.starts.length}`;
+		const at =
+			sent || ids[body.start] === body.startTrackId ? body.start : ids.indexOf(body.startTrackId!);
+		const list = `list-${this.lists.size + 1}`;
 		const repeat = this.queue ? JSON.parse(this.queue.toJson()).repeat : 'off';
 		const state = JSON.parse(Queue.started(key, libraryId, ids.length, at, repeat).toJson());
 		state.sources[0].list = list;
-		this.#park();
+		this.queue?.free();
 		this.queue = Queue.fromJson(JSON.stringify(state));
 		this.queueId = body.queueId;
 		this.context = body.context;
-		this.version = 0;
 		this.lists.set(list, ids);
-		this.#answered.clear();
 		return { list, length: ids.length };
-	}
-
-	/** Keeps the active queue if it was adjusted, as a start or a restore does, and lets go of it if not. */
-	#park() {
-		if (this.queue && JSON.parse(this.queue.toJson()).adjusted) {
-			const { queueId, context, version } = this;
-			this.kept.set(queueId, {
-				queue: this.queue,
-				context,
-				version,
-				lastActive: new Date().toISOString()
-			});
-			this.broadcast?.({ type: 'queuesChanged' });
-		} else this.queue?.free();
-	}
-
-	/** `GET /me/queues`: the kept queues, newest first, two to a page, with what each was playing. */
-	keptPage(cursor: string | null) {
-		const all = [...this.kept].reverse();
-		const from = cursor ? Number(cursor) : 0;
-		const items = all.slice(from, from + 2).map(([queueId, { queue, context, lastActive }]) => {
-			const copy = queue.copy();
-			for (const [hash, ids] of this.lists) {
-				copy.attachList(hash, JSON.stringify({ libraryId: library.id, tracks: ids }));
-			}
-			const current = copy.currentRow();
-			const entry = {
-				queueId,
-				context,
-				lastActive,
-				current: current && { libraryId: library.id, trackId: JSON.parse(current).track as string },
-				upNext: copy.upNextLen(),
-				history: copy.historyLen()
-			};
-			copy.free();
-			return entry;
-		});
-		const end = from + 2;
-		return { items, total: all.length, nextCursor: end < all.length ? String(end) : null };
-	}
-
-	/**
-	 * `POST /me/queues/{id}/restore`: the kept queue is the active one, the one it replaces is kept
-	 * if adjusted, and every device hears of it. Null for a queue that is not kept.
-	 */
-	restore(id: string) {
-		const kept = this.kept.get(id);
-		if (!kept) return null;
-		this.restores.push(id);
-		this.kept.delete(id);
-		this.#park();
-		this.queue = kept.queue;
-		this.queueId = id;
-		this.context = kept.context;
-		this.version = kept.version;
-		const current = JSON.parse(this.queue.currentRow() ?? '{}').item as string;
-		this.broadcast?.({ type: 'queueReplaced', queueId: id });
-		this.broadcast?.({ type: 'queuesChanged' });
-		return { ...this.snapshot(), position: { item: current, positionMs: this.positionMs } };
-	}
-
-	/** Applies an edit as `POST /me/queue/edits` does: the version it made, or the problem code. */
-	edit(body: { editId: string; queueId: string; edit: SentEdit }): number | 'queue_changed' {
-		if (!this.queue || body.queueId !== this.queueId) return 'queue_changed';
-		const done = this.#answered.get(body.editId);
-		if (done !== undefined) return done;
-		this.edits.push(body.edit);
-		const applied = this.#registered(body.edit);
-		this.queue.apply(JSON.stringify(applied));
-		this.#answered.set(body.editId, ++this.version);
-		const { queueId, version } = this;
-		this.broadcast?.({ type: 'queueEdit', queueId, version, editId: body.editId, edit: applied });
-		return this.version;
-	}
-
-	/** An add as the server registers it: its list held by hash, its source with the list and length. */
-	#registered(edit: SentEdit): QueueEdit {
-		if (edit.type !== 'add') return edit;
-		const { key, libraryId, tracks: sent, recipe } = edit.source;
-		const ids = sent ?? resolveRecipe(recipe!, this.playlistRows).map((t) => t.id);
-		const list = `list-add-${key}`;
-		this.lists.set(list, ids);
-		const source = { key, libraryId, list, length: ids.length, ...(recipe ? { recipe } : {}) };
-		return { ...edit, source } as QueueEdit;
 	}
 
 	/** A page of rows as `GET /me/queue/rows` answers it, from the list of every source. */
@@ -360,7 +212,7 @@ class FixtureQueue {
 		const current = copy.currentRow();
 		const page = {
 			queueId: this.queueId,
-			version: this.version,
+			version: 0,
 			current: current && row(JSON.parse(current)),
 			total: history ? copy.historyLen() : copy.upNextLen(),
 			manual: history ? 0 : copy.manualLen(),
@@ -380,96 +232,25 @@ export const queueOf = (page: Page) => {
 	return queues.get(page)!;
 };
 
-/** Answers the kept queues' endpoints (`/me/queues`) for `queue`; `path` is what follows `/me/queues`. */
-async function serveKept(route: Route, queue: FixtureQueue, path: string) {
-	const request = route.request();
-	const problem = (status: number, code: string) =>
-		route.fulfill({ status, json: { type: 'about:blank', title: '', status, code } });
-	if (path === '') {
-		return route.fulfill({
-			json: queue.keptPage(new URL(request.url()).searchParams.get('cursor'))
-		});
-	}
-	const [, id, action] = path.split('/');
-	if (request.method() === 'POST' && action === 'restore') {
-		const restored = queue.restore(id);
-		return restored ? route.fulfill({ json: restored }) : problem(404, 'not_found');
-	}
-	if (request.method() === 'DELETE') {
-		if (id === queue.queueId) return problem(409, 'queue_active');
-		if (!queue.kept.delete(id)) return problem(404, 'not_found');
-		queue.broadcast?.({ type: 'queuesChanged' });
-		return route.fulfill({ status: 204 });
-	}
-	return problem(404, 'not_found');
-}
-
 /** Answers the queue's endpoints for `queue`, which its worker asks. */
 async function serveQueue(page: Page, queue: FixtureQueue) {
 	await page.route('**/api/v1/me/queue**', async (route: Route) => {
 		const request = route.request();
 		const url = new URL(request.url());
 		const path = url.pathname.replace(/^.*\/api\/v1\/me\/queue/, '');
-		if (path.startsWith('s')) return serveKept(route, queue, path.slice(1));
 		const problem = (status: number, code: string) =>
 			route.fulfill({ status, json: { type: 'about:blank', title: '', status, code } });
 		if (path === '' && request.method() === 'POST') {
-			await queue.holdStarts;
 			return route.fulfill({ json: queue.start(request.postDataJSON()) });
 		}
 		if (!queue.queue) return problem(404, 'not_found');
 		if (path === '') return route.fulfill({ json: queue.snapshot() });
-		if (path === '/edits') {
-			const version = queue.edit(request.postDataJSON());
-			return typeof version === 'string'
-				? problem(409, version)
-				: route.fulfill({ json: { version } });
-		}
-		if (queue.delayMs && (path === '/rows' || path.startsWith('/lists/'))) {
-			await new Promise((resolve) => setTimeout(resolve, queue.delayMs));
-		}
 		if (path === '/rows') return route.fulfill({ json: queue.rows(url.searchParams) });
 		const tracks = queue.lists.get(path.replace('/lists/', ''));
 		if (!tracks) return problem(404, 'not_found');
 		return route.fulfill({ json: { libraryId: library.id, tracks } });
 	});
 }
-
-/** A playlist of the whole album, for tests that need one to start with. */
-export const signalMix: Generated = {
-	id: 'pl-signal',
-	title: 'Signal Mix',
-	description: 'Everything from Signal.',
-	createdAt: '2026-01-01T00:00:00.000Z',
-	trackIds: tracks.map((t) => BigInt(t.id))
-};
-
-/** A playlist long enough to scroll: the album, over and over. */
-export const longMix: Generated = {
-	...signalMix,
-	id: 'pl-long',
-	title: 'Long Mix',
-	trackIds: Array.from({ length: 15 }, () => signalMix.trackIds).flat()
-};
-
-/** The library above, for the mock's playlist store, starting with `playlists`. */
-const playlistLibrary = (playlists: Generated[]): PlaylistLibrary => ({
-	generated: () => playlists,
-	expand(_, ref) {
-		const found =
-			ref.type === 'track'
-				? tracks.filter((t) => t.id === ref.id)
-				: ref.id === (ref.type === 'album' ? album.id : artist.id)
-					? tracks
-					: [];
-		return found.length ? found.map((t) => BigInt(t.id)) : undefined;
-	},
-	// A copy, since the store marks what it is given liked or not, and the fixtures are shared.
-	track: (_, id) => {
-		const found = tracks.find((t) => t.id === String(id));
-		return found && { ...found };
-	}
-});
 
 /** Two seconds of 8 kHz mono silence. */
 function wav(): Buffer {
@@ -501,29 +282,16 @@ const owner = { id: '1', username: 'sam', displayName: 'Sam', role: 'owner', has
 const pageOf = <T>(items: T[]) => ({ items, total: items.length, nextCursor: null });
 
 /**
- * Serves the library by intercepting `/api/v1`, with this browser logged in as the owner, plus
- * the playlists in `playlists`. Returns every play reported to it.
+ * Serves the library by intercepting `/api/v1`, with this browser logged in as the owner and no
+ * playlists. Returns every play reported to it.
  */
-export async function serveLibrary(page: Page, { playlists = [] as Generated[] } = {}) {
-	// Playlists run through the mock's own store.
-	const playlistStore = new PlaylistStore(playlistLibrary(playlists));
-	queueOf(page).playlistRows = (id) =>
-		(
-			playlistStore.items(BigInt(library.id), id, new URLSearchParams({ limit: '1000' }))?.items ??
-			[]
-		).flatMap((i) => (i.track ? [{ track: i.track, addedAt: i.addedAt ?? '' }] : []));
+export async function serveLibrary(page: Page) {
 	const plays: PlayReport[] = [];
 	await page.route('**/api/v1/**', async (route: Route) => {
 		const url = new URL(route.request().url());
 		const path = url.pathname.replace(/^.*\/api\/v1/, '');
 		const lib = `/libraries/${library.id}`;
 		const json = (body: unknown) => route.fulfill({ json: body });
-		const reply = (out: { status: number; body?: unknown } | undefined) =>
-			!out
-				? route.fulfill({ status: 404 })
-				: out.body === undefined
-					? route.fulfill({ status: out.status })
-					: route.fulfill({ status: out.status, json: out.body });
 		const problem = (status: number, code: string, detail?: string) =>
 			route.fulfill({ status, json: { type: 'about:blank', title: '', status, code, detail } });
 
@@ -593,19 +361,7 @@ export async function serveLibrary(page: Page, { playlists = [] as Generated[] }
 				appearanceCount: 0
 			});
 		}
-		if (path.startsWith(`${lib}/playlists`)) {
-			const req = route.request();
-			return reply(
-				playlistRoute(
-					playlistStore,
-					BigInt(library.id),
-					req.method(),
-					path.slice(lib.length) + url.search,
-					new Uint8Array(req.postDataBuffer() ?? []),
-					req.headers()['idempotency-key']
-				)
-			);
-		}
+		if (path.startsWith(`${lib}/playlists`)) return json(pageOf([]));
 		if (path === `${lib}/recent-searches`) return json({ items: [] });
 		if (path === `${lib}/search`) {
 			const q = url.searchParams.get('q') ?? '';
@@ -653,22 +409,6 @@ export async function serveLibrary(page: Page, { playlists = [] as Generated[] }
 	// After the rest, so it is asked first for the queue's paths.
 	await serveQueue(page, queueOf(page));
 	return { plays };
-}
-
-/**
- * Opens the realtime connection as a server would for the queue alone: it says hello and tells
- * the page every edit the account's queue applies, the page's own included, as `queueEdit`.
- */
-export async function serveQueueEdits(page: Page) {
-	await page.routeWebSocket('**/api/v1/realtime', (ws) => {
-		const send = (message: RealtimeServerMessage) => ws.send(JSON.stringify(message));
-		send({ type: 'hello', deviceId, serverTime: new Date().toISOString() });
-		queueOf(page).broadcast = send;
-		ws.onMessage((data) => {
-			const message = JSON.parse(String(data));
-			if (message.type === 'progress') queueOf(page).reports.push(message.report);
-		});
-	});
 }
 
 /** Another of the account's devices, connected, which the realtime fixture has playing. */
