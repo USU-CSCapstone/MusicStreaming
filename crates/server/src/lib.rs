@@ -35,6 +35,11 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 /// while it waits a few seconds at most for the requests in progress, and last it stops the
 /// libraries' background work.
 async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::Result<()> {
+    if let Some(web) = &config.web_dir
+        && !web.is_dir()
+    {
+        anyhow::bail!("{} is {}, which is not a directory", config::WEB_DIR, web.display());
+    }
     let music = config.music.as_deref().and_then(resolve_music);
     let data_dir = DataDir::open(&config.data_dir, music.as_deref())
         .with_context(|| format!("cannot use the data directory set by {}", config::DATA_DIR))?;
@@ -105,7 +110,7 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
         prefix: api::prefix(&config.base_path),
         trusted_proxies: Arc::new(config.trusted_proxies.clone()),
     });
-    let web = &config.web_dir;
+    let web = config.web_dir.as_deref().unwrap_or(Path::new(web::DIR));
     if !web.is_dir() {
         info!(dir = %web.display(), "no web app there; serving the API only");
     } else if !config.base_path.is_empty() {

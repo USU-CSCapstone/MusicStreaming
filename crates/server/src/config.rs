@@ -21,7 +21,7 @@ const PORT: &str = "JEWELCASE_PORT";
 const BASE_PATH: &str = "JEWELCASE_BASE_PATH";
 const LOG: &str = "JEWELCASE_LOG";
 const TRUSTED_PROXIES: &str = "JEWELCASE_TRUSTED_PROXIES";
-const WEB_DIR: &str = "JEWELCASE_WEB_DIR";
+pub const WEB_DIR: &str = "JEWELCASE_WEB_DIR";
 
 const SETTINGS: [&str; 7] = [DATA_DIR, MUSIC, PORT, BASE_PATH, LOG, TRUSTED_PROXIES, WEB_DIR];
 
@@ -41,8 +41,9 @@ pub struct Config {
     pub log: String,
     /// The reverse proxies whose `X-Forwarded-*` headers are believed.
     pub trusted_proxies: TrustedProxies,
-    /// The web app's static build, served beside the API when it is there.
-    pub web_dir: PathBuf,
+    /// The web app's static build, when not where the image puts it. A build named here must be
+    /// there.
+    pub web_dir: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -55,7 +56,7 @@ impl Default for Config {
             base_path: String::new(),
             log: "info".to_owned(),
             trusted_proxies: TrustedProxies::default(),
-            web_dir: PathBuf::from("/usr/share/jewelcase/web"),
+            web_dir: None,
         }
     }
 }
@@ -91,7 +92,7 @@ impl Config {
                 TRUSTED_PROXIES => {
                     trusted_proxies::parse(&value).map(|proxies| config.trusted_proxies = proxies)
                 }
-                WEB_DIR => parse_dir(&value).map(|dir| config.web_dir = dir),
+                WEB_DIR => parse_dir(&value).map(|dir| config.web_dir = Some(dir)),
                 _ => {
                     problems.push(format!(
                         "{key} is not a Jewelcase setting; the settings are {}",
@@ -215,7 +216,7 @@ mod tests {
                 base_path: "/music".to_owned(),
                 log: "jewelcase_server=debug".to_owned(),
                 trusted_proxies: trusted_proxies::parse("172.16.0.0/12").unwrap(),
-                web_dir: PathBuf::from("/srv/web"),
+                web_dir: Some(PathBuf::from("/srv/web")),
             }
         );
     }

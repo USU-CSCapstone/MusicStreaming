@@ -55,6 +55,17 @@ async fn a_library_root_holding_the_data_directory_stops_the_server() {
     }
 }
 
+#[tokio::test]
+async fn a_web_build_named_but_not_there_stops_the_server_having_written_nothing() {
+    let temp = tempfile::tempdir().unwrap();
+    let data = temp.path().join("data");
+    let web_dir = Some(temp.path().join("build"));
+    let refused = timeout(REFUSED, run(Config { web_dir, ..config(&data, None) })).await;
+    let error = refused.unwrap().unwrap_err();
+    assert!(format!("{error:#}").contains(config::WEB_DIR), "{error:#}");
+    assert!(!data.exists());
+}
+
 #[test]
 fn music_not_there_yet_is_not_checked() {
     let temp = tempfile::tempdir().unwrap();
