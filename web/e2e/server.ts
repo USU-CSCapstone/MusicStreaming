@@ -221,7 +221,10 @@ export async function launch(withMusic = true): Promise<Launched> {
 	}
 }
 
-/** Completes a new server's setup with a random password, and returns the owner's login and token. */
+/**
+ * Completes a new server's setup with a random password, and returns the owner's login and an
+ * API client acting as the owner.
+ */
 export async function setupOwner(url: string) {
 	const username = 'owner';
 	const password = `e2e-${crypto.randomUUID()}`;
@@ -232,7 +235,19 @@ export async function setupOwner(url: string) {
 	});
 	if (setup.status !== 201) throw new Error(`Setup failed: ${setup.status} ${await setup.text()}`);
 	const { token } = (await setup.json()) as { token: string };
-	return { username, password, token };
+	const api: Server['api'] = async (path, { method = 'GET', body } = {}) => {
+		const res = await fetch(`${url}${API}${path}`, {
+			method,
+			headers: {
+				Authorization: `Bearer ${token}`,
+				...(body !== undefined && { 'Content-Type': 'application/json' })
+			},
+			body: body === undefined ? undefined : JSON.stringify(body)
+		});
+		if (!res.ok) throw new Error(`${method} ${path}: ${res.status} ${await res.text()}`);
+		return res.status === 204 ? undefined : res.json();
+	};
+	return { username, password, api };
 }
 
 /**
@@ -244,20 +259,7 @@ export async function startServer(): Promise<Server> {
 	const music = join(home, 'music');
 	const waiting = join(home, 'waiting');
 	try {
-		const { username, password, token } = await setupOwner(url);
-
-		const api: Server['api'] = async (path, { method = 'GET', body } = {}) => {
-			const res = await fetch(`${url}${API}${path}`, {
-				method,
-				headers: {
-					Authorization: `Bearer ${token}`,
-					...(body !== undefined && { 'Content-Type': 'application/json' })
-				},
-				body: body === undefined ? undefined : JSON.stringify(body)
-			});
-			if (!res.ok) throw new Error(`${method} ${path}: ${res.status} ${await res.text()}`);
-			return res.status === 204 ? undefined : res.json();
-		};
+		const { username, password, api } = await setupOwner(url);
 
 		const library = (await api('/libraries')).items[0].id as string;
 		// Waits until the library holds `count` tracks and is not scanning.
