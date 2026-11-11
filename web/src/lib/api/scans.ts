@@ -96,3 +96,34 @@ export const TRIGGER_LABELS: Record<Scan['trigger'], string> = {
 	reconfigure: 'Rescan for new tag types',
 	restore: 'Scan after a restore'
 };
+
+/** The same, counted, for a run of them: "12 scans of changed files". */
+const TRIGGER_PLURALS: Record<Scan['trigger'], string> = {
+	initial: 'first scans',
+	watch: 'scans of changed files',
+	scheduled: 'scheduled scans',
+	manual: 'manual scans',
+	reconfigure: 'rescans for new tag types',
+	restore: 'scans after a restore'
+};
+
+/**
+ * The scans waiting to start, in order: "Manual scan, then 12 scans of changed files". Each
+ * changed folder queues a scan of its own while one runs, so a run of the same kind is counted
+ * rather than listed.
+ */
+export function inOrder(queued: Scan[]): string {
+	const runs: { trigger: Scan['trigger']; count: number }[] = [];
+	for (const { trigger } of queued) {
+		const last = runs.at(-1);
+		if (last?.trigger === trigger) last.count++;
+		else runs.push({ trigger, count: 1 });
+	}
+	return runs
+		.map(({ trigger, count }) =>
+			count === 1
+				? TRIGGER_LABELS[trigger]
+				: `${count.toLocaleString()} ${TRIGGER_PLURALS[trigger]}`
+		)
+		.join(', then ');
+}
