@@ -16,6 +16,15 @@
 		<p class="muted">
 			There is no library to browse. Once the server has scanned a music folder, it appears here.
 		</p>
+	{:else if page.error?.code === 'not_on_device'}
+		<h1>Not on this device yet</h1>
+		<p class="muted">
+			This library hasn't finished downloading here, and the server can't be reached. Connect to the
+			server once and it will be available offline.
+		</p>
+	{:else if page.error?.code === 'unavailable_offline'}
+		<h1>Unavailable offline</h1>
+		<p class="muted">This page needs the server, which this device can't reach right now.</p>
 	{:else if page.status === 404}
 		<h1>Not found</h1>
 		<p class="muted">This page doesn't exist, or isn't in your library.</p>

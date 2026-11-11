@@ -2,8 +2,8 @@
 // `loggedIn` is off.
 
 import { randomUUID } from 'node:crypto';
-import { type Page, test as base } from '@playwright/test';
-import { type Launched, type Server, launch, startServer } from './server';
+import { type BrowserContext, type Page, test as base } from '@playwright/test';
+import { type Launched, type Server, launch, populate, startServer } from './server';
 
 export { expect } from '@playwright/test';
 
@@ -40,6 +40,16 @@ export async function createPlaylist(server: Server, title: string, trackTitles:
 	return made.id as string;
 }
 
+/**
+ * A server of its own and a browser context logged in to it, with service workers, for specs that
+ * take the server away.
+ */
+export interface Device {
+	server: Server;
+	context: BrowserContext;
+	page: Page;
+}
+
 export const test = base.extend<
 	{
 		cleanAccount: void;
@@ -47,6 +57,12 @@ export const test = base.extend<
 		loggedIn: boolean;
 		/** Starts a server of its own that is not set up, with or without music; stopped after the test. */
 		freshServer: (options?: { music?: boolean }) => Promise<Launched>;
+		/**
+		 * A device on a server of its own, set up with the generated music, so a spec may stop and
+		 * restart the server, or change its library, without touching the shared one. Stopped after
+		 * the test.
+		 */
+		device: Device;
 	},
 	{ server: Server }
 >({
@@ -144,6 +160,17 @@ export const test = base.extend<
 		} finally {
 			const settled = await Promise.allSettled(launching);
 			await Promise.all(settled.map((r) => r.status === 'fulfilled' && r.value.stop()));
+		}
+	},
+	device: async ({ browser, freshServer }, use) => {
+		const server = await populate(await freshServer());
+		const context = await browser.newContext({ baseURL: server.url, serviceWorkers: 'allow' });
+		try {
+			const page = await context.newPage();
+			await login(page, server.url, server.username, server.password);
+			await use({ server, context, page });
+		} finally {
+			await context.close();
 		}
 	},
 	baseURL: async ({ server }, use) => use(server.url),

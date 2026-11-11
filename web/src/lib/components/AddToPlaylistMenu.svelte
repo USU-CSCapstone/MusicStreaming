@@ -10,10 +10,12 @@
 	import { createPlaylist, listPlaylists } from '$lib/api/client';
 	import type { Playlist, PlaylistCreate, TrackSummary } from '$lib/api/types';
 	import { type Adding, addTo, alreadyIn } from '$lib/adding.svelte';
+	import { catalog } from '$lib/catalog/client.svelte';
 	import { deleted } from '$lib/deletions.svelte';
 	import { marks } from '$lib/marks.svelte';
 	import { plural } from '$lib/format';
 	import { Paged } from '$lib/paged.svelte';
+	import { DEPENDS } from '$lib/live.svelte';
 	import { addToQueue, startPlacing } from '$lib/queueing.svelte';
 	import { toast } from '$lib/toast.svelte';
 	import Icon from './Icon.svelte';
@@ -65,9 +67,16 @@
 	async function load() {
 		try {
 			// Every playlist, a page at a time as the list scrolls.
+			const since = catalog.changes;
 			const first = await listPlaylists(fetch, libraryId);
 			marks.note(first.items);
-			playlists = new Paged(first, (cursor) => listPlaylists(fetch, libraryId, { cursor }));
+			playlists = new Paged(
+				first,
+				(cursor, limit) => listPlaylists(fetch, libraryId, { cursor, limit }),
+				libraryId,
+				DEPENDS.playlists,
+				since
+			);
 		} catch (e) {
 			failed = e instanceof Error ? e.message : String(e);
 		}

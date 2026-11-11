@@ -43,6 +43,10 @@ export const CONFLICT_MESSAGE =
 /** The longest wait between attempts to reach the server. */
 const MAX_RETRY_MS = 30_000;
 
+/**
+ * A playlist as shown: the server's confirmed version with this page's pending edits applied at
+ * once. The edits are kept and sent by the outbox, which tells of each answer.
+ */
 export class EditablePlaylist {
 	/** As shown: what the server confirmed, with pending edits applied. */
 	playlist = $state<Playlist>()!;
@@ -54,8 +58,13 @@ export class EditablePlaylist {
 	// Reassigned, never mutated, so `saving` is reactive.
 	#queue = $state.raw<Pending[]>([]);
 	#sending: Promise<void> | null = null;
+	// Whether `#confirmed` is known to be the server's version, which the first edit makes sure of.
+	#verified = false;
+	/** The newest playlist `refresh` was given while edits were sending. */
+	#later: LoadedPlaylist | null = null;
 	#added = $state(false);
 
+	/** Shows `loaded`, which is read with `fetch` again after a conflict. */
 	constructor(fetch: Fetch, loaded: LoadedPlaylist) {
 		this.#fetch = fetch;
 		this.#confirmed = loaded;
@@ -98,6 +107,10 @@ export class EditablePlaylist {
 		);
 	}
 
+	/**
+	 * Applies, queues and sends `change` like `edit`, with `resolve` naming what its adds bring in;
+	 * returns its undo.
+	 */
 	#edit(change: PlaylistChange, resolve: Resolve<PlaylistItem>): () => void {
 		const before = { playlist: this.playlist, items: this.items };
 		const { ops } = change;
@@ -135,17 +148,36 @@ export class EditablePlaylist {
 		};
 	}
 
+	/**
+	 * Shows `loaded`, read again after the library changed on this device, if it is newer than
+	 * what this shows and nothing is pending here: an edit made here is never replaced, as the
+	 * server's answer to it, or its conflict, comes first, and then the newest playlist held back
+	 * is offered again.
+	 */
+	refresh(loaded: LoadedPlaylist) {
+		if (this.#sending) {
+			this.#later = loaded;
+			return;
+		}
+		if (loaded.playlist.version <= this.#confirmed.playlist.version) return;
+		this.#confirmed = loaded;
+		this.items = loaded.items;
+		this.#present();
+	}
+
 	/** Settles once every pending edit is confirmed, refused, or dropped. */
 	async idle(): Promise<void> {
 		while (this.#sending) await this.#sending;
 	}
 
+	/** Sends the queued edits one at a time, then offers `refresh` the playlist held back meanwhile. */
 	async #send() {
 		let attempt = 0;
 		while (this.#queue.length > 0) {
 			const next = this.#queue[0];
-			const { playlist, items } = this.#confirmed;
 			try {
+				if (!this.#verified) await this.#verify();
+				const { playlist, items } = this.#confirmed;
 				const confirmed = await editPlaylist(
 					this.#fetch,
 					playlist.libraryId,
@@ -170,13 +202,38 @@ export class EditablePlaylist {
 			}
 		}
 		this.#sending = null;
+		const later = this.#later;
+		this.#later = null;
+		if (later) this.refresh(later);
+	}
+
+	/**
+	 * Before the first edit: makes sure the playlist is the server's version, which a device
+	 * that is behind does not give. Positions are the device's items', so if the server's items
+	 * differ the edit conflicts, as another device's change would.
+	 */
+	async #verify() {
+		const { playlist, items } = this.#confirmed;
+		let server = await getPlaylist(this.#fetch, playlist.libraryId, playlist.id, true);
+		if (server.version !== playlist.version) {
+			const loaded = await loadPlaylist(this.#fetch, playlist.libraryId, playlist.id, true);
+			const names = (list: PlaylistItem[]) => JSON.stringify(list.map(toPlayable));
+			if (names(loaded.items) !== names(items)) {
+				throw new ApiError(409, 'version_conflict', CONFLICT_MESSAGE);
+			}
+			server = loaded.playlist;
+		}
+		this.#confirmed = { playlist: server, items };
+		this.#verified = true;
+		this.#present();
 	}
 
 	/** After a conflict: the server's playlist, with nothing of this device's pending. */
 	async #reload() {
 		const { playlist } = this.#confirmed;
 		try {
-			this.#confirmed = await loadPlaylist(this.#fetch, playlist.libraryId, playlist.id);
+			this.#confirmed = await loadPlaylist(this.#fetch, playlist.libraryId, playlist.id, true);
+			this.#verified = true;
 		} catch {
 			// Shown as last confirmed; the next edit meets the conflict again and reloads.
 		}
@@ -245,12 +302,14 @@ export function rowMoveOps(
 
 /**
  * A playlist and every item, at one version, so positions and `baseVersion` agree. Tries again
- * when the playlist changes while it loads.
+ * when the playlist changes while it loads. With `fresh`, from the server alone, as the reload
+ * after a conflict needs: a device behind the server would give the version that just conflicted.
  */
 export async function loadPlaylist(
 	fetch: Fetch,
 	libraryId: string,
-	playlistId: string
+	playlistId: string,
+	fresh = false
 ): Promise<LoadedPlaylist> {
 	for (let attempt = 1; ; attempt++) {
 		try {
@@ -258,12 +317,18 @@ export async function loadPlaylist(
 			let version: number | undefined;
 			let cursor: string | undefined;
 			do {
-				const page = await listPlaylistItems(fetch, libraryId, playlistId, { limit: 1000, cursor });
+				const page = await listPlaylistItems(
+					fetch,
+					libraryId,
+					playlistId,
+					{ limit: 1000, cursor },
+					fresh
+				);
 				version ??= page.version;
 				items.push(...page.items);
 				cursor = page.nextCursor ?? undefined;
 			} while (cursor);
-			const playlist = await getPlaylist(fetch, libraryId, playlistId);
+			const playlist = await getPlaylist(fetch, libraryId, playlistId, fresh);
 			if (playlist.version === version) return { playlist, items };
 		} catch (e) {
 			// `cursor_expired`: it changed between pages.

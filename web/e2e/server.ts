@@ -153,18 +153,21 @@ export interface Server {
 	/** Calls the API as the owner, with a bearer token, and returns the JSON. Throws on a failing status. */
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- tests read the JSON they expect
 	api: (path: string, init?: { method?: string; body?: unknown }) => Promise<any>;
-	/** Stops the process and removes its folders. Safe to call twice. */
-	stop: () => Promise<void>;
-}
-
-/** A server process that is running, not yet set up. */
-export interface Launched {
-	url: string;
 	/** Where the server's own folders are: `music`, the `waiting` copy to add from, and `data`. */
 	home: string;
 	/** Stops the process and removes its folders. Safe to call twice. */
 	stop: () => Promise<void>;
+	/** Stops the process and keeps its folders, as a server that went away: nothing answers. */
+	halt: () => Promise<void>;
+	/**
+	 * Starts a halted server again on the same port and data, so its origin and the devices' storage
+	 * survive.
+	 */
+	restart: () => Promise<void>;
 }
+
+/** A server process that is running, not yet set up. */
+export type Launched = Pick<Server, 'url' | 'home' | 'stop' | 'halt' | 'restart'>;
 
 /**
  * Starts a server with its own data folder, on a free port, and waits until it answers. With
@@ -176,7 +179,11 @@ export async function launch(withMusic = true): Promise<Launched> {
 	const home = mkdtempSync(join(process.env[RUN_ENV]!, 'server-'));
 	let log = '';
 	let child: ChildProcess | undefined;
-	const stop = async () => {
+	/**
+	 * Stops the process and waits for it to exit, leaving the folders; does nothing if it is not
+	 * running.
+	 */
+	const halt = async () => {
 		if (child && child.exitCode === null && child.signalCode === null) {
 			const exited = new Promise((done) => child!.once('exit', done));
 			child.kill('SIGTERM');
@@ -184,6 +191,10 @@ export async function launch(withMusic = true): Promise<Launched> {
 			await exited;
 			clearTimeout(timer);
 		}
+	};
+	/** Halts the process and removes the folders. */
+	const stop = async () => {
+		await halt();
 		rmSync(home, { recursive: true, force: true });
 	};
 	try {
@@ -196,26 +207,33 @@ export async function launch(withMusic = true): Promise<Launched> {
 		}
 		const port = await freePort();
 		const url = `http://127.0.0.1:${port}`;
-		child = spawn(binary, [], {
-			env: {
-				...env,
-				JEWELCASE_DATA_DIR: join(home, 'data'),
-				JEWELCASE_PORT: String(port),
-				JEWELCASE_WEB_DIR: join(root, 'web/build')
-			},
-			stdio: ['ignore', 'pipe', 'pipe']
-		});
-		for (const stream of [child.stdout!, child.stderr!]) {
-			stream.on('data', (chunk) => (log = (log + chunk).slice(-4000)));
-		}
-		const died = new Promise<never>((_, fail) =>
-			child!.once('exit', (code) => fail(new Error(`Server exited with ${code}:\n${log}`)))
-		);
-		await Promise.race([
-			until('the server to answer', 60_000, () => fetch(`${url}${API}/health`).then((r) => r.ok)),
-			died
-		]);
-		return { url, home, stop };
+		/**
+		 * Spawns the process on `port` and `data`, and resolves when it answers; rejects if it exits
+		 * first.
+		 */
+		const run = async () => {
+			child = spawn(binary, [], {
+				env: {
+					...env,
+					JEWELCASE_DATA_DIR: join(home, 'data'),
+					JEWELCASE_PORT: String(port),
+					JEWELCASE_WEB_DIR: join(root, 'web/build')
+				},
+				stdio: ['ignore', 'pipe', 'pipe']
+			});
+			for (const stream of [child.stdout!, child.stderr!]) {
+				stream.on('data', (chunk) => (log = (log + chunk).slice(-4000)));
+			}
+			const died = new Promise<never>((_, fail) =>
+				child!.once('exit', (code) => fail(new Error(`Server exited with ${code}:\n${log}`)))
+			);
+			await Promise.race([
+				until('the server to answer', 60_000, () => fetch(`${url}${API}/health`).then((r) => r.ok)),
+				died
+			]);
+		};
+		await run();
+		return { url, home, stop, halt, restart: run };
 	} catch (error) {
 		await stop();
 		throw error;
@@ -224,7 +242,7 @@ export async function launch(withMusic = true): Promise<Launched> {
 
 /**
  * Completes a new server's setup with a random password, and returns the owner's login and an
- * API client acting as the owner.
+ * API client acting as the owner, and the bearer token it uses.
  */
 export async function setupOwner(url: string) {
 	const username = 'owner';
@@ -248,7 +266,7 @@ export async function setupOwner(url: string) {
 		if (!res.ok) throw new Error(`${method} ${path}: ${res.status} ${await res.text()}`);
 		return res.status === 204 ? undefined : res.json();
 	};
-	return { username, password, api };
+	return { username, password, api, token };
 }
 
 /**
@@ -256,52 +274,72 @@ export async function setupOwner(url: string) {
  * added differs as it does for real. Call `stop` when done, also on failure.
  */
 export async function startServer(): Promise<Server> {
-	const { url, home, stop } = await launch();
-	const music = join(home, 'music');
-	const waiting = join(home, 'waiting');
+	const launched = await launch();
 	try {
-		const { username, password, api } = await setupOwner(url);
-
-		const library = (await api('/libraries')).items[0].id as string;
-		// Waits until the library holds `count` tracks and is not scanning.
-		const scanned = (count: number) =>
-			until(`${count} tracks to be scanned`, 30_000, async () => {
-				const lib = await api(`/libraries/${library}`);
-				return lib.trackCount === count && !lib.scanning;
-			});
-		await scanned(1);
-		for (const [i, { file }] of TRACKS.slice(1).entries()) {
-			moveIn(waiting, music, file);
-			await scanned(i + 2);
-		}
-
-		// A search starts rebuilding a stale index and answers from the old one meanwhile; ask until
-		// it knows the track added last, so every test finds the whole library.
-		const last = TRACKS.at(-1)!.title;
-		await until('the search index to hold the music', 30_000, async () => {
-			const found = await api(`/libraries/${library}/search?q=${encodeURIComponent(last)}`);
-			return found.top;
-		});
-
-		// Maps each item's `key` to its ID, for the first 100 items at `path` in the library.
-		const byName = async (path: string, key: 'title' | 'name') =>
-			Object.fromEntries(
-				(await api(`/libraries/${library}${path}?limit=100`)).items.map(
-					(item: Record<string, string>) => [item[key], item.id]
-				)
-			);
-		const ids: Ids = {
-			library,
-			tracks: await byName('/tracks', 'title'),
-			albums: await byName('/albums', 'title'),
-			artists: await byName('/artists', 'name'),
-			tags: await byName('/tags', 'name')
-		};
-		return { url, username, password, ids, api, stop };
+		return await populate(launched);
 	} catch (error) {
-		await stop();
+		await launched.stop();
 		throw error;
 	}
+}
+
+/**
+ * Sets up the owner of a server `launch` started with music, and adds the music to its library as
+ * `startServer` does.
+ */
+export async function populate(launched: Launched): Promise<Server> {
+	const { url, home } = launched;
+	const music = join(home, 'music');
+	const waiting = join(home, 'waiting');
+	const { username, password, api, token } = await setupOwner(url);
+
+	const library = (await api('/libraries')).items[0].id as string;
+	/** Waits until the library holds `count` tracks and is not scanning. */
+	const scanned = (count: number) =>
+		until(`${count} tracks to be scanned`, 30_000, async () => {
+			const lib = await api(`/libraries/${library}`);
+			return lib.trackCount === count && !lib.scanning;
+		});
+	await scanned(1);
+	for (const [i, { file }] of TRACKS.slice(1).entries()) {
+		moveIn(waiting, music, file);
+		await scanned(i + 2);
+	}
+
+	// A search starts rebuilding a stale index and answers from the old one meanwhile; ask until
+	// it knows the track added last, so every test finds the whole library.
+	const last = TRACKS.at(-1)!.title;
+	await until('the search index to hold the music', 30_000, async () => {
+		const found = await api(`/libraries/${library}/search?q=${encodeURIComponent(last)}`);
+		return found.top;
+	});
+
+	// The first request for a library's device catalog is answered `503` while the server builds
+	// it, and a device waits out `Retry-After` (30 s); ask until it is built, so every device that
+	// syncs finds it ready.
+	await until('the device catalog to be built', 60_000, async () => {
+		const res = await fetch(`${url}${API}/libraries/${library}/catalog`, {
+			headers: { Authorization: `Bearer ${token}` }
+		});
+		await res.body?.cancel();
+		return res.status === 200;
+	});
+
+	/** Maps each item's `key` to its ID, for the first 100 items at `path` in the library. */
+	const byName = async (path: string, key: 'title' | 'name') =>
+		Object.fromEntries(
+			(await api(`/libraries/${library}${path}?limit=100`)).items.map(
+				(item: Record<string, string>) => [item[key], item.id]
+			)
+		);
+	const ids: Ids = {
+		library,
+		tracks: await byName('/tracks', 'title'),
+		albums: await byName('/albums', 'title'),
+		artists: await byName('/artists', 'name'),
+		tags: await byName('/tags', 'name')
+	};
+	return { ...launched, username, password, ids, api };
 }
 
 /**

@@ -38,7 +38,7 @@ afterEach(() => toaster.dismiss());
 
 describe('HiddenSongs.svelte', () => {
 	it('lists the hidden songs under a count, and Unhide brings one back, with Undo', async () => {
-		render(HiddenSongs, { library: '1', first });
+		render(HiddenSongs, { library: '1', first, since: 0 });
 		await expect.element(page.getByRole('heading', { name: 'Hidden Songs' })).toBeVisible();
 		// A list to unhide from, not to play.
 		await expect.element(page.getByRole('button', { name: 'Play' })).not.toBeInTheDocument();
@@ -56,13 +56,17 @@ describe('HiddenSongs.svelte', () => {
 	});
 
 	it('leaves out a song liked elsewhere since, which unhid it', async () => {
-		render(HiddenSongs, { library: '1', first });
+		render(HiddenSongs, { library: '1', first, since: 0 });
 		marks.receive({ type: 'trackLiked', libraryId: '1', trackId: '1', liked: true });
 		await expect.element(page.getByText('Interlude')).not.toBeInTheDocument();
 	});
 
 	it('says when there are none, and how to hide one', async () => {
-		render(HiddenSongs, { library: '1', first: { items: [], nextCursor: null, total: 0 } });
+		render(HiddenSongs, {
+			library: '1',
+			first: { items: [], nextCursor: null, total: 0 },
+			since: 0
+		});
 		await expect
 			.element(page.getByText(/^You haven't hidden any songs in this library\./))
 			.toBeVisible();
