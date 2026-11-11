@@ -1,5 +1,6 @@
 //! `api/openapi.yaml` and the router agree: the server serves every operation the spec lists,
-//! except those marked planned, and no other method on a path the spec lists.
+//! except those marked planned, and no other method on a path the spec lists. A `HEAD` is also
+//! served wherever a `GET` is, since the router answers it with the `GET`'s headers.
 
 use axum::http::StatusCode;
 
@@ -9,7 +10,7 @@ use super::super::testing::{app_before_setup, send};
 const SPEC: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../api/openapi.yaml"));
 
 /// The methods the spec and the router use.
-const METHODS: [&str; 5] = ["get", "put", "post", "patch", "delete"];
+const METHODS: [&str; 6] = ["get", "head", "put", "post", "patch", "delete"];
 
 /// Each path in the spec with its operations, as each method and whether its description marks
 /// it planned. Read from the spec's layout: a path at two spaces' indent under `paths:`, its
@@ -58,7 +59,11 @@ async fn the_router_serves_what_the_spec_lists_and_nothing_else_on_its_paths() {
             let (status, _, _) = send(app.clone(), &method.to_uppercase(), &uri).await;
             let served = ![StatusCode::NOT_FOUND, StatusCode::METHOD_NOT_ALLOWED].contains(&status);
             let listed = operations.iter().find(|(listed, _)| *listed == method);
-            let expected = listed.is_some_and(|(_, planned)| !planned);
+            let served_by = |wanted: &str| {
+                operations.iter().any(|(listed, planned)| *listed == wanted && !planned)
+            };
+            let expected = listed.is_some_and(|(_, planned)| !planned)
+                || (method == "head" && served_by("get"));
             assert_eq!(served, expected, "{method} /{path} answers {status}");
         }
     }

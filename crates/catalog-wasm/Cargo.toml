@@ -10,6 +10,8 @@ crate-type = ["cdylib"]
 [target.'cfg(target_family = "wasm")'.dependencies]
 jewelcase-catalog = { path = "../catalog" }
 jewelcase-core = { path = "../core" }
+# Inflates the gzipped snapshot during the import, with its pure-Rust backend, as in the server.
+flate2 = "1.1"
 rusqlite = "0.41.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -71,11 +71,11 @@ const dbs = async () => {
 };
 
 /** The feed position the fake server's snapshots are current to. */
-const SEQ = 10;
+const POSITION = 10;
 
-/** A tag's upsert at `seq`, as the library feed carries it. */
-const tag = (seq: number, id: string, name: string) => ({
-	seq,
+/** A tag's upsert at `position`, as the library feed carries it. */
+const tag = (position: number, id: string, name: string) => ({
+	position,
 	op: 'upsert',
 	kind: 'tag',
 	id,
@@ -103,7 +103,7 @@ const tag = (seq: number, id: string, name: string) => ({
 const playlists = library
 	.filter((rows) => ['playlist', 'playlistItem', 'hiddenTrack'].includes(rows.kind))
 	.map((rows, i) => ({
-		seq: i + 1,
+		position: i + 1,
 		op: 'upsert',
 		kind: rows.kind,
 		id: rows.id,
@@ -114,7 +114,7 @@ const playlists = library
 const roadTrip = playlists.find((change) => change.kind === 'playlist' && change.id === '501')!;
 /** The same account's playlist in another library, which this library's file must not hold. */
 const elsewhere = {
-	seq: playlists.length + 1,
+	position: playlists.length + 1,
 	op: 'upsert',
 	kind: 'playlist',
 	id: '504',
@@ -124,12 +124,12 @@ const elsewhere = {
 };
 const accountHead = playlists.length + 1;
 
-/** A server with libraries `ids`, each at `SEQ` with nothing newer. */
+/** A server with libraries `ids`, each at `POSITION` with nothing newer. */
 async function serve(...ids: string[]) {
 	await h.api.setLibraries(ids);
 	for (const id of ids) {
-		await h.api.setSeq(id, SEQ);
-		await h.api.setFeed(id, [], SEQ);
+		await h.api.setPosition(id, POSITION);
+		await h.api.setFeed(id, [], POSITION);
 	}
 	await h.api.setAccount([...playlists, elsewhere], accountHead);
 }
@@ -142,7 +142,7 @@ async function started(...ids: string[]) {
 }
 
 /** The feed position `grown` moves a library to. */
-const BASE = SEQ + 1;
+const BASE = POSITION + 1;
 
 /**
  * Moves the started library on to `BASE`, a catch-up of one change that gives it `tracks` tracks,
@@ -150,7 +150,7 @@ const BASE = SEQ + 1;
  */
 async function grown(tracks = 1000) {
 	const counts = {
-		seq: BASE,
+		position: BASE,
 		op: 'upsert',
 		kind: 'library',
 		id: '1',
@@ -161,9 +161,9 @@ async function grown(tracks = 1000) {
 	await h.idle();
 }
 
-/** An album's upsert at `seq`, as the library feed carries it. */
-const album = (seq: number, id: string, title: string) => ({
-	seq,
+/** An album's upsert at `position`, as the library feed carries it. */
+const album = (position: number, id: string, title: string) => ({
+	position,
 	op: 'upsert',
 	kind: 'album',
 	id,
@@ -194,11 +194,11 @@ const album = (seq: number, id: string, title: string) => ({
 });
 
 const hello = { type: 'hello', deviceId: '1', serverTime: '' };
-/** The realtime hint that `libraryId`'s feed reached `seq`. */
-const libraryChanged = (seq: number, libraryId = '1') => ({
+/** The realtime hint that `libraryId`'s feed reached `position`. */
+const libraryChanged = (position: number, libraryId = '1') => ({
 	type: 'libraryChanged',
 	libraryId,
-	seq
+	position
 });
 /** The name the device's catalog holds for tag `id`, or undefined when it has none. */
 const tagName = async (id: string) =>
@@ -241,7 +241,7 @@ describe('catalog sync', () => {
 		expect(await h.libraries()).toEqual(['1']);
 		expect(await total('listTracks')).toBe(SHOWN);
 		expect([await h.cursor('1', 'library'), await h.cursor('1', 'account')]).toEqual([
-			SEQ,
+			POSITION,
 			accountHead
 		]);
 		expect(await h.reported()).toEqual([]);
@@ -259,8 +259,8 @@ describe('catalog sync', () => {
 		// Who is signed in is asked first: only this worker's account pulls.
 		expect((await h.api.asked('/')).slice(asked)).toEqual([
 			'/me',
-			`/libraries/1/changes?after=${BASE}&limit=1000`,
-			`/libraries/1/changes?after=${BASE + 1}&limit=1000`
+			`/libraries/1/changes?after=${BASE}&epoch=1&limit=1000`,
+			`/libraries/1/changes?after=${BASE + 1}&epoch=1&limit=1000`
 		]);
 		expect([await tagName('90'), await tagName('91')]).toEqual(['Rock', 'Jazz']);
 		expect(await h.cursor('1', 'library')).toBe(BASE + 2);
@@ -301,7 +301,7 @@ describe('catalog sync', () => {
 		const resumed = (await h.api.asked('/'))
 			.slice(asked)
 			.filter((p) => p.includes('/libraries/1/'));
-		expect(resumed).toEqual([`/libraries/1/changes?after=${BASE + 2}&limit=1000`]);
+		expect(resumed).toEqual([`/libraries/1/changes?after=${BASE + 2}&epoch=1&limit=1000`]);
 		expect([await tagName('90'), await tagName('91'), await tagName('92')]).toEqual([
 			'Rock',
 			'Jazz',
@@ -327,8 +327,8 @@ describe('catalog sync', () => {
 		expect(await tagName('91')).toBe('Jazz');
 		expect(await h.cursor('1', 'library')).toBe(BASE + 2);
 		expect((await h.api.asked('/libraries/1/changes')).slice(2)).toEqual([
-			`/libraries/1/changes?after=${BASE}&limit=1000`,
-			`/libraries/1/changes?after=${BASE + 1}&limit=1000`
+			`/libraries/1/changes?after=${BASE}&epoch=1&limit=1000`,
+			`/libraries/1/changes?after=${BASE + 1}&epoch=1&limit=1000`
 		]);
 	});
 
@@ -369,7 +369,7 @@ describe('catalog sync', () => {
 		expect(told.at(-1)?.['1'].applying).toBe(false);
 
 		await h.api.setLibraries([]);
-		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
 		await h.idle();
 		expect((await h.states()).at(-1)).toEqual({});
 	});
@@ -402,19 +402,19 @@ describe('catalog sync', () => {
 		const others = Array.from({ length: 5 }, (_, i) => `${i + 2}`);
 		await h.api.setLibraries(['1', ...others]);
 		for (const id of others) {
-			await h.api.setSeq(id, SEQ);
-			await h.api.setFeed(id, [], SEQ);
+			await h.api.setPosition(id, POSITION);
+			await h.api.setFeed(id, [], POSITION);
 		}
 		await h.api.setPageSize(1);
 		await h.message(hello);
 		// Each hint is a further page of changes, staged and applied while the others bootstrap.
 		for (let i = 0; i < 40; i++) {
-			const seq = BASE + 1 + i;
+			const position = BASE + 1 + i;
 			const changes = Array.from({ length: i + 1 }, (_, j) =>
 				tag(BASE + 1 + j, `${90 + j}`, `Tag ${j}`)
 			);
-			await h.api.setFeed('1', changes, seq);
-			await h.message(libraryChanged(seq));
+			await h.api.setFeed('1', changes, position);
+			await h.message(libraryChanged(position));
 		}
 		await h.idle();
 		expect(await h.reported()).toEqual([]);
@@ -453,11 +453,24 @@ describe('catalog sync', () => {
 		const [file] = await dbs();
 		await h.run(file, ['PRAGMA user_version = 1']);
 
-		await h.start();
+		// A file the worker deletes itself is still one it found, so it is not missing.
+		expect(await h.start()).toEqual(['1']);
 		await h.idle();
 		expect(await h.libraries()).toEqual(['1']);
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
 		expect(await total('listTracks')).toBe(SHOWN);
+	});
+
+	it('says at its start which libraries had a file: a kept one, and not a journal left alone', async () => {
+		expect(await h.start()).toEqual([]);
+		await h.stop();
+		await started('1');
+		await h.stop();
+		// Library 2 is only a crash's leftover journal.
+		await h.run('lib-2-1.db', ['CREATE TABLE stray (a)']);
+		await h.remove('lib-2-1.db');
+		expect(await h.files()).toContain('lib-2-1.db-journal');
+		expect(await h.start()).toEqual(['1']);
 	});
 
 	it('a database of a newer schema version is kept for the build that wrote it, and its library left to the server', async () => {
@@ -490,7 +503,7 @@ describe('catalog sync', () => {
 		expect(await dbs()).toHaveLength(2);
 
 		await h.api.setLibraries(['1']);
-		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
 		await h.idle();
 		expect(await h.libraries()).toEqual(['1']);
 		expect(await dbs()).toHaveLength(1);
@@ -499,9 +512,9 @@ describe('catalog sync', () => {
 	it('a newly listed library is bootstrapped', async () => {
 		await started('1');
 		await h.api.setLibraries(['1', '2']);
-		await h.api.setSeq('2', 7);
+		await h.api.setPosition('2', 7);
 		await h.api.setFeed('2', [], 7);
-		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
 		await h.idle();
 
 		expect(await h.libraries()).toEqual(['1', '2']);
@@ -533,7 +546,7 @@ describe('catalog sync', () => {
 		const next = spawn();
 		try {
 			const other = remote<Harness>(() => next);
-			expect(await other.inspect(file)).toMatchObject({ version: 4, position: BASE });
+			expect(await other.inspect(file)).toMatchObject({ version: 8, position: BASE });
 			await other.remove(journal);
 			await other.remove(file);
 			expect(await other.files()).toEqual([]);
@@ -576,6 +589,17 @@ describe('catalog sync', () => {
 		expect(await h.libraries()).toEqual([]);
 	});
 
+	it('sign-out deletes a download cut short', async () => {
+		await serve('1');
+		await h.api.cutBody();
+		await h.start();
+		await h.idle();
+		expect(await h.downloads()).toHaveLength(1);
+
+		await h.signOut();
+		expect(await h.downloads()).toEqual([]);
+	});
+
 	it('a file kept for another account is deleted', async () => {
 		await started('1');
 		await h.stop();
@@ -601,7 +625,7 @@ describe('catalog sync', () => {
 		await started('1');
 		const before = (await h.api.asked('/libraries/1/changes')).length;
 		await h.api.setSession('2');
-		await h.message(libraryChanged(SEQ + 1));
+		await h.message(libraryChanged(POSITION + 1));
 		await h.idle();
 
 		expect(await h.api.asked('/libraries/1/changes')).toHaveLength(before);
@@ -612,9 +636,9 @@ describe('catalog sync', () => {
 	it('a worker whose session is now another account’s downloads no library again', async () => {
 		await started('1');
 		await h.api.setSession('2');
-		await h.api.setSeq('1', 5);
+		await h.api.setPosition('1', 5);
 		await h.api.setFeed('1', [], 5);
-		await h.message(libraryChanged(SEQ + 1));
+		await h.message(libraryChanged(POSITION + 1));
 		await h.idle();
 
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(1);
@@ -624,9 +648,9 @@ describe('catalog sync', () => {
 	it('410 bootstraps again', async () => {
 		await started('1');
 		// The server's feed is now behind the device's position, as after a restored backup.
-		await h.api.setSeq('1', 5);
+		await h.api.setPosition('1', 5);
 		await h.api.setFeed('1', [], 5);
-		await h.message(libraryChanged(SEQ + 1));
+		await h.message(libraryChanged(POSITION + 1));
 		await h.idle();
 
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
@@ -637,7 +661,7 @@ describe('catalog sync', () => {
 	it('404 from a feed deletes the library, which the account no longer reaches', async () => {
 		await started('1', '2');
 		await h.api.setLibraries(['1']);
-		await h.message(libraryChanged(SEQ + 1, '2'));
+		await h.message(libraryChanged(POSITION + 1, '2'));
 		await h.idle();
 
 		expect(await h.libraries()).toEqual(['1']);
@@ -648,7 +672,7 @@ describe('catalog sync', () => {
 	it('a library the account’s list no longer holds is deleted and reported lost', async () => {
 		await started('1', '2');
 		await h.api.setLibraries(['1']);
-		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
 		await h.idle();
 
 		expect(await h.libraries()).toEqual(['1']);
@@ -672,9 +696,9 @@ describe('catalog sync', () => {
 
 	it('a library downloaded again because its feed expired is not reported lost', async () => {
 		await started('1');
-		await h.api.setSeq('1', 5);
+		await h.api.setPosition('1', 5);
 		await h.api.setFeed('1', [], 5);
-		await h.message(libraryChanged(SEQ + 1));
+		await h.message(libraryChanged(POSITION + 1));
 		await h.idle();
 
 		expect(await h.lost()).toEqual([]);
@@ -685,7 +709,7 @@ describe('catalog sync', () => {
 		expect(await total('listPlaylists')).toBe(3);
 		// The server's account feed is behind the device's position, and holds no playlists now.
 		await h.api.setAccount([], 1);
-		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
 		await h.idle();
 
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
@@ -693,17 +717,88 @@ describe('catalog sync', () => {
 		expect(await h.cursor('1', 'account')).toBe(1);
 	});
 
+	it('410 from the account feed on a hello downloads the library once, though the hello pulls it too', async () => {
+		await started('1');
+		await h.api.setAccount([], 1);
+		await h.message(hello);
+		await h.idle();
+
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
+		expect(await h.cursor('1', 'account')).toBe(1);
+	});
+
 	it('410 keeps the old copy until the new snapshot is in', async () => {
 		await started('1');
-		await h.api.setSeq('1', 5);
+		await h.api.setPosition('1', 5);
 		await h.api.setFeed('1', [], 5);
 		await h.api.failAfter('/libraries/1/catalog', 1);
-		await h.message(libraryChanged(SEQ + 1));
+		await h.message(libraryChanged(POSITION + 1));
 		await h.idle();
 
 		expect(await h.libraries()).toEqual(['1']);
 		expect(await total('listTracks')).toBe(SHOWN);
 		expect(await h.reported()).toHaveLength(1);
+	});
+
+	it("asks each feed from the epoch of its last page, and takes on a restarted server's", async () => {
+		await started('1');
+		await grown();
+		expect([await h.epoch('1', 'library'), await h.epoch('1', 'account')]).toEqual(['1', '1']);
+
+		await h.api.restart('2');
+		await h.api.setFeed('1', [tag(BASE + 1, '90', 'Rock')], BASE + 1);
+		await h.message(libraryChanged(BASE + 1));
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
+		await h.idle();
+		expect(await h.api.asked(`/libraries/1/changes?after=${BASE}&epoch=1`)).toHaveLength(1);
+		expect(await h.api.asked(`/me/changes?after=${accountHead}&epoch=1`)).toHaveLength(1);
+		expect([await h.epoch('1', 'library'), await h.epoch('1', 'account')]).toEqual(['2', '2']);
+
+		await h.api.setFeed('1', [tag(BASE + 2, '91', 'Jazz')], BASE + 2);
+		await h.message(libraryChanged(BASE + 2));
+		await h.idle();
+		expect(await h.api.asked(`/libraries/1/changes?after=${BASE + 1}&epoch=2`)).toHaveLength(1);
+		expect(await tagName('91')).toBe('Jazz');
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(1);
+	});
+
+	it('a restored server that does not know the epoch is downloaded again', async () => {
+		await started('1');
+		// The restored feed has moved past the device's position, so only the epoch tells.
+		await h.api.restart('9', true);
+		await h.api.setPosition('1', POSITION + 5);
+		await h.api.setFeed('1', [], POSITION + 5);
+		await h.message(libraryChanged(POSITION + 5));
+		await h.idle();
+
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
+		expect([await h.cursor('1', 'library'), await h.epoch('1', 'library')]).toEqual([
+			POSITION + 5,
+			'9'
+		]);
+		expect(await h.reported()).toEqual([]);
+	});
+
+	it('a file kept before feeds had epochs is deleted and bootstrapped again', async () => {
+		await started('1');
+		await h.stop();
+		const [file] = await dbs();
+		// Schema version 4 kept a feed's position alone.
+		await h.run(file, [
+			'DROP TABLE feed_cursors',
+			'CREATE TABLE feed_cursors (feed TEXT PRIMARY KEY, seq INTEGER NOT NULL) WITHOUT ROWID',
+			`INSERT INTO feed_cursors VALUES ('library', ${POSITION}), ('account', ${accountHead}), ('owner', 1)`,
+			'PRAGMA user_version = 4'
+		]);
+
+		await h.start();
+		await h.idle();
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
+		await h.api.setFeed('1', [tag(POSITION + 1, '90', 'Rock')], POSITION + 1);
+		await h.message(libraryChanged(POSITION + 1));
+		await h.idle();
+		expect(await tagName('90')).toBe('Rock');
+		expect(await h.reported()).toEqual([]);
 	});
 
 	it('a snapshot whose hash does not match its ETag is discarded and downloaded again', async () => {
@@ -716,6 +811,32 @@ describe('catalog sync', () => {
 		expect(await h.libraries()).toEqual(['1']);
 		expect(await dbs()).toHaveLength(1);
 		expect(await h.reported()).toEqual([]);
+	});
+
+	// The import is sized from the database's own header: page size (offset 16) times page count
+	// (offset 28), which counts only while "version-valid-for" (offset 92) is the change counter
+	// (offset 24). Whatever the header does not give is a damaged snapshot, downloaded again.
+	it.each([
+		['more pages than the file has', (v: DataView) => v.setUint32(28, v.getUint32(28) + 1)],
+		['fewer pages than the file has', (v: DataView) => v.setUint32(28, v.getUint32(28) - 1)],
+		['a page count its writer did not keep', (v: DataView) => v.setUint32(92, v.getUint32(24) + 1)],
+		['no page count', (v: DataView) => v.setUint32(28, 0)],
+		['not SQLite', (v: DataView) => v.setUint8(0, 0x58)]
+	])('a snapshot with %s is damaged and never shown', async (_, damage) => {
+		const bytes = snapshot.slice();
+		damage(new DataView(bytes.buffer));
+		await h.api.setSnapshot(bytes);
+		await h.api.setLibraries(['1']);
+		await h.api.setFeed('1', [], POSITION);
+		await h.api.setPosition('1', POSITION);
+		await h.api.setAccount([...playlists, elsewhere], accountHead);
+		await h.start();
+		await h.idle();
+
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(3);
+		expect(await h.libraries()).toEqual([]);
+		expect(await h.files()).toEqual([]);
+		expect(await h.reported()).toHaveLength(1);
 	});
 
 	it('a snapshot install that throws still says the worker is free again', async () => {
@@ -731,6 +852,20 @@ describe('catalog sync', () => {
 		expect(told.length).toBeGreaterThan(0);
 		expect(told.length % 2).toBe(0);
 		expect(alternates(told)).toBe(true);
+	});
+
+	it('a snapshot that ends before a database header is damaged and never shown', async () => {
+		await h.api.setSnapshot(snapshot.slice(0, 60));
+		await h.api.setLibraries(['1']);
+		await h.api.setFeed('1', [], POSITION);
+		await h.api.setPosition('1', POSITION);
+		await h.api.setAccount([...playlists, elsewhere], accountHead);
+		await h.start();
+		await h.idle();
+
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(3);
+		expect(await h.libraries()).toEqual([]);
+		expect(await h.reported()).toHaveLength(1);
 	});
 
 	it('a snapshot that never matches its ETag is never shown', async () => {
@@ -775,7 +910,7 @@ describe('catalog sync', () => {
 
 		const more = [tag(12, '91', 'Jazz'), tag(13, '92', 'Soul'), tag(14, '93', 'Folk')];
 		await h.api.setFeed('1', more, 14);
-		await h.api.setSeq('1', 14);
+		await h.api.setPosition('1', 14);
 		await h.message(libraryChanged(14));
 		await h.idle();
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
@@ -792,10 +927,10 @@ describe('catalog sync', () => {
 
 		const renamed = structuredClone(roadTrip);
 		(renamed.rows.playlists[0] as { title: string }).title = 'Renamed';
-		renamed.seq = accountHead + 1;
-		const deleted = { seq: accountHead + 2, op: 'delete', kind: 'playlist', id: '502' };
+		renamed.position = accountHead + 1;
+		const deleted = { position: accountHead + 2, op: 'delete', kind: 'playlist', id: '502' };
 		await h.api.setAccount([renamed, deleted], accountHead + 2);
-		await h.message({ type: 'accountChanged', seq: accountHead + 2 });
+		await h.message({ type: 'accountChanged', position: accountHead + 2 });
 		await h.idle();
 		const titles = (await h.query('1', 'listPlaylists', {})) as { items: { title: string }[] };
 		expect(titles.items.map((item) => item.title)).toEqual(['Liked Songs', 'Renamed']);
@@ -806,7 +941,7 @@ describe('catalog sync', () => {
 		await started('1');
 		expect(await h.changes()).toEqual(['1']);
 
-		await h.message(libraryChanged(SEQ));
+		await h.message(libraryChanged(POSITION));
 		await h.idle();
 		expect(await h.changes()).toEqual(['1']);
 
@@ -816,16 +951,16 @@ describe('catalog sync', () => {
 		expect(await h.changes()).toEqual(['1', '1']);
 
 		// Another library's playlist is not this library's change.
-		const other = { ...elsewhere, seq: accountHead + 1 };
+		const other = { ...elsewhere, position: accountHead + 1 };
 		await h.api.setAccount([other], accountHead + 1);
-		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
 		await h.idle();
 		expect(await h.changes()).toEqual(['1', '1']);
 
 		const renamed = structuredClone(roadTrip);
-		renamed.seq = accountHead + 2;
+		renamed.position = accountHead + 2;
 		await h.api.setAccount([renamed], accountHead + 2);
-		await h.message({ type: 'accountChanged', seq: accountHead + 2 });
+		await h.message({ type: 'accountChanged', position: accountHead + 2 });
 		await h.idle();
 		expect(await h.changes()).toEqual(['1', '1', '1']);
 	});
@@ -835,15 +970,15 @@ describe('catalog sync', () => {
 		const told = async () => (await h.changedKinds()).map((kinds) => [...kinds].sort());
 		expect((await told())[0]).toEqual([...ALL].sort());
 
-		let seq = accountHead;
+		let position = accountHead;
 		const account = async (...changes: Record<string, unknown>[]) => {
-			seq += changes.length;
+			position += changes.length;
 			const stamped = changes.map((change, i) => ({
 				...change,
-				seq: seq - changes.length + 1 + i
+				position: position - changes.length + 1 + i
 			})) as typeof playlists;
-			await h.api.setAccount(stamped, seq);
-			await h.message({ type: 'accountChanged', seq });
+			await h.api.setAccount(stamped, position);
+			await h.message({ type: 'accountChanged', position });
 			await h.idle();
 		};
 		const last = async () => (await told()).at(-1);
@@ -889,10 +1024,10 @@ describe('catalog sync', () => {
 	it('another library answers while a snapshot downloads', async () => {
 		await started('1');
 		await h.api.setLibraries(['1', '2']);
-		await h.api.setSeq('2', 7);
+		await h.api.setPosition('2', 7);
 		await h.api.setFeed('2', [], 7);
 		await h.api.holdBody();
-		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
 		await expect.poll(() => h.api.bodyHeld()).toBe(true);
 
 		expect(await h.busy()).toBe(true);
@@ -932,7 +1067,7 @@ describe('catalog sync', () => {
 		await h.message(libraryChanged(BASE + 300));
 		await h.idle();
 
-		// The snapshot stays at SEQ, behind the copy's position: asked for while the server might
+		// The snapshot stays at POSITION, behind the copy's position: asked for while the server might
 		// build a newer one, then never imported.
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(11);
 		expect(await dbs()).toEqual([file]);
@@ -954,12 +1089,12 @@ describe('catalog sync', () => {
 
 		const renamed = structuredClone(roadTrip);
 		(renamed.rows.playlists[0] as { title: string }).title = 'Renamed';
-		renamed.seq = accountHead + 1;
+		renamed.position = accountHead + 1;
 		await h.api.hold('/me/changes');
 		await h.message(hello);
 		await expect.poll(() => h.api.holding()).toBe(true);
 		await h.api.setAccount([renamed], accountHead + 1);
-		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
 		await h.api.release();
 		await h.idle();
 		expect(await h.cursor('1', 'account')).toBe(accountHead + 1);
@@ -972,8 +1107,8 @@ describe('catalog sync', () => {
 		await h.idle();
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(3);
 
-		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
-		await h.message(libraryChanged(SEQ + 1));
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
+		await h.message(libraryChanged(POSITION + 1));
 		await h.idle();
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(3);
 
@@ -988,7 +1123,7 @@ describe('catalog sync', () => {
 		await h.api.setPageSize(60);
 		const many = Array.from({ length: 120 }, (_, i) => tag(BASE + 1 + i, `${100 + i}`, `Tag ${i}`));
 		await h.api.setFeed('1', many, BASE + 120);
-		await h.api.setSeq('1', BASE + 120);
+		await h.api.setPosition('1', BASE + 120);
 		await h.message(libraryChanged(BASE + 120));
 		await h.idle();
 
@@ -996,27 +1131,284 @@ describe('catalog sync', () => {
 		expect(await h.cursor('1', 'library')).toBe(BASE + 120);
 	});
 
-	it('clears the downloads a closed worker left behind', async () => {
+	it('clears the downloads a closed worker left behind of the libraries it holds', async () => {
 		await started('1');
 		await h.stop();
-		await h.leaveDownload('download-1.tmp');
-		expect(await h.downloads()).toEqual(['download-1.tmp']);
+		await h.leaveDownload(`download-1-${'a'.repeat(64)}.tmp`, new Uint8Array(8));
+		expect(await h.downloads()).toHaveLength(1);
 		await h.start();
 		await h.idle();
 		expect(await h.downloads()).toEqual([]);
 	});
 
+	/**
+	 * The bytes a first download of the golden library needs room for: its gzip, its database and a
+	 * 16 MiB journal.
+	 */
+	const needed = async () => (await h.api.snapshot()).gzip.length + snapshot.length + (16 << 20);
+
+	it('a download that would not fit is skipped and reported to the page, and tried again only at a start or a hello', async () => {
+		await serve('1');
+		const need = await needed();
+		await h.storage(1000 + need - 1, 1000);
+		await h.start();
+		await h.idle();
+		expect(await h.libraries()).toEqual([]);
+		expect(await h.api.asked('/libraries/1/catalog')).toEqual([]);
+		expect(await h.heads()).toEqual(['/libraries/1/catalog']);
+		expect((await h.states()).at(-1)).toEqual({
+			'1': { onDevice: false, applying: false, noRoom: { need, free: need - 1 } }
+		});
+		// Said by the page, so not also as a failure to log or toast.
+		expect(await h.reported()).toEqual([]);
+
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
+		await h.message(libraryChanged(POSITION + 1));
+		await h.idle();
+		expect(await h.heads()).toHaveLength(1);
+
+		// Room may have come by the next hello, which downloads and clears what was said.
+		await h.storage(1000 + need, 1000);
+		await h.message(hello);
+		await h.idle();
+		expect(await h.libraries()).toEqual(['1']);
+		expect((await h.states()).at(-1)).toEqual({
+			'1': { onDevice: true, applying: false }
+		});
+	});
+
+	it('what was said of a library’s room is dropped once its snapshot is in, however it got there', async () => {
+		await serve('1');
+		await h.storage(1000, 1000);
+		await h.start();
+		await h.idle();
+		expect((await h.states()).at(-1)!['1']).toMatchObject({ noRoom: { free: 0 } });
+
+		// Without an estimate there is nothing to check, so the next try goes on to the download.
+		await h.noEstimate();
+		await h.message(hello);
+		await h.idle();
+		expect(await h.libraries()).toEqual(['1']);
+		expect((await h.states()).at(-1)!['1']).not.toHaveProperty('noRoom');
+	});
+
+	it('a library on the device whose newer snapshot would not fit is caught up from the feed instead, and says so', async () => {
+		await started('1');
+		await h.storage(1000, 1000);
+		await h.api.setFeed(
+			'1',
+			[tag(12, '91', 'Jazz'), tag(13, '92', 'Soul'), tag(14, '93', 'Folk')],
+			14
+		);
+		await h.message(libraryChanged(14));
+		await h.idle();
+		// Only the first download was asked for.
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(1);
+		expect(await h.libraries()).toEqual(['1']);
+		expect((await h.states()).at(-1)!['1']).toMatchObject({ onDevice: true, noRoom: { free: 0 } });
+		// The feed's changes were applied, so the next hint finds nothing to pull.
+		expect(await h.cursor('1', 'library')).toBe(14);
+		expect(await tagName('91')).toBe('Jazz');
+		expect(await total('listTracks')).toBe(SHOWN);
+	});
+
+	it('the part of a snapshot already downloaded needs no room again', async () => {
+		await serve('1');
+		await h.api.cutBody();
+		await h.start();
+		await h.idle();
+		expect((await h.downloads()).length).toBe(1);
+
+		// 1024 bytes of the gzip are kept, and the origin's usage already counts them.
+		const need = await needed();
+		await h.storage(5000 + need, 5000);
+		await h.start();
+		await h.idle();
+		expect(await h.libraries()).toEqual(['1']);
+	});
+
+	it('a first sync from a server still building is checked once the build is done, and refused if it will not fit', async () => {
+		await serve('1');
+		await h.api.building(1);
+		await h.storage(1000, 1000);
+		await h.start();
+		await h.idle();
+		// The one GET answered `503`; the download behind it was never asked for.
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(1);
+		expect(await h.libraries()).toEqual([]);
+		expect((await h.states()).at(-1)!['1']).toMatchObject({ onDevice: false, noRoom: { free: 0 } });
+	});
+
+	it('a damaged library with no room for a new copy is not caught up from the feed, which it was discarded from', async () => {
+		await started('1');
+		await h.storage(1000, 1000);
+		await h.damage('1');
+		await h.message(hello);
+		await h.idle();
+		expect(await h.libraries()).toEqual([]);
+		expect(await h.reported()).toEqual([]);
+		expect((await h.states()).at(-1)!['1']).toMatchObject({ onDevice: false, noRoom: { free: 0 } });
+	});
+
+	it('a download kept of another file is deleted before the check, and the room it held counts as free', async () => {
+		await serve('1');
+		await h.api.cutBody();
+		await h.start();
+		await h.idle();
+		const changed = snapshot.slice();
+		changed[68] = 1;
+		await h.api.setSnapshot(changed);
+
+		// One byte short of the room the new file needs once the old partial is gone, then exactly it.
+		const need = await needed();
+		await h.storage(5000 + need - 1, 5000);
+		await h.message(hello);
+		await h.idle();
+		expect(await h.libraries()).toEqual([]);
+		await h.storage(5000 + need, 5000);
+		await h.message(hello);
+		await h.idle();
+		expect(await h.libraries()).toEqual(['1']);
+		expect(await h.downloads()).toEqual([]);
+	});
+
+	it('a library the account loses before it is downloaded drops what was said of its room', async () => {
+		await serve('1');
+		await h.storage(1000, 1000);
+		await h.start();
+		await h.idle();
+		expect((await h.states()).at(-1)).toHaveProperty('1.noRoom');
+
+		await h.api.setLibraries([]);
+		await h.message(hello);
+		await h.idle();
+		expect((await h.states()).at(-1)).toEqual({});
+	});
+
+	it('an interrupted first download goes on from where it broke off, in the next worker too', async () => {
+		await serve('1');
+		const { gzip, etag } = await h.api.snapshot();
+		await h.api.cutBody();
+		await h.start();
+		await h.idle();
+		expect(await h.libraries()).toEqual([]);
+		expect(await h.downloads()).toEqual([`download-1-${etag}.tmp`]);
+		expect(await h.reported()).toEqual([]);
+
+		await h.start();
+		await h.idle();
+		expect(await h.libraries()).toEqual(['1']);
+		expect(await total('listTracks')).toBe(SHOWN);
+		expect(await h.api.ranges()).toEqual(['', 'bytes=1024-']);
+		expect(await h.api.sent()).toBe(gzip.length);
+		expect(await h.downloads()).toEqual([]);
+		expect(await h.reported()).toEqual([]);
+	});
+
+	it('a download goes on at the next hello in the same worker', async () => {
+		await serve('1');
+		await h.api.cutBody();
+		await h.start();
+		await h.idle();
+		expect(await h.libraries()).toEqual([]);
+
+		await h.message(hello);
+		await h.idle();
+		expect(await h.libraries()).toEqual(['1']);
+		expect(await h.api.ranges()).toEqual(['', 'bytes=1024-']);
+	});
+
+	it('a download whose file changed on the server since starts over', async () => {
+		await serve('1');
+		const before = (await h.api.snapshot()).etag;
+		await h.api.cutBody();
+		await h.start();
+		await h.idle();
+		const changed = snapshot.slice();
+		// The database header's application ID, which nothing reads.
+		changed[68] = 1;
+		await h.api.setSnapshot(changed);
+		const { gzip, etag } = await h.api.snapshot();
+		expect(etag).not.toBe(before);
+
+		await h.message(hello);
+		await h.idle();
+		expect(await h.libraries()).toEqual(['1']);
+		// The room check deleted the old part, so the new file came whole without a range.
+		expect(await h.api.ranges()).toEqual(['', '']);
+		expect(await h.api.sent()).toBe(1024 + gzip.length);
+		expect(await h.downloads()).toEqual([]);
+		expect(await h.reported()).toEqual([]);
+	});
+
+	it('a whole download whose import was cut short is downloaded again whole', async () => {
+		await serve('1');
+		const { gzip, etag } = await h.api.snapshot();
+		await h.leaveDownload(`download-1-${etag}.tmp`, gzip);
+		await h.start();
+		await h.idle();
+		expect(await h.libraries()).toEqual(['1']);
+		expect(await h.api.ranges()).toEqual([`bytes=${gzip.length}-`, '']);
+		expect(await h.reported()).toEqual([]);
+	});
+
+	it('a resumed download that will not inflate is discarded and downloaded again', async () => {
+		await serve('1');
+		const { gzip, etag } = await h.api.snapshot();
+		await h.leaveDownload(`download-1-${etag}.tmp`, new Uint8Array(100).fill(0xab));
+		await h.start();
+		await h.idle();
+		expect(await h.libraries()).toEqual(['1']);
+		expect(await h.api.ranges()).toEqual(['bytes=100-', '']);
+		expect(await h.api.sent()).toBe(gzip.length - 100 + gzip.length);
+		expect(await h.downloads()).toEqual([]);
+		expect(await h.reported()).toEqual([]);
+	});
+
+	it('a part of another file than the download holds is not appended to it', async () => {
+		await serve('1');
+		// With no estimate the room check does not delete it first, so the import's own guard is what
+		// holds.
+		await h.noEstimate();
+		await h.leaveDownload(`download-1-${'a'.repeat(64)}.tmp`, new Uint8Array(100));
+		await h.api.ignoreIfRange();
+		await h.start();
+		await h.idle();
+		expect(await h.libraries()).toEqual([]);
+		expect(await h.downloads()).toEqual([]);
+		expect(await h.reported()).toHaveLength(1);
+
+		await h.message(hello);
+		await h.idle();
+		expect(await h.libraries()).toEqual(['1']);
+		expect(await h.api.ranges()).toEqual(['bytes=100-', '']);
+	});
+
+	it('the download of a library the account no longer reaches is deleted', async () => {
+		await serve('1');
+		await h.api.cutBody();
+		await h.start();
+		await h.idle();
+		expect(await h.downloads()).toHaveLength(1);
+
+		await h.api.setLibraries([]);
+		await h.message(hello);
+		await h.idle();
+		expect(await h.downloads()).toEqual([]);
+		expect(await h.libraries()).toEqual([]);
+	});
+
 	it("a new library's download does not hold up the playlists of the libraries held", async () => {
 		await started('1');
 		await h.api.setLibraries(['1', '2']);
-		await h.api.setSeq('2', 7);
+		await h.api.setPosition('2', 7);
 		await h.api.setFeed('2', [], 7);
 		await h.api.holdBody();
 		const renamed = structuredClone(roadTrip);
 		(renamed.rows.playlists[0] as { title: string }).title = 'Renamed';
-		renamed.seq = accountHead + 1;
+		renamed.position = accountHead + 1;
 		await h.api.setAccount([renamed], accountHead + 1);
-		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
 		await expect.poll(() => h.api.bodyHeld()).toBe(true);
 
 		await expect.poll(() => h.cursor('1', 'account')).toBe(accountHead + 1);
@@ -1094,7 +1486,7 @@ describe('catalog sync', () => {
 			.slice(asked)
 			.filter((p) => p.includes('/libraries/1/changes'));
 		expect(new Set(pulls)).toEqual(
-			new Set([`/libraries/1/changes?after=${BASE + LARGE}&limit=1000`])
+			new Set([`/libraries/1/changes?after=${BASE + LARGE}&epoch=1&limit=1000`])
 		);
 	});
 
@@ -1105,11 +1497,11 @@ describe('catalog sync', () => {
 		worker.terminate();
 		worker = spawn();
 		await h.api.setLibraries(['1']);
-		await h.api.setSeq('1', SEQ);
+		await h.api.setPosition('1', POSITION);
 		await h.api.setFeed('1', largeFeed(), BASE + LARGE);
 		await h.api.setAccount([...playlists, elsewhere], accountHead);
 
-		await h.start();
+		expect(await h.start()).toEqual(['1']);
 		expect(await h.query('1', 'listTags', { limit: 1 }, true)).toMatchObject({
 			total: before + LARGE
 		});
@@ -1128,7 +1520,7 @@ describe('catalog sync', () => {
 		(feed[LARGE - 1].rows.tags[0] as { name: string | null }).name = null;
 		await h.api.setFeed('1', feed, BASE + LARGE);
 		// The snapshot downloaded again is current to the feed's head.
-		await h.api.setSeq('1', BASE + LARGE);
+		await h.api.setPosition('1', BASE + LARGE);
 		await h.message(libraryChanged(BASE + LARGE));
 
 		const mid = await h.midApply('1', 'listTags', { limit: 1 });
@@ -1211,8 +1603,8 @@ describe('catalog sync', () => {
 		expect(await h.reported()).toHaveLength(1);
 
 		await h.message(hello);
-		await h.message(libraryChanged(SEQ + 1));
-		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.message(libraryChanged(POSITION + 1));
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
 		await h.idle();
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(1);
 		expect(await h.reported()).toHaveLength(1);
@@ -1247,8 +1639,8 @@ describe('catalog sync', () => {
 				}
 			).sections.length;
 		expect(await found()).toBe(0);
-		await h.api.setFeed('1', [album(SEQ + 1, '900', 'Zebra Crossing')], SEQ + 1);
-		await h.message(libraryChanged(SEQ + 1));
+		await h.api.setFeed('1', [album(POSITION + 1, '900', 'Zebra Crossing')], POSITION + 1);
+		await h.message(libraryChanged(POSITION + 1));
 		await h.idle();
 		await expect.poll(async () => await found(), { timeout: 5000 }).toBe(1);
 	});
@@ -1300,10 +1692,10 @@ describe('the device’s own writes', () => {
 	let head = accountHead;
 	let feed: Record<string, unknown>[] = [];
 	async function account(...changes: Record<string, unknown>[]) {
-		feed = [...feed, ...changes.map((change, i) => ({ ...change, seq: head + 1 + i }))];
+		feed = [...feed, ...changes.map((change, i) => ({ ...change, position: head + 1 + i }))];
 		head += changes.length;
 		await h.api.setAccount([...playlists, elsewhere, ...feed] as typeof playlists, head);
-		await h.message({ type: 'accountChanged', seq: head });
+		await h.message({ type: 'accountChanged', position: head });
 		await h.idle();
 	}
 	beforeEach(() => {
@@ -1345,7 +1737,7 @@ describe('the device’s own writes', () => {
 		// A catch-up too large for the feed, so a new snapshot replaces the file.
 		const more = [tag(12, '91', 'Jazz'), tag(13, '92', 'Soul'), tag(14, '93', 'Folk')];
 		await h.api.setFeed('1', more, 14);
-		await h.api.setSeq('1', 14);
+		await h.api.setPosition('1', 14);
 		await h.message(libraryChanged(14));
 		await h.idle();
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);

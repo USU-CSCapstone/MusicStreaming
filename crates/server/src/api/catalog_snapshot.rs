@@ -1,23 +1,28 @@
-//! `getLibraryCatalog` (`api/openapi.yaml`): a library's catalog as a device-schema SQLite file,
-//! built in the background and kept under `cache/catalog/<library>/` (`design/general.md` §3).
+//! `getLibraryCatalog` (`api/openapi.yaml`): a library's catalog as a gzipped device-schema SQLite
+//! file, built in the background and kept under `cache/catalog/<library>/` (`design/general.md`
+//! §3).
 //!
-//! A file is `<version>-<seq>-<sha256>.db` and its gzip `<version>-<seq>-<sha256>.db.gz`, written
-//! by one build and named for the device schema version it holds, the feed position it is current
-//! to and the hash of the database itself, which is its ETag. A file of another schema version is
-//! never served, so a release that changes the schema builds afresh. The newest is served; once
-//! the feed holds more changes since it than a tenth of the library's entities, a rebuild starts
-//! and the old file is served meanwhile. A build works inside a `building-*` folder of its own, so
-//! a file is in place only whole.
+//! A file is `<version>-<epoch>-<position>-<size>-<sha256>.gz`, written by one build and named for
+//! the device schema version it holds, the feed position it is current to and the epoch of the run
+//! that gave it, the size of the database it inflates to, and its SHA-256, which is its ETag. Only
+//! the gzip is kept: it is served as it is, so a range of it is a range of what the client stores,
+//! and an interrupted download resumes. A file of another schema version is never served, so a
+//! release that changes the schema builds afresh, and neither is one whose position this database
+//! cannot go on from, such as a file newer than a restored backup. The newest is served; once the
+//! feed holds more changes since it than a tenth of the library's entities, a rebuild starts and
+//! the old file is served meanwhile. A build works inside a `building-*` folder of its own, so a
+//! file is in place only whole.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::{Request, State};
+use axum::http::request::Parts;
 use axum::http::{HeaderValue, header};
 use axum::response::Response;
 use flate2::Compression;
@@ -31,6 +36,7 @@ use tower_http::services::ServeFile;
 use super::scope::Scope;
 use super::{Code, Problem};
 use crate::db::Database;
+use crate::db::feed::{self, Feed};
 
 /// The page size of a snapshot, fixed so a file is the same shape whichever SQLite built it.
 const PAGE_SIZE: u32 = 4096;
@@ -71,7 +77,10 @@ impl Drop for Build<'_> {
 
 /// A finished file, as its name says.
 struct Current {
-    seq: i64,
+    epoch: i64,
+    position: i64,
+    /// The bytes of the database the gzip inflates to.
+    size: u64,
     sha256: String,
     path: PathBuf,
 }
@@ -119,10 +128,11 @@ impl Snapshots {
         .map_err(io::Error::other)?
     }
 
-    /// Starts a build of `library`'s file in the background, unless one is running or the last
-    /// one failed less than [`RETRY_COOLDOWN`] ago. It runs on a thread of its own, at lowered
-    /// priority, since a pooled thread would keep the lowered priority for later tasks.
-    fn start(self: &Arc<Self>, library: i64) {
+    /// Starts a build of `library`'s file in run `epoch` in the background, unless one is
+    /// running or the last one failed less than [`RETRY_COOLDOWN`] ago. It runs on a thread of
+    /// its own, at lowered priority, since a pooled thread would keep the lowered priority for
+    /// later tasks.
+    fn start(self: &Arc<Self>, library: i64, epoch: i64) {
         let cooling = self
             .failed
             .lock()
@@ -137,7 +147,7 @@ impl Snapshots {
             let _build = Build { snapshots: &snapshots, library };
             jewelcase_ffmpeg::lower_thread_priority();
             let dir = snapshots.dir.join(library.to_string());
-            match build(&snapshots.database, &dir, library, quick_check) {
+            match build(&snapshots.database, &dir, library, epoch, quick_check) {
                 Ok(()) => {
                     snapshots.failed.lock().recover().remove(&library);
                 }
@@ -165,16 +175,18 @@ fn newest(dir: &Path) -> io::Result<Option<Current>> {
     for entry in entries {
         let path = entry?.path();
         let parsed = path.file_name().and_then(|name| {
-            let mut parts = name.to_str()?.strip_suffix(".db")?.splitn(3, '-');
+            let mut parts = name.to_str()?.strip_suffix(".gz")?.splitn(5, '-');
             let version = parts.next()?.parse::<i32>().ok()?;
-            let seq = parts.next()?.parse::<i64>().ok()?;
-            Some((version, seq, parts.next()?.to_owned()))
+            let epoch = parts.next()?.parse::<i64>().ok()?;
+            let position = parts.next()?.parse::<i64>().ok()?;
+            let size = parts.next()?.parse::<u64>().ok()?;
+            Some((version, epoch, position, size, parts.next()?.to_owned()))
         });
-        if let Some((version, seq, sha256)) = parsed
+        if let Some((version, epoch, position, size, sha256)) = parsed
             && version == SCHEMA_VERSION
-            && newest.as_ref().is_none_or(|n| seq > n.seq)
+            && newest.as_ref().is_none_or(|n| position > n.position)
         {
-            newest = Some(Current { seq, sha256, path });
+            newest = Some(Current { epoch, position, size, sha256, path });
         }
     }
     Ok(newest)
@@ -193,15 +205,16 @@ fn quick_check(conn: &Connection) -> rusqlite::Result<()> {
     }
 }
 
-/// Builds `library`'s file in `dir` from the server database at `database`, replacing the older
-/// ones: the device rows and the feed position read in one snapshot, checked by `verify`, hashed,
-/// and gzipped. The file served is the database as built, closed before it is read, not a
-/// compacted copy: a copy is 3.5% smaller on the wire but is another write of the whole file.
-/// Nothing is left in `dir` if any step fails.
+/// Builds `library`'s file in `dir` from the server database at `database` in run `epoch`,
+/// replacing the older ones: the device rows and the feed position read in one snapshot, checked
+/// by `verify`, hashed, and gzipped, keeping only the gzip. The file served is the database as
+/// built, closed before it is read, not a compacted copy: a copy is 3.5% smaller on the wire but
+/// is another write of the whole file. Nothing is left in `dir` if any step fails.
 fn build(
     database: &Path,
     dir: &Path,
     library: i64,
+    epoch: i64,
     verify: fn(&Connection) -> rusqlite::Result<()>,
 ) -> anyhow::Result<()> {
     fs::create_dir_all(dir)?;
@@ -212,42 +225,32 @@ fn build(
     create_schema(&conn)?;
     // Read-only, and attached before the transaction `copy` makes, which SQLite requires.
     conn.execute("ATTACH DATABASE ?1 AS server", [read_only_uri(database)])?;
-    let seq = snapshot::copy(&mut conn, library)?;
+    let position = snapshot::copy(&mut conn, library)?;
     conn.execute_batch("DETACH DATABASE server")?;
     conn.close().map_err(|(_, error)| error)?;
     verify(&Connection::open_with_flags(&served, OpenFlags::SQLITE_OPEN_READ_ONLY)?)?;
 
+    let size = fs::metadata(&served)?.len();
     let zipped = work.path().join("served.db.gz");
     let sha256 = compress(&served, &zipped)?;
-    File::open(&served)?.sync_all()?;
-    let name = format!("{SCHEMA_VERSION}-{seq}-{sha256}.db");
-    // The file that names the snapshot is the last in place.
-    fs::rename(zipped, dir.join(format!("{name}.gz")))?;
-    fs::rename(served, dir.join(&name))?;
+    let name = format!("{SCHEMA_VERSION}-{epoch}-{position}-{size}-{sha256}.gz");
+    fs::rename(zipped, dir.join(&name))?;
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
-        if entry.file_type()?.is_file() && !entry.file_name().to_string_lossy().starts_with(&name) {
+        if entry.file_type()?.is_file() && entry.file_name() != name.as_str() {
             fs::remove_file(entry.path())?;
         }
     }
     Ok(())
 }
 
-/// Gzips `from` into `to` and returns the SHA-256 of `from` as lowercase hex.
+/// Gzips `from` into `to` and returns the SHA-256 of `to`, the bytes served, as lowercase hex.
 fn compress(from: &Path, to: &Path) -> io::Result<String> {
-    let mut input = File::open(from)?;
     let mut output = GzEncoder::new(File::create(to)?, Compression::default());
-    let mut hash = Sha256::new();
-    let mut chunk = vec![0; 1 << 16];
-    loop {
-        let read = input.read(&mut chunk)?;
-        if read == 0 {
-            break;
-        }
-        hash.update(&chunk[..read]);
-        output.write_all(&chunk[..read])?;
-    }
+    io::copy(&mut File::open(from)?, &mut output)?;
     output.finish()?.sync_all()?;
+    let mut hash = Sha256::new();
+    io::copy(&mut File::open(to)?, &mut hash)?;
     Ok(format!("{:x}", hash.finalize()))
 }
 
@@ -264,9 +267,12 @@ fn read_only_uri(path: &Path) -> String {
     uri + "?mode=ro"
 }
 
-/// The spec's `getLibraryCatalog`: the library's newest file, gzipped if the client accepts it,
-/// with its ETag, feed position and device schema version. A file the feed has moved too far
-/// past is rebuilt in the background. With no file yet, `503 catalog_building` and a build.
+/// The spec's `getLibraryCatalog` and `headLibraryCatalog` (axum answers a `HEAD` with this
+/// handler and drops the body, so it passes the same access check and starts any build a `GET`
+/// would): the library's newest file, whole or the range asked for, with its ETag, feed position
+/// and epoch, device schema version and inflated size. A file the feed has moved too far past is
+/// rebuilt in the background. With no file yet, or none this database can go on from,
+/// `503 catalog_building` and a build.
 pub async fn get(
     State(db): State<Arc<Database>>,
     State(snapshots): State<Arc<Snapshots>>,
@@ -276,23 +282,25 @@ pub async fn get(
     let dir = snapshots.dir.join(library.to_string());
     let current = tokio::task::spawn_blocking(move || newest(&dir)).await.map_err(internal)?;
     let current = current.map_err(internal)?;
-    let after = current.as_ref().map_or(0, |c| c.seq);
-    let (head, entities, changed): (i64, i64, i64) = db
+    let cursor = current.as_ref().map_or((None, 0), |c| (Some(c.epoch), c.position));
+    let (follows, entities, changed): (bool, i64, i64) = db
         .read(move |conn| {
-            conn.query_row(
-                "SELECT (SELECT coalesce(max(seq), 0) FROM library_changes WHERE library_id = ?1), \
-                 track_count + album_count + artist_count, \
-                 (SELECT count(*) FROM library_changes WHERE library_id = ?1 AND seq > ?2) \
+            let (epoch, after) = cursor;
+            let follows = feed::continues(conn, Feed::Library(library), epoch, after)?;
+            let (entities, changed) = conn.query_row(
+                "SELECT track_count + album_count + artist_count, \
+                 (SELECT count(*) FROM library_changes WHERE library_id = ?1 AND position > ?2) \
                  FROM libraries WHERE id = ?1",
                 [library, after],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            Ok((follows, entities, changed))
         })
         .await?;
-    // A file past the library's head is from another timeline, such as a restored backup.
-    let current = current.filter(|c| c.seq <= head);
+    // A file this database cannot go on from is of another timeline, such as a restored backup's.
+    let current = current.filter(|_| follows);
     if current.is_none() || changed > entities / 10 {
-        snapshots.start(library);
+        snapshots.start(library, db.epoch());
     }
     let Some(current) = current else {
         return Err(Problem::catalog_building(RETRY_AFTER));
@@ -304,31 +312,46 @@ pub async fn get(
 /// has deleted it, so then the newest file in `dir`, its replacement, is served instead.
 async fn serve(dir: PathBuf, chosen: Current, request: Request) -> Result<Response, Problem> {
     let (parts, _) = request.into_parts();
-    let open = |path: &Path| {
-        let request = Request::from_parts(parts.clone(), Body::empty());
-        ServeFile::new(path).precompressed_gzip().try_call(request)
+    let open = |current: &Current| {
+        let request = Request::from_parts(conditions(&parts, &current.sha256), Body::empty());
+        ServeFile::new(&current.path).try_call(request)
     };
-    let (Current { seq, sha256, .. }, served) = match open(&chosen.path).await {
+    let (Current { epoch, position, size, sha256, .. }, served) = match open(&chosen).await {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let current = tokio::task::spawn_blocking(move || newest(&dir));
             let current = current.await.map_err(internal)?.map_err(internal)?;
             let current = current.ok_or_else(|| Problem::catalog_building(RETRY_AFTER))?;
-            let served = open(&current.path).await;
+            let served = open(&current).await;
             (current, served)
         }
         served => (chosen, served),
     };
     let mut response = served.map_err(internal)?.map(Body::new);
     let headers = response.headers_mut();
-    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/vnd.sqlite3"));
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/gzip"));
     // Not even the browser's HTTP cache keeps a copy, so none outlives a sign-out.
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    headers.insert("x-jewelcase-seq", HeaderValue::from(seq));
+    headers.insert("x-jewelcase-position", HeaderValue::from(position));
+    headers.insert("x-jewelcase-epoch", HeaderValue::from(epoch));
     headers.insert("x-jewelcase-schema", HeaderValue::from(SCHEMA_VERSION));
+    headers.insert("x-jewelcase-database-size", HeaderValue::from(size));
     if let Ok(etag) = HeaderValue::try_from(format!("\"{sha256}\"")) {
         headers.insert(header::ETAG, etag);
     }
     Ok(response)
+}
+
+/// The request to hand the file server for a file whose ETag is `sha256`, which this module
+/// gives rather than the file server: `Range` is kept only if any `If-Range` names this file.
+fn conditions(parts: &Parts, sha256: &str) -> Parts {
+    let mut parts = parts.clone();
+    let headers = &mut parts.headers;
+    if let Some(validator) = headers.remove(header::IF_RANGE)
+        && validator.as_bytes() != format!("\"{sha256}\"").as_bytes()
+    {
+        headers.remove(header::RANGE);
+    }
+    parts
 }
 
 /// A `500 internal`, with the cause logged and kept from the client: it can name a path.

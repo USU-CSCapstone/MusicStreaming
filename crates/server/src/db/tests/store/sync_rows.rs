@@ -28,6 +28,7 @@ const SERVER_ONLY: &[(&str, &[&str])] = &[
             "created_at",
             "duration_us",
             "excludes",
+            "feed_head",
             "name",
             "names_version",
             "scan_interval_minutes",
@@ -184,7 +185,7 @@ fn the_device_schema_changes_only_with_its_version() {
     let hash = format!("{:x}", Sha256::digest(SCHEMA));
     assert_eq!(
         (SCHEMA_VERSION, hash.as_str()),
-        (4, "f84ac3b088fb5dab0fb0efc56f070843e1a5d1e694002dc40051bf0f5b762d7a"),
+        (8, "f84ac3b088fb5dab0fb0efc56f070843e1a5d1e694002dc40051bf0f5b762d7a"),
         "schema.sql changed: raise SCHEMA_VERSION, and pin its new hash here"
     );
 }

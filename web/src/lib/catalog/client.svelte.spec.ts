@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { RealtimeServerMessage } from '$lib/api/types';
 import { connectivity } from '$lib/connectivity.svelte';
-import { rememberDevice } from '$lib/last-known';
+import { deviceLibraries, rememberDevice } from '$lib/last-known';
+import { toaster } from '$lib/toast.svelte';
 import { IdbPort } from '$lib/sync/store';
 import { CatalogClient } from './client.svelte';
 import { FakeClock } from './fake-clock';
@@ -32,6 +33,11 @@ class FakeWorker {
 			slow: boolean;
 			mute: boolean;
 			libraries: Record<string, LibraryState>;
+			/**
+			 * The libraries it says it found a file for; by default those it holds, and none said when
+			 * null, as a failed start says.
+			 */
+			found?: string[] | null;
 		}
 	) {}
 
@@ -40,8 +46,12 @@ class FakeWorker {
 		this.sent.push(message);
 		if (message.type === 'start') {
 			this.say({ type: 'state', libraries: this.flags.libraries });
-			if (this.flags.slow) this.clock.after(300, () => this.say({ type: 'started' }));
-			else if (!this.flags.stalled) this.say({ type: 'started' });
+			const found =
+				this.flags.found === null
+					? undefined
+					: (this.flags.found ?? Object.keys(this.flags.libraries));
+			if (this.flags.slow) this.clock.after(300, () => this.say({ type: 'started', found }));
+			else if (!this.flags.stalled) this.say({ type: 'started', found });
 		} else if (message.type === 'busy')
 			this.say({ type: 'answer', id: message.id, result: this.flags.busy ? '1' : '' });
 		else if (message.type === 'pause') this.say({ type: 'paused' });
@@ -101,7 +111,14 @@ function browser() {
 	let silent = false;
 	const clock = new FakeClock();
 	const all: FakeWorker[] = [];
-	const flags = { busy: false, stalled: false, slow: false, mute: false, libraries: HERE };
+	const flags = {
+		busy: false,
+		stalled: false,
+		slow: false,
+		mute: false,
+		libraries: HERE,
+		found: undefined as string[] | null | undefined
+	};
 	let hear: (message: RealtimeServerMessage) => void = () => {};
 	/** A realtime connection whose messages the test sends through `hear`. */
 	const realtime = {
@@ -1044,6 +1061,95 @@ describe('CatalogClient', () => {
 		expect(other.workers).toHaveLength(0);
 		expect(types(owner.workers[0])).toContain('signOut');
 		await vi.waitFor(() => expect(owner.workers[0].terminated).toBe(true));
+	});
+
+	it('says once that a library the device kept has no file at start', async () => {
+		toaster.dismiss();
+		// The device last held libraries 1 and 2; only 1 has a file now.
+		rememberDevice('7', ['1', '2']);
+		const b = browser();
+		const first = b.tab('a');
+		first.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(toaster.current?.message).toContain('no longer on this device'));
+		expect(toaster.current?.message).toBe(
+			'A music library is no longer on this device and will be downloaded again.'
+		);
+		// What is kept is what is held now, so the next start has nothing to report.
+		expect(deviceLibraries('7')).toEqual(new Set(['1']));
+		toaster.dismiss();
+		first.client.disconnect();
+
+		const next = b.tab('b');
+		next.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(next.client.onDevice('1')).toBe(true));
+		expect(toaster.current).toBeNull();
+		next.client.disconnect();
+	});
+
+	it('says nothing of a kept library whose file the worker found and deleted itself, as after a schema upgrade', async () => {
+		toaster.dismiss();
+		rememberDevice('7', ['1', '2']);
+		const b = browser();
+		// Found a file for 2 and dropped it: it is no longer on the device, and nothing went missing.
+		b.flags.found = ['1', '2'];
+		const { client } = b.tab('a');
+		client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(client.onDevice('1')).toBe(true));
+		expect(toaster.current).toBeNull();
+		client.disconnect();
+	});
+
+	it('says nothing when the worker’s start failed, whatever it holds', async () => {
+		toaster.dismiss();
+		rememberDevice('7', ['1', '2']);
+		const b = browser();
+		b.flags.found = null;
+		const { client } = b.tab('a');
+		client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(client.onDevice('1')).toBe(true));
+		expect(toaster.current).toBeNull();
+		client.disconnect();
+	});
+
+	it('gives an account’s page nothing of another account’s owner', async () => {
+		const b = browser();
+		const owner = b.tab('a');
+		owner.client.connect(b.realtime, '8');
+		await vi.waitFor(() => expect(owner.client.libraries).toEqual(HERE));
+		// Another tab, signed in as 7, hears the owner of 8's state and takes none of it.
+		const other = b.tab('b');
+		other.client.preconnect('7');
+		await flush(b.name);
+		expect(other.client.libraries).toEqual({});
+		expect(other.client.onDevice('1')).toBe(false);
+		owner.client.disconnect();
+		other.client.disconnect();
+	});
+
+	it('says nothing at start of a library that was never kept or is still there', async () => {
+		toaster.dismiss();
+		rememberDevice('7', ['1']);
+		const b = browser();
+		const { client } = b.tab('a');
+		client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(client.onDevice('1')).toBe(true));
+		expect(toaster.current).toBeNull();
+		client.disconnect();
+	});
+
+	it('shows the owner’s account page what the device holds of each library, and what it left for want of room', async () => {
+		const b = browser();
+		const { client } = b.tab('a');
+		client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(client.libraries).toEqual(HERE));
+		const short = {
+			onDevice: false,
+			applying: false,
+			noRoom: { need: 9, free: 3 }
+		};
+		b.libraries({ ...HERE, '2': short });
+		await vi.waitFor(() => expect(client.libraries['2']).toEqual(short));
+		client.disconnect();
 	});
 
 	it('asks the browser to keep the storage, once', async () => {

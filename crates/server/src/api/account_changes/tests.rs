@@ -39,9 +39,12 @@ async fn edit(app: &Router, id: &str, version: i64, ops: Value) {
     assert_eq!(status, StatusCode::OK, "{answer}");
 }
 
-/// The feed `uri` of `token`.
+/// The feed of `token` with `query`, which is asked in the server's current epoch.
 async fn feed(app: &Router, token: &str, query: &str) -> (StatusCode, Value) {
-    call(app, token, "GET", &format!("/api/v1/me/changes{query}"), None).await
+    let (_, first) = call(app, token, "GET", "/api/v1/me/changes?limit=1", None).await;
+    let epoch = first["epoch"].as_str().unwrap();
+    let query = if query.is_empty() { "?after=0".to_owned() } else { query.to_owned() };
+    call(app, token, "GET", &format!("/api/v1/me/changes{query}&epoch={epoch}"), None).await
 }
 
 /// The `(kind, id, key)` of each change in `page`.
@@ -158,6 +161,9 @@ async fn pages_end_at_head_and_a_cursor_past_it_is_gone() {
     assert_eq!((status, &gone["code"]), (StatusCode::GONE, &json!("cursor_expired")), "{gone}");
     let (status, _) = feed(&app, "user-token", "?after=1").await;
     assert_eq!(status, StatusCode::GONE, "another account's positions are not this one's");
+    let (status, _) =
+        call(&app, TOKEN, "GET", &format!("/api/v1/me/changes?after={head}"), None).await;
+    assert_eq!(status, StatusCode::GONE, "a position without its epoch");
     let (status, _) = feed(&app, TOKEN, "?after=-1").await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }
@@ -226,6 +232,27 @@ async fn the_feed_brings_a_device_current_and_a_tombstone_clears_a_playlist() {
 }
 
 #[tokio::test]
+async fn each_account_counts_its_own_positions() {
+    let (_temp, app) = world().await;
+    // Where the owner's feed stands before: their Liked Songs, taken away, were changes of theirs.
+    let start = feed(&app, TOKEN, "").await.1["head"].as_i64().unwrap();
+    create(&app, "user-token", "Theirs", &[1, 2, 1]).await;
+    create(&app, TOKEN, "Mine", &[1]).await;
+    let (_, page) = feed(&app, TOKEN, "").await;
+    let positions: Vec<_> =
+        page["changes"].as_array().unwrap().iter().map(|c| c["position"].as_i64()).collect();
+    let (first, second) = (Some(start + 1), Some(start + 2));
+    assert_eq!(positions, [first, second], "the other account's four changes leave no gap: {page}");
+    assert_eq!(page["head"], start + 2);
+
+    // A device at the account's first new position is sent only what came after it there.
+    let (_, later) = feed(&app, TOKEN, &format!("?after={}", start + 1)).await;
+    let positions: Vec<_> =
+        later["changes"].as_array().unwrap().iter().map(|c| c["position"].as_i64()).collect();
+    assert_eq!(positions, [second], "{later}");
+}
+
+#[tokio::test]
 async fn likes_and_hides_reach_a_device_and_another_accounts_never_do() {
     let (temp, _, app) = app_with_tracks().await;
     let server = conn(&temp);
@@ -268,8 +295,7 @@ async fn likes_and_hides_reach_a_device_and_another_accounts_never_do() {
             .collect()
     };
     let hidden = "SELECT user_id, track_id FROM hidden_tracks ORDER BY 1, 2";
-    // The device holds the account's own playlists alone, so its likes are user 1's.
-    let liked = "SELECT 1, i.track_id FROM playlist_items i \
+    let liked = "SELECT p.user_id, i.track_id FROM playlist_items i \
                  JOIN playlists p ON p.id = i.playlist_id AND p.kind = 'liked' ORDER BY 1, 2";
 
     let head = catch_up(0).await;

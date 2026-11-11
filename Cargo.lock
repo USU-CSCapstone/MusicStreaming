@@ -1478,6 +1478,7 @@ dependencies = [
 name = "jewelcase-catalog-wasm"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "jewelcase-catalog",
  "jewelcase-core",
  "rusqlite",
