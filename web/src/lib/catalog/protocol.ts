@@ -21,6 +21,8 @@ export type LibraryState = {
 	onDevice: boolean;
 	/** The file is part-way through applying a catch-up, so online reads go to the server. */
 	applying: boolean;
+	/** The file's search index is built, so a search can be handed to it at once. */
+	indexed: boolean;
 	/**
 	 * Its snapshot was not downloaded because the device has less room than it needs, both in bytes.
 	 */
@@ -35,8 +37,8 @@ export type CatalogState = {
 	/** The owner's worker is open and answering; false once the owner is letting go. */
 	serving: boolean;
 	/**
-	 * The owner's worker is inside one long call, a snapshot install, and answers nothing until it
-	 * ends.
+	 * The owner's worker is inside one long call, a snapshot install or an index build, and answers
+	 * nothing until it ends.
 	 */
 	heavy: boolean;
 	libraries: Record<string, LibraryState>;
@@ -105,6 +107,11 @@ export type Request =
 			offline?: boolean;
 			user?: string;
 	  }
+	/**
+	 * Builds the library's search index in the background, unless built; answered empty at once.
+	 * `user` is as a query's: an owner started for someone else builds nothing.
+	 */
+	| { type: 'prepareIndex'; library: string; user?: string }
 	/**
 	 * Makes a mutation's writes to the library's file that it does not hold, after any apply under
 	 * way (`$lib/sync`); answered empty, also where the library is not on the device. With

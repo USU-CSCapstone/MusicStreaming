@@ -1,10 +1,11 @@
 //! Planner statistics wait for a library of real size (`design/database.md` §4).
 
+use jewelcase_catalog::statistics::STATISTICS_FROM_TRACKS;
 use jewelcase_scanner::*;
 
 use super::{make, record};
 use crate::db::store::SqliteStore;
-use crate::db::{Database, STATISTICS_FROM_TRACKS, optimize};
+use crate::db::{Database, optimize};
 
 /// How many rows of planner statistics describe the tracks after running [`optimize`], as the
 /// writer does every few minutes.

@@ -1,6 +1,6 @@
 //! Search matching and ranking (`requirements/search.md` §3–§4, `design/general.md` §3).
 //!
-//! One implementation for the server and, later, the device, so both return the same results
+//! One implementation for the server and the device, so both return the same results
 //! in the same order. Pure and deterministic: nothing here depends on the platform, the locale,
 //! or hash order.
 //!
@@ -34,6 +34,7 @@ mod query;
 mod tests;
 mod words;
 
+pub use build::{Finishing, IndexBuilder};
 pub use words::words;
 
 /// What a name names. The order is the tie-break: the more specific thing first.
@@ -85,23 +86,50 @@ pub struct Section {
     pub total: usize,
 }
 
-/// Names by their words, ready to search.
+/// Names by their words, ready to search. Each part is one flat array, ranges of which belong to
+/// a word or a document, rather than a value per word or document, so an index of hundreds of
+/// thousands of names is a handful of allocations, and builds in little more memory than it keeps.
 #[derive(Debug, Default)]
 pub struct Index {
-    /// Every distinct word, sorted.
-    vocabulary: Vec<String>,
-    /// For each word, the documents holding it, ascending.
-    postings: Vec<Vec<u32>>,
-    /// Documents in tie-break order: by kind, then folded name, then ID.
-    documents: Vec<Entry>,
-    /// Each document's words as vocabulary indexes, in name order:
-    /// `words[starts[d]..starts[d + 1]]`.
+    /// Every distinct word, sorted, end to end: word `w` is `text[span(&word_ends, w)]`.
+    text: String,
+    word_ends: Vec<u32>,
+    /// For each word, the documents holding it, ascending: `postings[span(&posting_ends, w)]`.
+    postings: Vec<u32>,
+    posting_ends: Vec<u32>,
+    /// Documents in tie-break order (by kind, then folded name, then ID): each one's kind and ID.
+    kinds: Vec<Kind>,
+    ids: Vec<i64>,
+    /// Each document's words as vocabulary indexes, in name order: `words[span(&ends, d)]`.
     words: Vec<u32>,
-    starts: Vec<u32>,
+    ends: Vec<u32>,
 }
 
-#[derive(Debug)]
-struct Entry {
-    kind: Kind,
-    id: i64,
+/// Item `i`'s range of a flat array whose items end at `ends`, each where the one before it
+/// ended.
+fn span(ends: &[u32], i: usize) -> std::ops::Range<usize> {
+    let start = if i == 0 { 0 } else { ends[i - 1] as usize };
+    start..ends[i] as usize
+}
+
+impl Index {
+    /// How many distinct words there are.
+    fn vocabulary_len(&self) -> usize {
+        self.word_ends.len()
+    }
+
+    /// The vocabulary's word `w`.
+    fn word(&self, w: usize) -> &str {
+        &self.text[span(&self.word_ends, w)]
+    }
+
+    /// The documents holding word `w`, ascending.
+    fn posting(&self, w: usize) -> &[u32] {
+        &self.postings[span(&self.posting_ends, w)]
+    }
+
+    /// Document `d`'s words, as vocabulary indexes.
+    fn document_words(&self, d: usize) -> &[u32] {
+        &self.words[span(&self.ends, d)]
+    }
 }

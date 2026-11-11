@@ -36,9 +36,9 @@ const BUILD_TRIES = 10;
 /** Seconds between asks for a snapshot newer than the copy, unless the server says otherwise. */
 const REBUILD_WAIT = 5;
 /**
- * How long one slice of an apply should hold the worker, in milliseconds. A read of another
- * library waits for at most the slice under way, and a slice that overshoots is followed by a
- * smaller one.
+ * How long one slice of an apply or of an index build should hold the worker, in milliseconds. A
+ * read of another library waits for at most the slice under way, and a slice that overshoots is
+ * followed by a smaller one.
  */
 const SLICE_MS = 50;
 /**
@@ -53,6 +53,10 @@ const SLICE_MS = 50;
 const APPLY_CHUNK = 50;
 /** The most staged changes in one slice of an apply. */
 const APPLY_MAX = 1000;
+/** The first slice of an index build, in documents read or sorted elements' worth of work. */
+const INDEX_CHUNK = 2000;
+/** The most work in one slice of an index build, in the same units as `INDEX_CHUNK`. */
+const INDEX_MAX = 1 << 20;
 /**
  * Room a new file needs besides its gzip and its database: the journal it keeps between
  * transactions, which `Catalog::tune` limits to 16 MiB. The pool's reservation (`#reserve`)
@@ -137,7 +141,7 @@ export type Options = {
 	changed?: (libraryId: string, kinds: readonly Kind[]) => void;
 	/**
 	 * Told when the worker enters and leaves work that keeps it busy for seconds: a snapshot
-	 * install's copy.
+	 * install's copy, and an index build from its start to its end.
 	 */
 	heavy?: (heavy: boolean) => void;
 	/** Told what each library on the device stands at, whenever that changes. */
@@ -255,12 +259,24 @@ export class CatalogSync {
 	 * never rejects. Until then a file holds part of a catch-up.
 	 */
 	#applying = new Map<Catalog, Promise<void>>();
+	/**
+	 * How many times each file's library rows have been committed to by an apply, so that an
+	 * index build that began before a commit knows its documents are of two versions.
+	 */
+	#commits = new WeakMap<Catalog, number>();
 	/** The files whose apply failed part-way, which answer nothing until they are replaced. */
 	#broken = new WeakSet<Catalog>();
 	/** Bootstraps under way: snapshot downloads that a stop would throw away. */
 	#booting = 0;
-	/** The search index of each open file, which a `Catalog` holds but does not keep current. */
-	#indexes = new WeakMap<Catalog, { stale: boolean; builtAt: number; took: number }>();
+	/**
+	 * The one file with a search index, which its `Catalog` holds but does not keep current. Search
+	 * covers one library at a time, so building another's lets this one go first.
+	 */
+	#index?: { catalog: Catalog; stale: boolean; builtAt: number; took: number };
+	/** The index builds queued or under way, by file, which a search of it waits for. */
+	#builds = new Map<Catalog, Promise<void>>();
+	/** The end of the last build queued: one at a time, since each lets go of the others' indexes. */
+	#turn: Promise<unknown> = Promise.resolve();
 	/** Pool operations queued one behind another: a transfer holds the whole pool. */
 	#queue: Promise<unknown> = Promise.resolve();
 
@@ -377,87 +393,188 @@ export class CatalogSync {
 	 * where the library is not on the device. Unless the caller is `offline`, it also throws at
 	 * once where the file is part-way through an apply or no longer kept current (another schema
 	 * version), so the caller asks the server; offline, it waits for the apply and answers from
-	 * the copy. A file found damaged is deleted and downloaded again in the background, and the
-	 * error is still thrown.
+	 * the copy. A search waits for the file's index to be built, and for the apply that comes
+	 * while it is. A file found damaged is deleted and downloaded again in the background, and
+	 * the error is still thrown.
 	 */
 	async query(library: string, name: string, params: object, offline = false) {
-		await this.#queue;
-		let catalog = this.catalogs.get(library);
-		if (catalog && !offline && (this.#applying.has(catalog) || this.#outdated.has(library))) {
-			throw new Error('the library is being updated on this device');
-		}
-		while (catalog && this.#applying.has(catalog)) {
-			await this.#applying.get(catalog);
-			catalog = this.catalogs.get(library);
-		}
-		if (!catalog || this.#broken.has(catalog)) throw new Error('the library is not on this device');
-		try {
-			if (usesIndex(name, params)) this.#ensureIndex(library, catalog);
-			return catalog.query(this.#user, library, name, JSON.stringify(params));
-		} catch (error) {
-			if (damaged(error)) void this.#run(`lib:${library}`, () => this.#rebuild(library));
-			throw error;
+		for (;;) {
+			await this.#queue;
+			// Closing: the files are being let go of, and a build started now would end at once.
+			if (this.#closed) throw new Error('the library is not on this device');
+			let catalog = this.catalogs.get(library);
+			if (catalog && !offline && (this.#applying.has(catalog) || this.#outdated.has(library))) {
+				throw new Error('the library is being updated on this device');
+			}
+			while (catalog && this.#applying.has(catalog)) {
+				await this.#applying.get(catalog);
+				catalog = this.catalogs.get(library);
+			}
+			if (!catalog || this.#broken.has(catalog))
+				throw new Error('the library is not on this device');
+			try {
+				const building = usesIndex(name, params) && this.#ensureIndex(library, catalog);
+				if (building) {
+					// Whatever happened to the file meanwhile, it is looked at again.
+					await building;
+					continue;
+				}
+				return catalog.query(this.#user, library, name, JSON.stringify(params));
+			} catch (error) {
+				if (damaged(error)) void this.#run(`lib:${library}`, () => this.#rebuild(library));
+				throw error;
+			}
 		}
 	}
 
 	/** Tells the page the library changed in `kinds`, and marks its search index out of date. */
 	#announce(library: string, kinds: readonly Kind[]) {
 		const catalog = this.catalogs.get(library);
-		const index = catalog && this.#indexes.get(catalog);
-		if (index) index.stale = true;
+		if (this.#index && this.#index.catalog === catalog) this.#index.stale = true;
 		this.#changed(library, kinds);
 	}
 
 	/**
-	 * Makes sure `catalog` has a search index: the first search builds it and waits. A later one
-	 * on a changed library answers from the index it has and schedules a rebuild once the file
-	 * has gone `INDEX_SPACING` times as long as the last build took, as the server spaces its own
-	 * (`api/search/indexes.rs`), so a scan costs a tenth of the worker at most.
+	 * Makes sure `catalog` has a search index: the first search starts the build and waits for it,
+	 * which this returns the promise of; undefined where the index is there to search. A later
+	 * search of a changed library answers from the index it has and schedules a rebuild once the
+	 * file has gone `INDEX_SPACING` times as long as the last build's work took, as the server
+	 * spaces its own (`api/search/indexes.rs`), so a scan costs a tenth of the worker at most.
 	 */
 	#ensureIndex(library: string, catalog: Catalog) {
-		const index = this.#indexes.get(catalog);
-		if (!index) {
-			this.#build(library, catalog);
-		} else if (index.stale && performance.now() - index.builtAt >= index.took * INDEX_SPACING) {
+		const index = this.#index?.catalog === catalog ? this.#index : undefined;
+		if (!index) return this.#builds.get(catalog) ?? this.#start(library, catalog);
+		if (index.stale && performance.now() - index.builtAt >= index.took * INDEX_SPACING) {
 			index.stale = false;
 			setTimeout(async () => {
 				await this.#queue;
-				if (this.#closed || this.catalogs.get(library) !== catalog) return;
+				// Gone, or let go of for another library's index since.
+				if (this.#closed || this.catalogs.get(library) !== catalog || this.#index !== index) return;
 				// A file part-way through an apply is indexed once the apply announces itself.
 				if (this.#applying.has(catalog)) {
 					index.stale = true;
 					return;
 				}
 				try {
-					this.#build(library, catalog);
+					await this.#start(library, catalog);
 				} catch (error) {
 					index.stale = true;
 					this.#report(describe(error));
 				}
 			});
 		}
+		return undefined;
 	}
 
-	/** Builds `catalog`'s search index now, recording how long it took. */
-	#build(library: string, catalog: Catalog) {
-		const started = performance.now();
-		catalog.buildIndex(library);
-		const builtAt = performance.now();
-		this.#indexes.set(catalog, { stale: false, builtAt, took: builtAt - started });
+	/**
+	 * Queues the build of `catalog`'s index behind the others' and resolves when it is done, or
+	 * when the file is gone or broken, which leaves none.
+	 */
+	#start(library: string, catalog: Catalog) {
+		const build = this.#turn.then(() => this.#build(library, catalog));
+		// A macrotask apart, so the searches waiting on this build answer before the next begins
+		// and lets go of this index.
+		const next = () => new Promise((resolve) => setTimeout(resolve));
+		this.#turn = build.then(next, next);
+		const settled = () => void this.#builds.delete(catalog);
+		build.then(settled, settled);
+		this.#builds.set(catalog, build);
+		return build;
+	}
+
+	/**
+	 * Builds `catalog`'s search index in slices, the worker answering between them, and records
+	 * how much work it took, after letting go of any other: WebAssembly memory never shrinks, so
+	 * two indexes held at once, or an old one held through a rebuild, would cost the worker their
+	 * memory for good. The worker says it is busy ([`heavy`](#Options)) from the start of a build
+	 * to its end, though it answers between slices: online reads go to the server meanwhile, so
+	 * none waits for a slice and none is answered by a device that is busy, and offline reads wait
+	 * at most one slice. A commit to the library between two slices leaves the index of two
+	 * versions of its rows, so the build waits for the apply to end and begins again. A build that
+	 * fails leaves none, which the next search builds again.
+	 */
+	async #build(library: string, catalog: Catalog) {
+		for (;;) {
+			// The first slice reads the file as the later ones do: after the pool's work.
+			await this.#queue;
+			// A file part-way through an apply is built from once the apply is over.
+			while (this.#applying.has(catalog)) await this.#applying.get(catalog);
+			if (this.#gone(library, catalog) || this.#broken.has(catalog)) return;
+			const commits = this.#commits.get(catalog);
+			this.#index = undefined;
+			for (const other of this.catalogs.values()) if (other !== catalog) other.dropIndex();
+			this.#publish();
+			let work = 0;
+			let limit = INDEX_CHUNK;
+			let done = false;
+			this.#hold(true);
+			try {
+				catalog.indexBegin(library);
+				while (!done) {
+					const started = performance.now();
+					done = catalog.indexStep(limit);
+					const took = performance.now() - started;
+					work += took;
+					limit = slice(limit, took, INDEX_MAX);
+					if (done) break;
+					await new Promise((resolve) => setTimeout(resolve));
+					await this.#queue;
+					// Freed, so there is nothing to build; or changed, so there is nothing to keep.
+					if (this.#gone(library, catalog) || this.#commits.get(catalog) !== commits) break;
+				}
+			} finally {
+				this.#hold(false);
+			}
+			if (!done) {
+				if (this.#gone(library, catalog)) return;
+				continue;
+			}
+			this.#index = { catalog, stale: false, builtAt: performance.now(), took: work };
+			this.#publish();
+			return;
+		}
+	}
+
+	/**
+	 * Builds `library`'s search index in the background, unless it has one, so that the first
+	 * search does not wait for it: for a device that has gone offline, where search is the
+	 * device's. A changed library's index is rebuilt as a search would rebuild it. Does nothing
+	 * where the library is not on the device or is part-way through an apply, whose end a search
+	 * waits for anyway.
+	 */
+	prepareIndex(library: string) {
+		setTimeout(async () => {
+			await this.#queue;
+			const catalog = this.catalogs.get(library);
+			if (this.#closed || !catalog || this.#broken.has(catalog) || this.#applying.has(catalog))
+				return;
+			try {
+				await this.#ensureIndex(library, catalog);
+			} catch (error) {
+				this.#report(describe(error));
+			}
+		});
 	}
 
 	/**
 	 * What each library on the device stands at, as the page is told whenever it changes: whether
-	 * it answers and is part-way through an apply, and, for a library whose snapshot was left for
-	 * want of room, what that needs.
+	 * it answers, is part-way through an apply, and has its search index built, and, for a
+	 * library whose snapshot was left for want of room, what that needs.
 	 */
 	state() {
 		const libraries: Record<string, LibraryState> = {};
 		for (const [id, catalog] of this.catalogs) {
-			libraries[id] = { onDevice: this.onDevice(id), applying: this.#applying.has(catalog) };
+			libraries[id] = {
+				onDevice: this.onDevice(id),
+				applying: this.#applying.has(catalog),
+				indexed: this.indexed(id)
+			};
 		}
 		for (const [id, short] of this.#noRoom) {
-			libraries[id] = { ...(libraries[id] ?? { onDevice: false, applying: false }), noRoom: short };
+			libraries[id] = {
+				...(libraries[id] ?? { onDevice: false, applying: false, indexed: false }),
+				noRoom: short
+			};
 		}
 		return libraries;
 	}
@@ -469,6 +586,15 @@ export class CatalogSync {
 		if (text === this.#told) return;
 		this.#told = text;
 		this.#state(libraries);
+	}
+
+	/**
+	 * Whether `library` is on the device with its search index built, so a search can be handed to it
+	 * at once.
+	 */
+	indexed(library: string) {
+		const catalog = this.catalogs.get(library);
+		return this.onDevice(library) && this.#index?.catalog === catalog;
 	}
 
 	/**
@@ -568,7 +694,7 @@ export class CatalogSync {
 
 	/**
 	 * Tells `heavy` the worker is entering (`true`) or leaving (`false`) work that keeps it busy
-	 * for seconds: once for all of it that is under way at once.
+	 * for seconds: once for all of it that is under way at once, as a build may be during a copy.
 	 */
 	#hold(entering: boolean) {
 		this.#holds += entering ? 1 : -1;
@@ -826,6 +952,7 @@ export class CatalogSync {
 				const started = performance.now();
 				try {
 					done = catalog.commit(feed, through, limit);
+					if (feed === LIBRARY) this.#commits.set(catalog, (this.#commits.get(catalog) ?? 0) + 1);
 					limit = Math.max(APPLY_CHUNK, slice(limit, performance.now() - started, APPLY_MAX));
 				} catch (error) {
 					throw fail(error);

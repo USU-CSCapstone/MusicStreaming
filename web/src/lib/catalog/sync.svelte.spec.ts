@@ -344,10 +344,13 @@ describe('catalog sync', () => {
 		expect(await h.onDevice('2')).toBe(false);
 	});
 
-	it('tells the page what each library stands at whenever it changes: on the device, applying, gone', async () => {
+	it('tells the page what each library stands at whenever it changes: on the device, applying, indexed, gone', async () => {
 		await started('1');
-		const here = { onDevice: true, applying: false };
+		const here = { onDevice: true, applying: false, indexed: false };
 		expect((await h.states()).at(-1)).toEqual({ '1': here });
+
+		await h.query('1', 'search', { q: 'a', sectionLimit: 5 });
+		expect((await h.states()).at(-1)).toEqual({ '1': { ...here, indexed: true } });
 
 		// A catch-up of one chunk is done at once: never told as applying.
 		await grown(100 * LARGE);
@@ -374,9 +377,12 @@ describe('catalog sync', () => {
 		expect((await h.states()).at(-1)).toEqual({});
 	});
 
-	it('says when the worker enters and leaves a call that holds it: a snapshot install', async () => {
+	it('says when the worker enters and leaves a call that holds it: a snapshot install and an index build', async () => {
 		await started('1');
+		// The install of the snapshot.
 		expect(await h.heavy()).toEqual([true, false]);
+		await h.query('1', 'search', { q: 'a', sectionLimit: 5 });
+		expect(await h.heavy()).toEqual([true, false, true, false]);
 	});
 
 	it('queries made while a new library makes room in the pool wait for it and do not fail', async () => {
@@ -839,7 +845,7 @@ describe('catalog sync', () => {
 		expect(await h.reported()).toHaveLength(1);
 	});
 
-	it('a snapshot install that throws still says the worker is free again', async () => {
+	it('a snapshot install that throws, and an index build that throws, still say the worker is free again', async () => {
 		// The copy into the pool is refused part-way through.
 		await h.failNextImportWrite('the device is full');
 		await serve('1');
@@ -848,8 +854,18 @@ describe('catalog sync', () => {
 		// Every entry is followed by its exit, and the last word is that the worker is free.
 		/** Whether `told` goes true, false, true, false and so on: each entry followed by its exit. */
 		const alternates = (told: boolean[]) => told.every((on, i) => on === (i % 2 === 0));
-		const told = await h.heavy();
+		let told = await h.heavy();
 		expect(told.length).toBeGreaterThan(0);
+		expect(told.length % 2).toBe(0);
+		expect(alternates(told)).toBe(true);
+
+		await serve('1');
+		await h.start();
+		await h.idle();
+		h.damage('1');
+		await expect(h.query('1', 'search', { q: 'a', sectionLimit: 5 })).rejects.toThrow();
+		await h.idle();
+		told = await h.heavy();
 		expect(told.length % 2).toBe(0);
 		expect(alternates(told)).toBe(true);
 	});
@@ -1157,7 +1173,7 @@ describe('catalog sync', () => {
 		expect(await h.api.asked('/libraries/1/catalog')).toEqual([]);
 		expect(await h.heads()).toEqual(['/libraries/1/catalog']);
 		expect((await h.states()).at(-1)).toEqual({
-			'1': { onDevice: false, applying: false, noRoom: { need, free: need - 1 } }
+			'1': { onDevice: false, applying: false, indexed: false, noRoom: { need, free: need - 1 } }
 		});
 		// Said by the page, so not also as a failure to log or toast.
 		expect(await h.reported()).toEqual([]);
@@ -1173,7 +1189,7 @@ describe('catalog sync', () => {
 		await h.idle();
 		expect(await h.libraries()).toEqual(['1']);
 		expect((await h.states()).at(-1)).toEqual({
-			'1': { onDevice: true, applying: false }
+			'1': { onDevice: true, applying: false, indexed: false }
 		});
 	});
 
@@ -1630,6 +1646,75 @@ describe('catalog sync', () => {
 			expect(await h.query('1', query, params), JSON.stringify(params)).toEqual(answer);
 	});
 
+	it('a read of another library during an index build waits at most one slice, and the worker says it is busy throughout', async () => {
+		await started('1', '2');
+		await h.sliceIndexBy(1);
+		const read = await h.readDuringBuild('1', '2', 'listTracks', { limit: 1 });
+		// Answered before the build's next slice began, while its index was not yet built.
+		expect(read).toEqual({ steps: 3, indexed: false, heavy: true });
+		expect((await h.builds()).steps).toBeGreaterThan(10);
+		expect(await h.indexed('1')).toBe(true);
+		// After the two installs', one stretch for the whole build.
+		expect((await h.heavy()).slice(4)).toEqual([true, false]);
+	});
+
+	it('an index built a few documents at a time answers as the golden server does', async () => {
+		await started('1');
+		await h.sliceIndexBy(1);
+		for (const { query, params, answer } of searchCases)
+			expect(await h.query('1', query, params), JSON.stringify(params)).toEqual(answer);
+		expect((await h.builds()).steps).toBeGreaterThan(10);
+	});
+
+	it('a commit to the library during an index build restarts the build, and the index has what the commit brought', async () => {
+		await started('1');
+		await h.sliceIndexBy(1);
+		const search = h.query('1', 'search', { q: 'zebra', sectionLimit: 5 });
+		await expect.poll(async () => (await h.builds()).steps).toBeGreaterThan(3);
+		await h.api.setFeed('1', [album(POSITION + 1, '900', 'Zebra Crossing')], POSITION + 1);
+		await h.message(libraryChanged(POSITION + 1));
+		const found = (await search) as { sections: unknown[] };
+		expect(found.sections.length).toBe(1);
+		expect((await h.builds()).begins).toBe(2);
+		// Busy while it builds, not while it waits for the commit to end.
+		expect(await h.heavy()).toEqual([true, false, true, false, true, false]);
+	});
+
+	it('two libraries searched at once with no index of either both answer', async () => {
+		await started('1', '2');
+		const search = (library: string) =>
+			h.query(library, 'search', { q: 'a', sectionLimit: 5 }, true);
+		const answers = Promise.all([search('1'), search('2')]);
+		const timeout = new Promise((resolve) => setTimeout(() => resolve('timed out'), 5000));
+		expect(await Promise.race([answers, timeout])).not.toBe('timed out');
+	});
+
+	it('a library signed out during its index build answers nothing, and the build stops', async () => {
+		await started('1');
+		await h.sliceIndexBy(1);
+		const search = h.query('1', 'search', { q: 'a', sectionLimit: 5 }, true);
+		const rejected = expect(search).rejects.toThrow('the library is not on this device');
+		await expect.poll(async () => (await h.builds()).steps).toBeGreaterThan(3);
+		await h.signOut();
+		await rejected;
+		const { steps } = await h.builds();
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect((await h.builds()).steps).toBe(steps);
+		expect(await h.reported()).toEqual([]);
+	});
+
+	it('a build that a large apply interrupts begins again once, when the apply is over, not at every slice', async () => {
+		await started('1');
+		await grown(100 * LARGE);
+		await h.sliceIndexBy(1);
+		const search = h.query('1', 'search', { q: 'a', sectionLimit: 5 }, true);
+		await expect.poll(async () => (await h.builds()).steps).toBeGreaterThan(3);
+		await h.api.setFeed('1', largeFeed(), BASE + LARGE);
+		await h.message(libraryChanged(BASE + LARGE));
+		await search;
+		expect((await h.builds()).begins).toBe(2);
+	});
+
 	it('a search finds what a catch-up added once the index is rebuilt', async () => {
 		await started('1');
 		const found = async () =>
@@ -1643,6 +1728,45 @@ describe('catalog sync', () => {
 		await h.message(libraryChanged(POSITION + 1));
 		await h.idle();
 		await expect.poll(async () => await found(), { timeout: 5000 }).toBe(1);
+	});
+
+	it("keeps one search index: building another library's lets the first go", async () => {
+		await started('1', '2');
+		const search = (library: string) => h.query(library, 'search', { q: 'a', sectionLimit: 5 });
+		expect(await h.indexed('1')).toBe(false);
+		await search('1');
+		expect(await h.indexed('1')).toBe(true);
+		await search('2');
+		expect(await h.indexed('2')).toBe(true);
+		expect(await h.indexed('1')).toBe(false);
+		// The file itself holds none any more, not only the sync's record of it.
+		await expect(h.queryAs('1', '1', 'search', { q: 'a', sectionLimit: 5 })).rejects.toThrow(
+			'search index is not built'
+		);
+		await search('1');
+		expect(await h.indexed('1')).toBe(true);
+	});
+
+	it("a changed library's rebuild is dropped when another library's index replaced it meanwhile", async () => {
+		await started('1', '2');
+		await h.query('1', 'search', { q: 'a', sectionLimit: 5 });
+		await h.api.setFeed('1', [album(POSITION + 1, '900', 'Zebra Crossing')], POSITION + 1);
+		await h.message(libraryChanged(POSITION + 1));
+		await h.idle();
+		// Past the rebuild's spacing, so the search of 1 schedules one, which 2's build overtakes.
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		await h.searchTogether(['1', '2']);
+		expect(await h.indexed('2')).toBe(true);
+		expect(await h.indexed('1')).toBe(false);
+	});
+
+	it('builds a search index ahead of the first search when asked, and skips a library not on the device', async () => {
+		await started('1');
+		expect(await h.indexed('1')).toBe(false);
+		await h.prepareIndex('9');
+		await h.prepareIndex('1');
+		await expect.poll(() => h.indexed('1'), { timeout: 5000 }).toBe(true);
+		expect(await h.reported()).toEqual([]);
 	});
 });
 

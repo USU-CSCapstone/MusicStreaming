@@ -2,7 +2,7 @@
 // (`worker.ts`); every tab's `query` and `signOut` reach the owner, through `router.ts` when the
 // tab is not it. The owner tells the worker who is signed in and what the realtime connection
 // hears, and shows what the worker cannot fix itself. The worker says what each library stands
-// at, and the owner tells every tab, which holds it: `onDevice` asks no one.
+// at, and the owner tells every tab, which holds it: `onDevice` and `indexed` ask no one.
 
 import { API } from '$lib/api/root';
 import { connectivity } from '$lib/connectivity.svelte';
@@ -298,6 +298,15 @@ export class CatalogClient {
 	}
 
 	/**
+	 * Whether `library`'s search index is built on the device, so a search can be handed to it
+	 * without waiting for a build: false where it is not, or where no owner is serving. Asks no one.
+	 */
+	indexed(library: string) {
+		const state = this.#current();
+		return !!state && !state.heavy && !!state.libraries[library]?.indexed;
+	}
+
+	/**
 	 * What the owner last said of each library the device holds or left for want of room, as the
 	 * account page shows it; empty while no owner of this tab's account is serving.
 	 */
@@ -311,6 +320,18 @@ export class CatalogClient {
 	 */
 	get outdated() {
 		return this.#route().foreign && !this.#state?.serving;
+	}
+
+	/**
+	 * Has whichever tab owns the catalog build `library`'s search index in the background, unless
+	 * it has one, for a device that has gone offline: its first search then does not wait for it.
+	 * Without an owner to answer in time, the first search builds it.
+	 */
+	prepareIndex(library: string) {
+		if (!available()) return;
+		this.#route()
+			.ask({ type: 'prepareIndex', library, user: this.#user || undefined })
+			.catch(() => {});
 	}
 
 	/**
@@ -571,12 +592,9 @@ export class CatalogClient {
 		if (late) this.#yield();
 		const stop = started
 			? this.#route().serve(async (request: Request) => {
-					// Device data never crosses accounts; the asker falls back to the server.
-					if (
-						request.type === 'query' &&
-						request.user !== undefined &&
-						request.user !== this.#user
-					) {
+					// Device data never crosses accounts, nor does its work; a query's asker falls
+					// back to the server.
+					if ('user' in request && request.user !== undefined && request.user !== this.#user) {
 						void this.#leaveIfStale();
 						throw new Error('the catalog is for another account');
 					}

@@ -265,3 +265,26 @@ fn a_filter_narrows_the_matches_before_they_are_ranked_and_counted() {
     assert_eq!(blue(|kind, _| kind == Kind::Album), [(Kind::Album, vec![11], 2)]);
     assert!(blue(|_, _| false).is_empty());
 }
+
+#[test]
+fn an_index_made_a_little_at_a_time_is_the_index_made_at_once() {
+    let words = ["blue", "red", "the", "a", "zebra", "Ünï", "ghost", "x"];
+    let documents = || {
+        (0..300_usize).map(|i| {
+            let name: Vec<&str> = (0..=(i * 7 % 4)).map(|j| words[(i * 3 + j * 5) % 8]).collect();
+            doc(Kind::ALL[i % 3], i64::try_from(i * 37 % 301).unwrap(), &name.join(" "))
+        })
+    };
+    let whole = format!("{:?}", Index::build(documents()));
+    for budget in [1, 2, 7, 64, 1000] {
+        let mut builder = IndexBuilder::default();
+        documents().for_each(|document| builder.add(document));
+        let mut finishing = builder.finishing();
+        let mut steps = 1;
+        while !finishing.step(budget) {
+            steps += 1;
+        }
+        assert_eq!(format!("{:?}", finishing.into_index()), whole, "budget {budget}");
+        assert!(steps > 300 / budget, "budget {budget} took {steps} steps");
+    }
+}

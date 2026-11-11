@@ -515,7 +515,8 @@ async fn tagged_library() -> (tempfile::TempDir, std::sync::Arc<crate::db::Datab
              UNION ALL SELECT 1, id, 34, 'Blues' FROM tracks WHERE library_id = 1 AND id % 7 = 0
              UNION ALL SELECT 1, 15, 33, 'Rare'
              UNION ALL SELECT 1, 15, 35, 'Rarer'
-             UNION ALL SELECT 2, 400, 50, 'Rock';",
+             UNION ALL SELECT 2, 400, 50, 'Rock';
+             UPDATE tracks SET missing_since = 1 WHERE library_id = 1 AND id % 7 = 1;",
         )
     })
     .await
@@ -582,6 +583,58 @@ async fn filters_by_tags_of_every_type() {
         let (status, _) = json(&app, &format!("/api/v1/libraries/1/tracks?{query}")).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{query}");
     }
+}
+
+/// A total counted for tags alone starts from the smallest group's links and checks the other
+/// groups' links, reading no track, and equals the tracks the filter keeps: missing ones too, and
+/// none of another library's whose tags share a name.
+#[tokio::test]
+async fn a_counted_tag_total_reads_the_link_table_alone() {
+    let (_temp, db, _app) = tagged_library().await;
+    let cases: [(&[i64], &[i64], Keep); 7] = [
+        (&[30, 31], &[], |i| i % 15 == 0),
+        (&[], &[30, 31], |i| i % 3 == 0 || i % 5 == 0),
+        (&[30], &[31, 34], |i| i % 3 == 0 && (i % 5 == 0 || i % 7 == 0)),
+        (&[], &[30, 32], |i| i % 6 == 0),
+        (&[33, 34], &[], |_| false),
+        // A tag of library 2 is no tag of library 1.
+        (&[30, 50], &[], |_| false),
+        (&[], &[30, 50], |_| false),
+    ];
+    db.read(move |conn| {
+        for (all, any, keep) in cases {
+            let ids = |ids: &[i64]| ids.iter().map(|&id| AnyId(Some(id))).collect();
+            let filter = TagFilter { all: ids(all), any: ids(any) };
+            let source = source(conn, 1, None, None, ArtistCredit::Any, &filter, LEAD_SHARE)?;
+            let expected = (1..=300).filter(|&i| keep(i)).fold(0_i64, |n, _| n + 1);
+            if let Some(counting) = &source.counting {
+                let sql = format!(
+                    "EXPLAIN QUERY PLAN SELECT count(*) FROM {} WHERE {}",
+                    counting.from, counting.filter
+                );
+                let plan: Vec<String> = conn
+                    .prepare(&sql)?
+                    .query_map(rusqlite::params_from_iter(&counting.params), |row| row.get(3))?
+                    .collect::<rusqlite::Result<_>>()?;
+                let plan = plan.join(" | ");
+                assert!(!plan.contains("tracks"), "{all:?} {any:?}: {plan}");
+                assert!(!plan.contains("SCAN track_tags"), "{all:?} {any:?}: {plan}");
+            }
+            assert_eq!(
+                source.counting.is_some(),
+                !all.contains(&50) && !any.contains(&50),
+                "{all:?} {any:?}"
+            );
+            let total = page::Request::new(TrackSort::Name.sort(), Order::Asc, None, Some(1))
+                .unwrap()
+                .read(conn, &source, |_| Ok(()))?
+                .total;
+            assert_eq!(total, expected, "{all:?} {any:?}");
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
 }
 
 #[test]

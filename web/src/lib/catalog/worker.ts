@@ -92,6 +92,9 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 				pausing = true;
 				await sync.pause();
 				post({ type: 'paused' });
+			} else if (data.type === 'prepareIndex') {
+				sync.prepareIndex(data.library);
+				post({ type: 'answer', id: data.id, result: '' });
 			} else if (data.type === 'query') {
 				const { id } = data;
 				sync.query(data.library, data.name, data.params, data.offline).then(

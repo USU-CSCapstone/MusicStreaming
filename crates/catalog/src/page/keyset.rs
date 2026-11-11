@@ -98,8 +98,8 @@ pub struct Walk {
 pub const WALK_BUDGET: i64 = 256;
 
 /// What a count of a source reads in place of the source's own `from`, `filter` and `params`:
-/// the same rows, reached from the smallest of the filter's tag groups, where the page itself
-/// walks an index and checks each row.
+/// the same rows, reached from the smallest of the filter's tag groups through the tag links
+/// alone, whether the page itself walks an index or leads from a tag.
 pub struct Counting {
     pub from: String,
     pub filter: String,

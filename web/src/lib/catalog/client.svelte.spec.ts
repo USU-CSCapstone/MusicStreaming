@@ -13,7 +13,7 @@ beforeEach(() => localStorage.clear());
 
 /** What a library on a fake worker's device says of itself, unless a test changes it. */
 const HERE: Record<string, LibraryState> = {
-	'1': { onDevice: true, applying: false }
+	'1': { onDevice: true, applying: false, indexed: true }
 };
 
 /** A worker the test plays the catalog for; it answers a query with the name of its tab. */
@@ -287,17 +287,18 @@ describe('CatalogClient', () => {
 		await vi.waitFor(() => expect(second.client.onDevice('1')).toBe(true));
 		expect(first.client.onDevice('1')).toBe(true);
 		expect(second.client.onDevice('2')).toBe(false);
-		b.libraries({ '1': { onDevice: false, applying: false } });
+		b.libraries({ '1': { onDevice: false, applying: false, indexed: false } });
 		await vi.waitFor(() => expect(first.client.onDevice('1')).toBe(false));
 		await vi.waitFor(() => expect(second.client.onDevice('1')).toBe(false));
 		// A library being updated is read from the server while online.
-		b.libraries({ '1': { onDevice: true, applying: true } });
-		await vi.waitFor(() => expect(second.client.onDevice('1')).toBe(false));
+		b.libraries({ '1': { onDevice: true, applying: true, indexed: true } });
+		await vi.waitFor(() => expect(second.client.indexed('1')).toBe(true));
+		expect(second.client.onDevice('1')).toBe(false);
 		first.client.disconnect();
 		second.client.disconnect();
 	});
 
-	it('onDevice asks no one: no request crosses the channel or reaches a worker', async () => {
+	it('onDevice and indexed ask no one: no request crosses the channel or reaches a worker', async () => {
 		const b = browser();
 		const first = b.tab('first');
 		const second = b.tab('second');
@@ -311,6 +312,7 @@ describe('CatalogClient', () => {
 
 		for (const { client } of [first, second]) {
 			client.onDevice('1');
+			client.indexed('1');
 			await client.waitForDevice('1');
 		}
 		await flush(b.name);
@@ -318,6 +320,28 @@ describe('CatalogClient', () => {
 		expect(types(first.workers[0])).toEqual(['init', 'start']);
 		probe.close();
 		first.client.disconnect();
+		second.client.disconnect();
+	});
+
+	it('a library’s index is built only as the owner says, and with no owner it is not, never an error', async () => {
+		const b = browser();
+		const first = b.tab('first');
+		const second = b.tab('second');
+		expect(second.client.indexed('1')).toBe(false);
+
+		first.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(first.workers[0])).toContain('start'));
+		// Out of sight, so it only listens and never takes the catalog when the first lets go.
+		second.hide();
+		second.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(second.client.indexed('1')).toBe(true));
+		b.libraries({ '1': { onDevice: true, applying: false, indexed: false } });
+		await vi.waitFor(() => expect(second.client.indexed('1')).toBe(false));
+		// An owner that lets go says so, whatever it held.
+		b.libraries(HERE);
+		await vi.waitFor(() => expect(second.client.indexed('1')).toBe(true));
+		first.client.disconnect();
+		await vi.waitFor(() => expect(second.client.indexed('1')).toBe(false));
 		second.client.disconnect();
 	});
 
@@ -332,6 +356,7 @@ describe('CatalogClient', () => {
 
 		b.heavy(true);
 		await vi.waitFor(() => expect(second.client.onDevice('1')).toBe(false));
+		expect(second.client.indexed('1')).toBe(false);
 		expect(first.client.onDevice('1')).toBe(false);
 		// Offline there is no server to skip to: the device is still waited for.
 		expect(await second.client.waitForDevice('1')).toBe(true);
@@ -376,8 +401,8 @@ describe('CatalogClient', () => {
 	it('the libraries kept for the next launch are the ones on the device, under the owner’s account', async () => {
 		const b = browser();
 		b.flags.libraries = {
-			'1': { onDevice: true, applying: false },
-			'2': { onDevice: false, applying: false }
+			'1': { onDevice: true, applying: false, indexed: false },
+			'2': { onDevice: false, applying: false, indexed: false }
 		};
 		const { client, workers } = b.tab('owner');
 		client.connect(b.realtime, '7');
@@ -395,6 +420,7 @@ describe('CatalogClient', () => {
 		second.client.connect(b.realtime, '8');
 		await flush(b.name);
 		expect(second.client.onDevice('1')).toBe(false);
+		expect(second.client.indexed('1')).toBe(false);
 		// Kept as held for its own account, it waits for an owner of its own; this one is not it.
 		rememberDevice('8', ['1']);
 		expect(await second.client.waitForDevice('1')).toBe(false);
@@ -489,6 +515,7 @@ describe('CatalogClient', () => {
 		old.postMessage({ protocol: 1, type: 'state', state: { serving: true, libraries: HERE } });
 		await vi.waitFor(() => expect(client.outdated).toBe(true));
 		expect(client.onDevice('1')).toBe(false);
+		expect(client.indexed('1')).toBe(false);
 		old.close();
 	});
 
@@ -514,9 +541,7 @@ describe('CatalogClient', () => {
 		const b = browser();
 		const router = new CatalogRouter(b.name, 5000, undefined, b.clock);
 		const outcome = vi.fn();
-		const asked = router
-			.ask({ type: 'query', library: '1', name: 'x', params: {} }, 100)
-			.catch(outcome);
+		const asked = router.ask({ type: 'prepareIndex', library: '1' }, 100).catch(outcome);
 		await b.clock.advance(100);
 		await asked;
 		expect(outcome.mock.calls[0][0]).toBeInstanceOf(Unanswered);
@@ -1145,6 +1170,7 @@ describe('CatalogClient', () => {
 		const short = {
 			onDevice: false,
 			applying: false,
+			indexed: false,
 			noRoom: { need: 9, free: 3 }
 		};
 		b.libraries({ ...HERE, '2': short });
@@ -1253,6 +1279,26 @@ describe('CatalogClient', () => {
 		await flush(b.name);
 		expect(owner.workers[0].terminated).toBe(false);
 		expect(JSON.parse(await owner.client.query('1', 'listTracks'))).toEqual({ tab: 'owner' });
+		owner.client.disconnect();
+		stale.client.disconnect();
+		session.mockRestore();
+	});
+
+	it('a stale tab’s index request builds nothing for the owner’s account', async () => {
+		const session = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ id: '8' }));
+		const b = browser();
+		const owner = b.tab('owner');
+		const stale = b.tab('stale');
+		owner.client.connect(b.realtime, '8');
+		await vi.waitFor(() => expect(types(owner.workers[0])).toContain('start'));
+		stale.client.connect(b.realtime, '7');
+
+		stale.client.prepareIndex('1');
+		await vi.waitFor(() => expect(session).toHaveBeenCalled());
+		await flush(b.name);
+		owner.client.prepareIndex('1');
+		await vi.waitFor(() => expect(types(owner.workers[0])).toContain('prepareIndex'));
+		expect(owner.workers[0].sent.filter((m) => m.type === 'prepareIndex')).toHaveLength(1);
 		owner.client.disconnect();
 		stale.client.disconnect();
 		session.mockRestore();

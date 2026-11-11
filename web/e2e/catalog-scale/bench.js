@@ -1,6 +1,9 @@
 // The page of the device-catalog scale gate: runs each phase in a fresh worker and prints the
 // table. `runBench()` is what the Playwright spec calls; the Run button is for a phone.
 
+/** The phases whose worker's memory the page measures before ending it. */
+const MEASURED = ['query', 'index'];
+
 /** Runs one phase in a new worker and resolves with its table rows. */
 function phase(message) {
 	return new Promise((resolve, reject) => {
@@ -9,7 +12,7 @@ function phase(message) {
 		worker.onerror = (event) => reject(new Error(event.message));
 		worker.onmessage = ({ data }) => {
 			if (data.ready) return worker.postMessage({ ...message, spawned });
-			if (data.error || message.phase !== 'query') {
+			if (data.error || !MEASURED.includes(message.phase)) {
 				worker.terminate();
 				if (data.error) reject(new Error(data.error));
 				else resolve(data.rows);
@@ -18,7 +21,7 @@ function phase(message) {
 			// Only a window can ask, and it counts its workers, so ask before this one ends.
 			memory().then((row) => {
 				worker.terminate();
-				resolve([...data.rows, [`queries on ${message.db}`, ...row]]);
+				resolve([...data.rows, [message.phase, ...row]]);
 			});
 		};
 	});
@@ -67,13 +70,15 @@ window.runBench = async () => {
 		]
 	];
 	rows.push(...env);
+	const library = (await (await fetch('/data/library')).text()).trim();
 	for (const message of [
 		{ phase: 'import' },
+		{ phase: 'query', db: 'import.db' },
 		{ phase: 'index' },
 		{ phase: 'recipe' },
-		{ phase: 'query', db: 'import.db' }
+		{ phase: 'catchUp' }
 	]) {
-		rows.push(...(await phase(message)));
+		rows.push(...(await phase({ ...message, library })));
 	}
 	return table(rows);
 };

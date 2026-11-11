@@ -5,11 +5,11 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use jewelcase_catalog::statistics::OPTIMIZE;
 use jewelcase_core::{Format, sort_key};
 use jewelcase_scanner::testing::stamp_without_sidecars;
 use jewelcase_scanner::*;
 
-use crate::db::OPTIMIZE;
 use crate::db::store::SqliteStore;
 
 /// How many tracks a benchmark generates: `BENCH_TRACKS`, or 500,000 when it is unset. Panics
@@ -159,17 +159,21 @@ fn record(
     }
 }
 
-/// Applies `records` to library 1 of `store` in batches of a scan's size, as a cold scan
+/// Applies `records` to `library` of `store` in batches of a scan's size, as a cold scan
 /// does, and returns how long each batch held the writer. Then gathers planner statistics, as
 /// the server does when it opens the database.
-pub fn fill(store: &SqliteStore, records: impl Iterator<Item = TrackRecord>) -> Vec<Duration> {
+pub fn fill(
+    store: &SqliteStore,
+    library: i64,
+    records: impl Iterator<Item = TrackRecord>,
+) -> Vec<Duration> {
     let batch = ScanOptions::default().batch_size;
     let mut records = records.peekable();
     let mut times = Vec::new();
     while records.peek().is_some() {
         let upserts = records.by_ref().take(batch).collect();
         let started = Instant::now();
-        store.apply(1, Batch { upserts, ..Batch::default() }).unwrap();
+        store.apply(library, Batch { upserts, ..Batch::default() }).unwrap();
         times.push(started.elapsed());
     }
     store.db().write_blocking(|tx| tx.execute_batch(OPTIMIZE)).unwrap();
