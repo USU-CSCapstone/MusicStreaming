@@ -1,11 +1,10 @@
 <script lang="ts">
-	import { isRedirect } from '@sveltejs/kit';
+	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import {
 		disconnectMyPlugin,
 		getMyPluginSettings,
-		logout,
 		setMyPluginSettings,
 		setMySearchSharing
 	} from '$lib/api/client';
@@ -15,6 +14,10 @@
 	import Icon from '$lib/components/Icon.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import SettingsDialog from '$lib/components/SettingsDialog.svelte';
+	import { catalog } from '$lib/catalog/client.svelte';
+	import { imageCacheSize } from '$lib/image-cache';
+	import { setLogoutPending } from '$lib/last-known';
+	import { finishLogout } from '$lib/logout';
 	import { prefs } from '$lib/prefs.svelte';
 	import { realtime } from '$lib/realtime.svelte';
 	import { tagTypeName } from '$lib/tags';
@@ -29,27 +32,48 @@
 	const roles: Record<User['role'], string> = { owner: 'Owner', admin: 'Admin', user: 'User' };
 	const tagTypes = $derived(page.data.tagTypes ?? []);
 
-	let error = $state('');
+	/** What the device keeps of the art seen online, once counted. */
+	let images = $state<{ count: number; bytes: number } | null>(null);
+	/** Formats a size in megabytes for the storage sections. */
+	const megabytes = new Intl.NumberFormat(undefined, {
+		style: 'unit',
+		unit: 'megabyte',
+		maximumFractionDigits: 1
+	});
+	/** The count and size of the kept images, as one line of text. */
+	const imageSummary = ({ count, bytes }: { count: number; bytes: number }) =>
+		`${count} ${count === 1 ? 'image' : 'images'} · ${megabytes.format(bytes / 1_000_000)}`;
+	/** Whether the browser promised to keep this device's storage: unknown where it cannot say. */
+	let persisted = $state<boolean | null>(null);
+	onMount(() => {
+		if (me) void imageCacheSize(me.id).then((size) => (images = size));
+		navigator.storage?.persisted?.().then(
+			(kept) => (persisted = kept),
+			() => {}
+		);
+	});
+
 	let busy = $state(false);
 
-	/** Ends the session and loads the login page; on failure shows the error and keeps the realtime connection running. */
+	/** How long the server is waited for at log out; a server out of reach is told later. */
+	const LOGOUT_WAIT_MS = 3000;
+
+	/**
+	 * Logs out: the device is wiped first, with a marker left for the server, which is told now
+	 * if it answers in time and otherwise as soon as it can be reached (`$lib/logout`). Works
+	 * with no server in reach, which a session cookie only the server can end needs.
+	 */
 	async function logOut() {
 		busy = true;
-		error = '';
 		// Ending the session closes the socket; left running, the client would take that for a
 		// sign-out elsewhere and race this page to the login page.
 		realtime.stop();
-		try {
-			await logout(fetch);
-		} catch (e) {
-			// Already logged out elsewhere is as good as logging out now.
-			if (!isRedirect(e)) {
-				error = e instanceof Error ? e.message : String(e);
-				busy = false;
-				realtime.start();
-				return;
-			}
-		}
+		setLogoutPending(true);
+		await catalog.signOut();
+		await Promise.race([
+			finishLogout(fetch),
+			new Promise((done) => setTimeout(done, LOGOUT_WAIT_MS))
+		]);
 		// A fresh start, so nothing of this session, playback above all, outlives it.
 		location.assign(resolve('/login'));
 	}
@@ -97,7 +121,6 @@
 			The admins of this server can see your listening data: your playlists, queues, downloads,
 			history, and statistics. They can't sign in as you or change any of it.
 		</p>
-		{#if error}<p class="error" role="alert">{error}</p>{/if}
 		<button type="button" onclick={logOut} disabled={busy}>
 			{busy ? 'Logging out…' : 'Log out'}
 		</button>
@@ -173,6 +196,36 @@
 					· {data.hiddenCount.toLocaleString()}</span
 				>{/if}
 		</a>
+	</section>
+{/if}
+
+{#if me}
+	<section aria-labelledby="stored-images">
+		<h2 id="stored-images">Stored images</h2>
+		<p class="muted">
+			Art you've seen is kept on this device so it still shows offline. The oldest is dropped when
+			there's too much, and all of it is deleted when you log out.
+		</p>
+		{#if images}
+			<p>{imageSummary(images)}</p>
+		{/if}
+	</section>
+{/if}
+
+{#if me}
+	<section aria-labelledby="storage">
+		<h2 id="storage">Storage</h2>
+		<p class="muted">
+			Each library is copied to this device so it works offline. Jewelcase asks the browser not to
+			clear that copy when the device runs low on space.
+		</p>
+		{#if persisted !== null}
+			<p>
+				{persisted
+					? 'The browser has agreed to keep it.'
+					: 'The browser has not agreed to keep it, and may clear it. It would then be downloaded again.'}
+			</p>
+		{/if}
 	</section>
 {/if}
 

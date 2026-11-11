@@ -28,7 +28,10 @@ export type Options = {
 	create?: (url: string) => WebSocket;
 	/** Whether the session is still good; asked when a connection is refused. */
 	signedIn?: () => Promise<boolean>;
-	/** What happens once the server signs this device out; the login page by default. */
+	/**
+	 * What happens once the server signs this device out and `onSessionEnd` is done; the login page
+	 * by default.
+	 */
 	revoked?: () => void;
 };
 
@@ -53,6 +56,11 @@ export class Realtime {
 	deviceId = $state<string | null>(null);
 	/** Server time less this browser's, in milliseconds, to time what the server reports. */
 	clockOffset = 0;
+	/**
+	 * What the app does, before the login page loads, once the server has ended the session: wipes
+	 * the device.
+	 */
+	onSessionEnd: () => unknown = () => {};
 
 	#url: () => string;
 	#create: (url: string) => WebSocket;
@@ -213,9 +221,12 @@ export class Realtime {
 		this.#retry = setTimeout(() => this.#open(), wait);
 	}
 
+	/** The session is over: stops, lets the app wipe the device, then goes to the login page. */
 	#signOut() {
 		this.stop();
-		this.#revoked();
+		void Promise.resolve(this.onSessionEnd())
+			.catch(console.error)
+			.then(() => this.#revoked());
 	}
 
 	/** Lets go of the socket, without waiting for one that may be dead to say it closed. */

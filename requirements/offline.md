@@ -133,7 +133,10 @@ Work done offline is not provisional. It syncs when a connection returns, with n
 - **Replaced audio re-downloads.**
 - **Losing access to a library removes its downloads from the device** — access is the boundary ([`general.md` §3.6](general.md#36-libraries-are-the-isolation-boundary)). Playlists survive and return if access is restored, and history and statistics stay ([`users.md` §5](users.md#5-library-access)).
 - **Signing a device out removes its downloads**, as does deleting the account ([`users.md` §9](users.md#9-account-lifecycle)).
-- **A password change is not that case.** Changing a password signs other devices out ([`users.md` §3](users.md#3-authentication)), but those devices **keep their downloads**, usable again the moment the same account signs back in. The same holds for an admin-initiated reset. A user securing their account must not pay for it by re-downloading their library over cellular.
+- **A password change is not that case for downloads.** Changing a password signs other devices out ([`users.md` §3](users.md#3-authentication)), but those devices **keep their downloaded audio**, usable again the moment the same account signs back in. The same holds for an admin-initiated reset. A user securing their account must not pay for it by re-downloading their library over cellular.
+- **Whenever the server ends a session, the device's copy of the catalog, its kept art and its lists are wiped**, for a revocation of any reason, a password change or reset, or a refusal of a session that was good. The next person to use the browser must never see what the last one kept.
+- **An unreachable server ends nothing.** A device that cannot reach the server keeps everything and carries on offline. It is signed out only when the server says so.
+- **Logging out offline still logs out.** The device is wiped at once, and the server is told the first time it can be reached. Until then the app shows only the login page.
 
 ---
 

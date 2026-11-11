@@ -1,12 +1,38 @@
 import { redirect } from '@sveltejs/kit';
 import { resolve } from '$app/paths';
 import { getMe, getServerInfo, listLibraries, listTagTypes } from '$lib/api/client';
+import type { User } from '$lib/api/types';
+import { catalog } from '$lib/catalog/client.svelte';
+import { claim, logoutPending, owner, remember } from '$lib/last-known';
+import { finishLogout } from '$lib/logout';
 import type { LayoutLoad } from './$types';
 
 // SPA mode: static files served by the Rust server, no server rendering (`design/general.md` §1).
 export const ssr = false;
 
+/**
+ * Makes the device `me`'s. Whatever another account left on it is wiped first, before anything
+ * of `me`'s is kept or connected, so no one is ever given a file of someone else's.
+ */
+async function adopt(me: User) {
+	if (owner() === me.id) return;
+	if (owner()) {
+		await catalog.signOut();
+		remember({ me });
+	}
+	claim(me.id);
+}
+
 export const load: LayoutLoad = async ({ fetch, route, untrack }) => {
+	// A logout the server has not heard of: its session may still be good, so only the login page
+	// shows, with no way back in, and the server is told as soon as it can be. The wipe is done
+	// again, in case the page closed before it finished.
+	if (logoutPending()) {
+		void catalog.signOut();
+		void finishLogout(fetch);
+		if (untrack(() => route.id) !== '/login') redirect(307, resolve('/login'));
+		return { me: null, library: null, tagTypes: [] };
+	}
 	// A new server serves nothing but setup (`requirements/users.md` §2.1). Checked once, when
 	// the app starts: `untrack` keeps navigation from loading this again.
 	const { setupRequired } = await getServerInfo(fetch);
@@ -25,7 +51,14 @@ export const load: LayoutLoad = async ({ fetch, route, untrack }) => {
 	if (setupRequired || at === '/login') return { me: null, library: null, tagTypes: [] };
 
 	// Without a session, either answers `401`, which redirects to the login page.
-	const [me, { items }] = await Promise.all([getMe(fetch), listLibraries(fetch)]);
+	// The libraries are asked for with the user. Only where the account changed are they asked
+	// again, as what was kept, or a first answer that raced the wipe, may be the last account's.
+	const asked = listLibraries(fetch);
+	asked.catch(() => {});
+	const me = await getMe(fetch);
+	const changed = owner() !== me.id;
+	await adopt(me);
+	const { items } = await (changed ? listLibraries(fetch) : asked);
 	// One library at a time; a library switcher comes with multi-library accounts (`requirements/users.md` §5).
 	const library = items[0] ?? null;
 	// The tag types its music carries, which the sidebar lists. A library with none, or a failure

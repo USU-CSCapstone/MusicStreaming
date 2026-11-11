@@ -47,7 +47,7 @@ There is no public signup. A person without an invite cannot create an account, 
 - **No account enumeration.** Failure messaging is identical for an unknown account, a wrong password, and a suspended account.
 - **Credentials are never recoverable.** Stored passwords cannot be read back by anyone, including the owner. A forgotten password is resolved by a reset, never by retrieval.
 - **Password resets** are performed by the user when signed in, or initiated by an admin through a single-use expiring link. An admin never sets a password on someone's behalf.
-- **Changing a password** signs out all other devices, leaving the device that made the change signed in. Those devices keep their downloads ([`offline.md` §9](offline.md#9-download-lifecycle)) — a password change is a security action, not a wipe.
+- **Changing a password** signs out all other devices, leaving the device that made the change signed in. Those devices are wiped of the catalog, art and lists they kept, but keep their downloaded audio ([`offline.md` §9](offline.md#9-download-lifecycle)).
 
 ### 3.1 Protection
 Strong, fixed defaults chosen by the project. There is no configuration that can weaken them.
