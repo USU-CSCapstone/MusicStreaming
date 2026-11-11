@@ -2565,7 +2565,7 @@ components:
         One scan of a library and its progress (`requirements/scanning.md` §5). Counts are as
         files are met, so they grow while it runs, and may run slightly high after a scan resumes
         from a restart.
-      required: [id, trigger, state, startedAt, finishedAt, filesSeen, filesProcessed, added, updated, missing, problems, currentFolder]
+      required: [id, trigger, state, startedAt, finishedAt, filesSeen, filesProcessed, added, updated, missing, problems, wholeLibrary, currentFolder]
       properties:
         id: { $ref: '#/components/schemas/Id' }
         trigger:
@@ -2589,6 +2589,13 @@ components:
         updated: { type: integer, description: Tracks updated. }
         missing: { type: integer, description: Tracks whose files are now missing. }
         problems: { type: integer, description: Files and folders it had trouble with. }
+        wholeLibrary:
+          type: boolean
+          description: |
+            Whether it covers every root of the library, whole. The trigger does not say: a scan
+            of changed files covers only their folders, and a retry of a suspended scan keeps its
+            trigger but covers only the roots that did not answer (`design/scanning.md` §9).
+            While one that does waits, `adminStartScan` answers with it.
         currentFolder:
           type: [string, 'null']
           description: |
