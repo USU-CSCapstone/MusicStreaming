@@ -227,7 +227,7 @@ mod tests {
     }
 
     #[test]
-    fn the_account_feed_starts_with_the_playlists_that_existed() {
+    fn the_account_feed_starts_with_the_playlists_that_existed_numbered_per_account() {
         use crate::db::testing::{Album, Track, User};
 
         let mut conn = configured();
@@ -235,13 +235,14 @@ mod tests {
         migrate(&mut conn, &MIGRATIONS[..before]).unwrap();
 
         User::new(1, "owner").insert(&conn).unwrap();
+        User::new(2, "user").insert(&conn).unwrap();
         older_library(&conn, 1);
         Album::new(1, 1).insert(&conn).unwrap();
         Track::new(1, 1, 1).insert(&conn).unwrap();
         conn.execute_batch(
             "INSERT INTO playlists (id, library_id, user_id, title, folded, sort_key, created_at, \
                                     modified_at)
-             VALUES (7, 1, 1, 'Old', 'old', x'', 0, 0);
+             VALUES (7, 1, 1, 'Old', 'old', x'', 0, 0), (8, 1, 2, 'Theirs', 'theirs', x'', 0, 0);
              INSERT INTO playlist_items (playlist_id, key, library_id, track_id, added_at)
              VALUES (7, 1048576, 1, 1, 0), (7, 2097152, 1, 1, 0);",
         )
@@ -249,23 +250,69 @@ mod tests {
 
         migrate(&mut conn, MIGRATIONS).unwrap();
 
-        let feed: Vec<(i64, i64, String, i64, i64, String)> = conn
+        type Row = (i64, i64, String, i64, i64, String, i64);
+        let feed: Vec<Row> = conn
             .prepare(
-                "SELECT user_id, library_id, kind, entity_id, item_key, op FROM account_changes \
-                 ORDER BY seq",
+                "SELECT user_id, library_id, kind, entity_id, item_key, op, position \
+                 FROM account_changes ORDER BY seq",
             )
             .unwrap()
             .query_map([], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
             })
             .unwrap()
             .collect::<rusqlite::Result<_>>()
             .unwrap();
-        let row = |kind: &str, key| (1, 1, kind.to_owned(), 7, key, "upsert".to_owned());
+        let row = |user, kind: &str, id, key, position| {
+            (user, 1, kind.to_owned(), id, key, "upsert".to_owned(), position)
+        };
         assert_eq!(
             feed,
-            [row("playlist", 0), row("playlistItem", 1_048_576), row("playlistItem", 2_097_152)]
+            [
+                row(1, "playlist", 7, 0, 1),
+                row(2, "playlist", 8, 0, 1),
+                row(1, "playlistItem", 7, 1_048_576, 2),
+                row(1, "playlistItem", 7, 2_097_152, 3),
+            ]
         );
+        let heads: Vec<(i64, i64)> = conn
+            .prepare("SELECT id, feed_head FROM users ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(heads, [(1, 3), (2, 1)]);
+    }
+
+    #[test]
+    fn existing_changes_are_numbered_per_library() {
+        let mut conn = configured();
+        let before = MIGRATIONS.iter().position(|m| m.name.starts_with("0013")).unwrap();
+        migrate(&mut conn, &MIGRATIONS[..before]).unwrap();
+        for id in [1, 2] {
+            older_library(&conn, id);
+        }
+        conn.execute_batch(
+            "INSERT INTO library_changes (library_id, entity_type, entity_id, op, changed_at)
+             VALUES (1, 'track', 1, 'upsert', 0), (2, 'track', 2, 'upsert', 0),
+                    (2, 'track', 3, 'upsert', 0), (1, 'track', 4, 'upsert', 0);",
+        )
+        .unwrap();
+
+        migrate(&mut conn, MIGRATIONS).unwrap();
+
+        let rows = |sql: &str| -> Vec<(i64, i64)> {
+            conn.prepare(sql)
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        let library = "SELECT library_id, position FROM library_changes ORDER BY seq";
+        assert_eq!(rows(library), [(1, 1), (2, 1), (2, 2), (1, 2)]);
+        assert_eq!(rows("SELECT id, feed_head FROM libraries ORDER BY id"), [(1, 2), (2, 2)]);
     }
 
     #[test]

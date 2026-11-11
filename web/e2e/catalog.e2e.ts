@@ -136,7 +136,9 @@ test('two pages answer catalog queries with one database', async ({ page, contex
 	const snapshots: string[] = [];
 	context.on('request', (request) => {
 		const { pathname } = new URL(request.url());
-		if (pathname.endsWith(`/libraries/${library}/catalog`)) snapshots.push(pathname);
+		// A `HEAD` only sizes it up.
+		if (request.method() === 'GET' && pathname.endsWith(`/libraries/${library}/catalog`))
+			snapshots.push(pathname);
 	});
 	await page.goto('/albums');
 	await synced(page, library);
@@ -559,7 +561,11 @@ test.describe('the device belongs to one account', () => {
 	function downloads(context: BrowserContext, library: string) {
 		const made: string[] = [];
 		context.on('request', (request) => {
-			if (new URL(request.url()).pathname.endsWith(`/libraries/${library}/catalog`))
+			// A `HEAD` only sizes it up.
+			if (
+				request.method() === 'GET' &&
+				new URL(request.url()).pathname.endsWith(`/libraries/${library}/catalog`)
+			)
 				made.push(request.url());
 		});
 		return made;

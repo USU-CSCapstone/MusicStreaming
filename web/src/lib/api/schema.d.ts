@@ -154,8 +154,10 @@ export interface paths {
          *     while the caller could not reach a library are left out, so a device that installs a
          *     library's catalog file, the first time or again, pulls this feed again from `after=0`.
          *
-         *     Pass `next` as `after` until it equals `head`, when the client is current. `head` is the
-         *     position of the caller's latest change, comparable with `accountChanged`'s `seq`.
+         *     Pass `next` as `after`, with the page's `epoch`, until `next` equals `head`, when the
+         *     client is current. Positions are the caller's own, counted from 1 by their changes alone,
+         *     and `head` is that of the caller's latest change, comparable with `accountChanged`'s
+         *     `position`.
          */
         get: operations["listAccountChanges"];
         put?: never;
@@ -334,9 +336,17 @@ export interface paths {
          *     album, artist, or tag that shows it, and a change to the image or the type puts them all
          *     on the feed again.
          *
-         *     Pass `next` as `after` until it equals `head`, when the client is current. A client that
-         *     has applied a page has applied every change up to its `next`, and may stop and resume
-         *     from there.
+         *     Pass `next` as `after`, with the page's `epoch`, until `next` equals `head`, when the
+         *     client is current. A client that has applied a page has applied every change up to its
+         *     `next`, and may stop and resume from there. Positions are the library's own, counted from
+         *     1 by its changes alone, and `head` only grows.
+         *
+         *     Each start of the server is a run with an `epoch` of its own. Positions go on across
+         *     runs, so a client keeps the `epoch` of its latest page with its position and sends both;
+         *     the server goes on from a position of any run it knows, up to where that run ended. A
+         *     server restored from a backup does not know the runs after the backup, nor the changes
+         *     its run made after the backup was taken, so it refuses those positions rather than skip
+         *     what it has recorded since.
          */
         get: operations["listLibraryChanges"];
         put?: never;
@@ -358,19 +368,27 @@ export interface paths {
         };
         /**
          * Download the library's catalog
-         * @description The library's catalog as one SQLite database in the device schema
+         * @description The library's catalog as one gzipped SQLite database in the device schema
          *     (`crates/catalog/src/schema.sql`), for a device that has none of it yet. It holds the
-         *     rows `listLibraryChanges` carries, as of `X-Jewelcase-Seq`: the device then pulls the
-         *     feed with `after` set to that value. The file is built once and shared by everyone who
+         *     rows `listLibraryChanges` carries, as of `X-Jewelcase-Position`: the device then pulls the
+         *     feed with `after` set to that value and `epoch` to `X-Jewelcase-Epoch`. The file is built once and shared by everyone who
          *     reaches the library. It is rebuilt in the background once the library's feed holds more
          *     changes since the file than a tenth of its tracks, albums and artists, and the old file is
-         *     served meanwhile. It is gzipped for a client that accepts it.
+         *     served meanwhile.
          *
-         *     `ETag` is the SHA-256 of the database itself, as a quoted lowercase hex string,
-         *     whether or not the response is compressed: a client checks it against the file it ends
-         *     up with. A file is served only after SQLite's `quick_check` passed on it.
+         *     The body is the gzip file itself, `application/gzip` with no `Content-Encoding`, so a
+         *     client stores the bytes it receives and inflates them itself. An interrupted download
+         *     resumes: the client asks for `Range: bytes=<bytes it has>-` with `If-Range` set to the
+         *     `ETag` it started with, and gets `206` with the rest, or `200` with the whole of a newer
+         *     file if the file has changed since.
+         *
+         *     `ETag` is the SHA-256 of the gzip file, as a quoted lowercase hex string: a client checks
+         *     it against the bytes it ends up with, and gzip's own checksum covers the inflated
+         *     database. A file is served only after SQLite's `quick_check` passed on the database.
          *     `X-Jewelcase-Schema` is the device schema's version, which the database also carries as
-         *     its `user_version`: a client that doesn't know that version doesn't import the file. The
+         *     its `user_version`: a client that doesn't know that version doesn't import the file.
+         *     `X-Jewelcase-Database-Size` is the size of the database the gzip inflates to, so a device
+         *     can check it has room for both before it downloads (`headLibraryCatalog`). The
          *     response is `no-store`, so no HTTP cache keeps a copy of the catalog.
          *
          *     Until the first build has finished there is no file, and the answer is `503`. The client
@@ -382,7 +400,16 @@ export interface paths {
         post?: never;
         delete?: never;
         options?: never;
-        head?: never;
+        /**
+         * Size up the library's catalog
+         * @description What `getLibraryCatalog` would answer, headers only, so a device can check it has room
+         *     before it downloads: `Content-Length` is the size of the gzip and
+         *     `X-Jewelcase-Database-Size` the size of the database it inflates to. It needs the same
+         *     access as the download and answers in the same way, `404` for a library the caller cannot
+         *     reach and `503` while the first build runs, which a request for it also starts. It builds
+         *     and sends nothing else.
+         */
+        head: operations["headLibraryCatalog"];
         patch?: never;
         trace?: never;
     };
@@ -1713,10 +1740,12 @@ export interface components {
              * @description The position of the library's latest change when the page was read.
              */
             head: number;
+            /** @description The server's run that `next` and `head` belong to, to send with `next`. */
+            epoch: string;
         };
         LibraryChange: {
             /** Format: int64 */
-            seq: number;
+            position: number;
             /** @enum {string} */
             op: "upsert" | "delete";
             /** @enum {string} */
@@ -1744,10 +1773,12 @@ export interface components {
              * @description The position of the caller's latest change when the page was read.
              */
             head: number;
+            /** @description The server's run that `next` and `head` belong to, to send with `next`. */
+            epoch: string;
         };
         AccountChange: {
             /** Format: int64 */
-            seq: number;
+            position: number;
             /** @enum {string} */
             op: "upsert" | "delete";
             /** @enum {string} */
@@ -3485,12 +3516,12 @@ export interface components {
             type: "libraryChanged";
             libraryId: components["schemas"]["Id"];
             /** Format: int64 */
-            seq: number;
+            position: number;
         } | {
             /** @constant */
             type: "accountChanged";
             /** Format: int64 */
-            seq: number;
+            position: number;
         } | {
             /** @constant */
             type: "queueReplaced";
@@ -3599,6 +3630,11 @@ export interface components {
         PluginId: string;
         Cursor: string;
         Limit: number;
+        /**
+         * @description The `epoch` of the page whose `next` is `after` (or the catalog file's
+         *     `X-Jewelcase-Epoch`). Required with an `after` above 0: without it the answer is `410`.
+         */
+        FeedEpoch: string;
         /** @description Only items this artist is credited on. See `artistCredit`. */
         ArtistFilter: string;
         /**
@@ -3846,6 +3882,11 @@ export interface operations {
             query?: {
                 /** @description The `next` of the last page applied, or 0 for everything. */
                 after?: number;
+                /**
+                 * @description The `epoch` of the page whose `next` is `after` (or the catalog file's
+                 *     `X-Jewelcase-Epoch`). Required with an `after` above 0: without it the answer is `410`.
+                 */
+                epoch?: components["parameters"]["FeedEpoch"];
                 limit?: components["parameters"]["Limit"];
             };
             header?: never;
@@ -3863,7 +3904,10 @@ export interface operations {
                     "application/json": components["schemas"]["AccountChanges"];
                 };
             };
-            /** @description `cursor_expired` — `after` is past the caller's latest change; start again from `after=0`. */
+            /**
+             * @description `cursor_expired` — the server cannot go on from `after` in `epoch`: see
+             *     `listLibraryChanges`. Start again from `after=0`.
+             */
             410: {
                 headers: {
                     [name: string]: unknown;
@@ -4078,6 +4122,11 @@ export interface operations {
             query?: {
                 /** @description The `next` of the last page applied, or 0 for the whole catalog. */
                 after?: number;
+                /**
+                 * @description The `epoch` of the page whose `next` is `after` (or the catalog file's
+                 *     `X-Jewelcase-Epoch`). Required with an `after` above 0: without it the answer is `410`.
+                 */
+                epoch?: components["parameters"]["FeedEpoch"];
                 limit?: components["parameters"]["Limit"];
             };
             header?: never;
@@ -4098,9 +4147,10 @@ export interface operations {
                 };
             };
             /**
-             * @description `cursor_expired` — the server cannot continue from `after`, because it is past the
-             *     library's latest change or older than the feed reaches back; start again from
-             *     `after=0`.
+             * @description `cursor_expired` — the server cannot go on from `after`: it is past the library's
+             *     latest change or older than the feed reaches back, or `epoch` is missing, is not a run
+             *     of this server, or ended before `after`, as after a restore from a backup. Start again
+             *     from `after=0`, or from the catalog file (`getLibraryCatalog`).
              */
             410: {
                 headers: {
@@ -4116,7 +4166,12 @@ export interface operations {
     getLibraryCatalog: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description `bytes=<start>-`, to resume a download. */
+                Range?: string;
+                /** @description The `ETag` the download started with; a range of any other file is not sent. */
+                "If-Range"?: string;
+            };
             path: {
                 libraryId: components["parameters"]["LibraryId"];
             };
@@ -4127,28 +4182,32 @@ export interface operations {
             /** @description OK */
             200: {
                 headers: {
-                    /** @description The SHA-256 of the uncompressed database, in quotes. */
+                    /** @description The SHA-256 of the gzip file, in quotes. */
                     ETag?: string;
-                    /** @description The feed position the file is current to, for `listLibraryChanges`'s `after`. */
-                    "X-Jewelcase-Seq"?: number;
+                    /** @description The library's feed position the file is current to, for `listLibraryChanges`'s `after`. */
+                    "X-Jewelcase-Position"?: number;
+                    /** @description The run that position belongs to, for `listLibraryChanges`'s `epoch`. */
+                    "X-Jewelcase-Epoch"?: string;
                     /** @description The device schema version of the file (`PRAGMA user_version`). */
                     "X-Jewelcase-Schema"?: number;
+                    /** @description The size in bytes of the database the gzip inflates to, which the device needs room for besides the gzip. */
+                    "X-Jewelcase-Database-Size"?: number;
                     /** @description `no-store`. */
                     "Cache-Control"?: string;
-                    /** @description `gzip` when the client accepts it. */
-                    "Content-Encoding"?: string;
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/vnd.sqlite3": string;
+                    "application/gzip": string;
                 };
             };
-            /** @description Partial content (`Range`). A range applies to the encoding sent, so an interrupted download can resume. */
+            /** @description The range asked for (`Range`), of the file `If-Range` names if it is set, with the same headers as `200` and `Content-Range`. */
             206: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/gzip": string;
+                };
             };
             /** @description Not modified (`If-Modified-Since`). */
             304: {
@@ -4157,7 +4216,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Range not satisfiable. */
+            /** @description Range not satisfiable: the range starts at or past the end of the file, whose length `Content-Range` gives. */
             416: {
                 headers: {
                     [name: string]: unknown;
@@ -4173,6 +4232,49 @@ export interface operations {
                 content: {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    headLibraryCatalog: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    /** @description The size in bytes of the gzip file. */
+                    "Content-Length"?: number;
+                    /** @description The SHA-256 of the gzip file, in quotes. */
+                    ETag?: string;
+                    /** @description The library's feed position the file is current to. */
+                    "X-Jewelcase-Position"?: number;
+                    /** @description The run that position belongs to. */
+                    "X-Jewelcase-Epoch"?: string;
+                    /** @description The device schema version of the file (`PRAGMA user_version`). */
+                    "X-Jewelcase-Schema"?: number;
+                    /** @description The size in bytes of the database the gzip inflates to. */
+                    "X-Jewelcase-Database-Size"?: number;
+                    /** @description `no-store`. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `catalog_building` — the first build has not finished; try again after `Retry-After`. */
+            503: {
+                headers: {
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Problem"];
         };

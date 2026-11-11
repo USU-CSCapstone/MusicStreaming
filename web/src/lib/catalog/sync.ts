@@ -25,7 +25,7 @@ const PAGE = 1000;
 const REWOUND: readonly Kind[] = ['playlists', 'liked', 'hidden'];
 /** A catch-up of more than this share of a library's entities downloads its snapshot again. */
 const REDOWNLOAD_SHARE = 0.1;
-/** Downloads of a snapshot whose hash did not match its ETag, before giving up. */
+/** Downloads of a snapshot that did not match its ETag or would not inflate, before giving up. */
 const DOWNLOAD_TRIES = 3;
 /**
  * Answers of `503 catalog_building` waited out, before leaving the library to the next pull; and
@@ -53,16 +53,27 @@ const SLICE_MS = 50;
 const APPLY_CHUNK = 50;
 /** The most staged changes in one slice of an apply. */
 const APPLY_MAX = 1000;
+/**
+ * Room a new file needs besides its gzip and its database: the journal it keeps between
+ * transactions, which `Catalog::tune` limits to 16 MiB. The pool's reservation (`#reserve`)
+ * is of file slots, which take no room until written.
+ */
+const JOURNAL_BYTES = 16 * 1024 * 1024;
 /** Bytes copied from a download into the pool at a time. */
 const CHUNK = 1 << 20;
 /** Tries at reading or deleting the files, which fail while another worker holds the pool. */
 const WIPE_TRIES = 5;
 /** How long to wait between those tries. */
 const WIPE_WAIT_MS = 300;
-/** A download's file name: a plain OPFS file beside the pool, which the pool never sees. */
-const DOWNLOAD = (id: string) => `download-${id}.tmp`;
-/** Matches every name `DOWNLOAD` makes. */
-const DOWNLOADS = /^download-.*\.tmp$/;
+/**
+ * A download's file name: a plain OPFS file beside the pool, which the pool never sees, holding
+ * the gzipped snapshot of library `id` whose ETag is `etag`, or as much of it as has arrived.
+ */
+const DOWNLOAD = (id: string, etag: string) => `download-${id}-${etag}.tmp`;
+/** Matches a `DOWNLOAD` name, giving its library and ETag. */
+const DOWNLOADS = /^download-(\d+)-([0-9a-f]+)\.tmp$/;
+/** An ETag the device can check a snapshot against: a SHA-256 in lowercase hex. */
+const ETAG = /^[0-9a-f]{64}$/;
 
 /** The feeds' positions a file keeps: its library feed, its account feed, and its owner. */
 const LIBRARY = 'library';
@@ -74,11 +85,14 @@ const OWNER = 'owner';
 const FILE = /^lib-(\d+)-(\d+)\.db(-journal)?$/;
 
 /** One entry of a feed: `rows` are the entity's rows, by table, for anything but a delete. */
-type Change = { seq: number; op: string; kind: string; id: string; rows?: Rows };
+type Change = { position: number; op: string; kind: string; id: string; rows?: Rows };
 /** Rows by table name. */
 type Rows = Record<string, Record<string, unknown>[]>;
-/** A page of a feed: `next` is the position of its last change, `head` that of the feed. */
-type Page = { changes: Change[]; next: number; head: number };
+/**
+ * A page of a feed: `next` is the position of its last change, `head` that of the feed, and
+ * `epoch` the server's run they belong to, which the next page is asked with.
+ */
+type Page = { changes: Change[]; next: number; head: number; epoch: string };
 
 /** The messages of the realtime connection that make the worker pull. */
 type Heard = Extract<
@@ -91,11 +105,15 @@ type WorkerFile = FileSystemFileHandle & {
 	createSyncAccessHandle(): Promise<{
 		read(buffer: Uint8Array, options: { at: number }): number;
 		write(buffer: Uint8Array, options: { at: number }): number;
+		truncate(size: number): void;
 		getSize(): number;
 		flush(): void;
 		close(): void;
 	}>;
 };
+
+/** A download kept from an earlier try: its file, the ETag of what it holds, and its length. */
+type Partial = { name: string; etag: string; size: number };
 
 /** What went wrong that a person may need to know, such as a full disk. */
 export type Report = { message: string; quota: boolean };
@@ -157,6 +175,12 @@ class Offline extends Error {}
 
 /** The sync was closed while this was under way. */
 class Closed extends Error {}
+
+/**
+ * The device has no room for a snapshot: the account page says how much is missing, so nothing else
+ * reports it.
+ */
+class NoRoom extends Error {}
 
 /** The server's catalog is of another schema version than this build reads: a reload fixes it. */
 class Outdated extends Error {
@@ -222,6 +246,11 @@ export class CatalogSync {
 	/** The libraries whose snapshot is of another schema version, which this worker leaves be. */
 	#outdated = new Set<string>();
 	/**
+	 * The libraries whose snapshot was not downloaded for want of room, with what it needs and what
+	 * the device has.
+	 */
+	#noRoom = new Map<string, { need: number; free: number }>();
+	/**
 	 * The files part-way through applying staged changes, each with the end of its applies, which
 	 * never rejects. Until then a file holds part of a catch-up.
 	 */
@@ -264,16 +293,18 @@ export class CatalogSync {
 	 * Opens the files on the device, deleting any that cannot be trusted, and pulls if the network
 	 * may be there. Where OPFS is unavailable the sync stays inert and the device answers
 	 * nothing. Throws, also leaving it inert, if the pool cannot be read: that is a failure to
-	 * report, not an absence of OPFS.
+	 * report, not an absence of OPFS. Resolves with the IDs of the libraries that had a database
+	 * file in the pool, whether or not it was kept, so a caller can tell a file this worker deleted
+	 * itself from one that was not there; undefined where OPFS is unavailable.
 	 */
 	async start() {
 		if (!(await this.#hasOpfs())) {
 			this.#closed = true;
-			return;
+			return undefined;
 		}
+		let had: string[];
 		try {
 			const names = await this.#retrying(() => this.#names());
-			await this.#clearDownloads();
 			const found = new Map<string, { file: string; generation: number }[]>();
 			for (const name of names) {
 				const match = FILE.exec(name);
@@ -284,6 +315,7 @@ export class CatalogSync {
 					...(match[3] ? [] : [{ file: name, generation: Number(match[2]) }])
 				]);
 			}
+			had = [...found].filter(([, files]) => files.length > 0).map(([id]) => id);
 			await this.#reserve(2 * (found.size + 2));
 			for (const [id, files] of found) {
 				let kept: string | undefined;
@@ -303,6 +335,8 @@ export class CatalogSync {
 					void this.#pullLibrary(id);
 				}
 			}
+			// A library's first download goes on where a closed worker left it.
+			await this.#clearDownloads((id) => !this.catalogs.has(id));
 			// What a closed worker left made or unmade of the log, or a tab made with no worker to
 			// make it, is made as the log has it now.
 			for (const id of this.catalogs.keys()) void this.rebase(id);
@@ -311,6 +345,7 @@ export class CatalogSync {
 			throw error;
 		}
 		if (this.#online()) void this.#run('all', () => this.#pullAll());
+		return had;
 	}
 
 	/**
@@ -328,7 +363,7 @@ export class CatalogSync {
 				if (!catalog) {
 					if (!this.#failed.has(heard.libraryId))
 						void this.#run(ACCOUNT, () => this.#pullAccount(), true);
-				} else if (Number(catalog.cursor(LIBRARY)) < heard.seq) {
+				} else if (Number(catalog.cursor(LIBRARY)) < heard.position) {
 					void this.#pullLibrary(heard.libraryId, true);
 				}
 			});
@@ -413,12 +448,16 @@ export class CatalogSync {
 
 	/**
 	 * What each library on the device stands at, as the page is told whenever it changes: whether
-	 * it answers, and is part-way through an apply.
+	 * it answers and is part-way through an apply, and, for a library whose snapshot was left for
+	 * want of room, what that needs.
 	 */
 	state() {
 		const libraries: Record<string, LibraryState> = {};
 		for (const [id, catalog] of this.catalogs) {
 			libraries[id] = { onDevice: this.onDevice(id), applying: this.#applying.has(catalog) };
+		}
+		for (const [id, short] of this.#noRoom) {
+			libraries[id] = { ...(libraries[id] ?? { onDevice: false, applying: false }), noRoom: short };
 		}
 		return libraries;
 	}
@@ -474,7 +513,7 @@ export class CatalogSync {
 		if (!(await this.#hasOpfs())) return;
 		await this.#retrying(async () => {
 			for (const name of await this.#names()) await this.#remove(name);
-			await this.#clearDownloads();
+			await this.#clearDownloads(() => false);
 		});
 	}
 
@@ -538,7 +577,7 @@ export class CatalogSync {
 
 	/** Reports a failure other than the network's or a close's. */
 	#fail(error: unknown) {
-		if (error instanceof Offline || error instanceof Closed) return;
+		if (error instanceof Offline || error instanceof Closed || error instanceof NoRoom) return;
 		this.#report(describe(error));
 	}
 
@@ -560,6 +599,12 @@ export class CatalogSync {
 			(await this.#json<{ items: { id: string }[] }>('/libraries')).items.map(({ id }) => id)
 		);
 		for (const id of [...this.catalogs.keys()]) if (!listed.has(id)) await this.#lose(id);
+		// One still being written cannot be deleted; its next request is refused and deletes it.
+		await this.#clearDownloads((id) => listed.has(id)).catch(() => {});
+		// What was said of the room of a library the account no longer reaches goes too, file or not.
+		const lost = [...this.#noRoom.keys()].filter((id) => !listed.has(id));
+		for (const id of lost) this.#noRoom.delete(id);
+		if (lost.length > 0) this.#publish();
 		for (const id of listed) {
 			if (!this.catalogs.has(id) && !this.#failed.has(id)) void this.#pullLibrary(id);
 		}
@@ -581,7 +626,9 @@ export class CatalogSync {
 			void this.#pullLibrary(id, true);
 			return;
 		}
-		if (expired) void this.#run(`lib:${id}`, () => this.#syncLibrary(id, true));
+		// A repeat of the run once the new file is in is a catch-up, not another download.
+		if (expired)
+			void this.#run(`lib:${id}`, () => this.#syncLibrary(id, this.catalogs.get(id) === catalog));
 	}
 
 	/**
@@ -596,7 +643,7 @@ export class CatalogSync {
 		const liked = catalog.liked(this.#user, id);
 		let staged = 0;
 		for (;;) {
-			const response = await this.#get(`/me/changes?after=${after}&limit=${PAGE}`);
+			const response = await this.#get(`/me/changes?${this.#cursor(catalog, ACCOUNT, after)}`);
 			if (stale()) return true;
 			if (response.status === 410) return false;
 			const page = await this.#page(response);
@@ -610,7 +657,7 @@ export class CatalogSync {
 			);
 			await this.#queue;
 			if (stale()) return true;
-			catalog.stage(ACCOUNT, JSON.stringify(mine));
+			catalog.stage(ACCOUNT, page.epoch, JSON.stringify(mine));
 			collect(kinds, mine, liked);
 			staged += mine.length;
 			if (page.next >= page.head) {
@@ -662,7 +709,15 @@ export class CatalogSync {
 				if ((outcome === 'expired' || outcome === 'damaged') && ++rebuilds > 2) {
 					throw new Error('the library cannot be brought up to date');
 				}
-				catalog = await this.#boot(id, outcome === 'expired');
+				const held = catalog;
+				try {
+					catalog = await this.#boot(id, outcome === 'expired');
+				} catch (error) {
+					// No room for a new copy of a library too far behind: the copy held is caught up from the
+					// feed instead, which `fresh` lets run to the head.
+					if (!(error instanceof NoRoom) || !held || outcome !== 'far') throw error;
+					catalog = held;
+				}
 				if (!catalog) return;
 				fresh = true;
 			}
@@ -701,7 +756,9 @@ export class CatalogSync {
 		let pulled = 0;
 		const kinds = new Set<Kind>();
 		for (;;) {
-			const response = await this.#get(`/libraries/${id}/changes?after=${after}&limit=${PAGE}`);
+			const response = await this.#get(
+				`/libraries/${id}/changes?${this.#cursor(catalog, LIBRARY, after)}`
+			);
 			if (stale()) return 'current';
 			if (response.status === 410) return 'expired';
 			if (response.status === 404) {
@@ -714,7 +771,7 @@ export class CatalogSync {
 			collect(kinds, page.changes);
 			await this.#queue;
 			if (!fresh && pulled > this.#entities(id, catalog) * REDOWNLOAD_SHARE) return 'far';
-			catalog.stage(LIBRARY, JSON.stringify(page.changes));
+			catalog.stage(LIBRARY, page.epoch, JSON.stringify(page.changes));
 			if (page.next >= page.head) {
 				// The library feed writes no row a device write's undo holds (playlists, their items,
 				// hidden tracks), so the device's own writes stay as they are through it.
@@ -995,6 +1052,15 @@ export class CatalogSync {
 		}
 	}
 
+	/**
+	 * The query of a page of `feed` after position `after`: with the epoch `catalog` holds for it,
+	 * since the server goes on only from a position of a run it knows.
+	 */
+	#cursor(catalog: Catalog, feed: string, after: number) {
+		const epoch = after > 0 ? catalog.epoch(feed) : undefined;
+		return `after=${after}${epoch ? `&epoch=${epoch}` : ''}&limit=${PAGE}`;
+	}
+
 	/** The number of tracks, albums and artists in a library, from the totals of its listings. */
 	#entities(id: string, catalog: Catalog) {
 		return ['listTracks', 'listAlbums', 'listArtists']
@@ -1083,7 +1149,8 @@ export class CatalogSync {
 	 * announcing the library as changed.
 	 * Nothing shows until the swap. Undefined when the account does not reach the library. Unless
 	 * `forced`, a snapshot no newer than the copy's own position is not imported: it is asked for
-	 * again while the server builds a newer one, and the copy is returned if none comes.
+	 * again while the server builds a newer one, and the copy is returned if none comes. Throws
+	 * `NoRoom`, downloading nothing, when the device has no room for the snapshot ([`#room`](#room)).
 	 */
 	async #install(id: string, forced: boolean) {
 		await this.#mine();
@@ -1093,17 +1160,21 @@ export class CatalogSync {
 			return match?.[1] === id ? Math.max(latest, Number(match[2])) : latest;
 		}, 0);
 		const file = `lib-${id}-${generation + 1}.db`;
+		await this.#room(id);
 		// Every open file keeps its journal too, and the installs under way each add a new file.
 		await this.#reserve(2 * (this.catalogs.size + this.#booting + 2));
-		let seq: number;
+		let position: number;
+		let epoch: string;
 		for (let mismatches = 0, older = 0; ;) {
-			const response = await this.#snapshot(id);
+			const partial = await this.#partial(id);
+			const response = await this.#snapshot(id, partial);
 			if (!response) {
 				await this.#lose(id);
 				return undefined;
 			}
-			seq = Number(response.headers.get('x-jewelcase-seq'));
-			if (existing && !forced && seq <= Number(existing.cursor(LIBRARY))) {
+			position = Number(response.headers.get('x-jewelcase-position'));
+			epoch = response.headers.get('x-jewelcase-epoch') ?? '';
+			if (existing && !forced && position <= Number(existing.cursor(LIBRARY))) {
 				if (this.catalogs.get(id) === existing) {
 					void response.body?.cancel();
 					if (++older === BUILD_TRIES) return existing;
@@ -1113,10 +1184,11 @@ export class CatalogSync {
 				}
 			}
 			try {
-				await this.#import(id, file, response);
+				await this.#import(id, file, response, partial);
 				break;
 			} catch (error) {
-				const mismatch = error instanceof Error && error.message.includes('hash mismatch');
+				const mismatch =
+					error instanceof Error && /snapshot (hash mismatch|damaged)/.test(error.message);
 				if (!mismatch || ++mismatches === DOWNLOAD_TRIES) throw error;
 			}
 		}
@@ -1128,7 +1200,8 @@ export class CatalogSync {
 			}
 			await this.#queue;
 			// A new file stages nothing for these, so each is done in one call.
-			catalog.commit(LIBRARY, BigInt(seq), APPLY_CHUNK);
+			catalog.stage(LIBRARY, epoch, '[]');
+			catalog.commit(LIBRARY, BigInt(position), APPLY_CHUNK);
 			catalog.commit(OWNER, BigInt(this.#user), APPLY_CHUNK);
 			// The device's own writes show on the new copy as they did on the old.
 			await this.#replay(id, catalog, () => this.#closed, await this.#pending(id));
@@ -1141,6 +1214,7 @@ export class CatalogSync {
 		}
 		this.catalogs.get(id)?.free();
 		this.catalogs.set(id, catalog);
+		this.#noRoom.delete(id);
 		this.#publish();
 		await this.#removeFiles(id, file);
 		this.#announce(id, ALL);
@@ -1148,14 +1222,61 @@ export class CatalogSync {
 	}
 
 	/**
-	 * The snapshot's response, waiting out `503 catalog_building`; null where the account does
-	 * not reach the library. A snapshot of another schema version than this build's stops the
-	 * library's sync for good: only a reload, which brings the new build, helps.
+	 * Throws `NoRoom` unless the browser's storage estimate leaves room for library `id`'s
+	 * snapshot: its gzip (less what an earlier try already downloaded), the database it inflates
+	 * to, and a journal. The sizes come from a `HEAD`, and a download kept of another file is
+	 * deleted first, as the import would delete it. Where the browser gives no estimate, or the
+	 * server no sizes (it is building, or refuses), there is nothing to check against and the
+	 * download goes on to meet those answers itself. Records what is short for the account page,
+	 * and clears it once there is room.
 	 */
-	async #snapshot(id: string) {
+	async #room(id: string) {
+		if (!navigator.storage.estimate) return;
+		const head = await this.#get(`/libraries/${id}/catalog`, undefined, 'HEAD');
+		const zipped = Number(head.headers.get('content-length'));
+		const database = Number(head.headers.get('x-jewelcase-database-size'));
+		if (!head.ok || !(zipped > 0) || !(database > 0)) return;
+		// A download of another file is deleted before this one starts, so its room is free.
+		let kept = await this.#partial(id);
+		if (kept && kept.etag !== head.headers.get('etag')?.replaceAll('"', '')) {
+			await this.#unlink(kept.name);
+			kept = undefined;
+		}
+		const { quota, usage } = await navigator.storage
+			.estimate()
+			.catch(() => ({}) as StorageEstimate);
+		if (quota === undefined || usage === undefined) return;
+		const need = zipped - (kept?.size ?? 0) + database + JOURNAL_BYTES;
+		const free = Math.max(0, quota - usage);
+		if (need <= free) {
+			if (this.#noRoom.delete(id)) this.#publish();
+			return;
+		}
+		this.#noRoom.set(id, { need, free });
+		this.#publish();
+		throw new NoRoom();
+	}
+
+	/**
+	 * The snapshot's response, waiting out `503 catalog_building`; null where the account does
+	 * not reach the library, which deletes any `partial` download. With `partial`, only the rest
+	 * of the file it is part of is asked for, and a server whose file has changed since sends the
+	 * new one whole. A snapshot of another schema version than this build's stops the library's
+	 * sync for good: only a reload, which brings the new build, helps.
+	 */
+	async #snapshot(id: string, partial?: Partial) {
 		for (let tries = 0; tries < BUILD_TRIES; tries++) {
-			const response = await this.#get(`/libraries/${id}/catalog`);
+			const headers: Record<string, string> = partial
+				? { range: `bytes=${partial.size}-`, 'if-range': `"${partial.etag}"` }
+				: {};
+			const response = await this.#get(`/libraries/${id}/catalog`, headers);
+			if (response.status === 404 || response.status === 416) await this.#unlink(partial?.name);
 			if (response.status === 404) return null;
+			// The download is whole and only its import was cut short: it is asked for again whole.
+			if (response.status === 416 && partial) {
+				partial = undefined;
+				continue;
+			}
 			if (response.status !== 503) {
 				if (!response.ok) throw new Refused(response.status);
 				if (Number(response.headers.get('x-jewelcase-schema')) !== schemaVersion()) {
@@ -1166,30 +1287,47 @@ export class CatalogSync {
 				return response;
 			}
 			await this.#sleep(this.#retryAfter(response, 1));
+			// A build that has finished gives the sizes its `HEAD` could not, so they are checked before
+			// the download; while it still runs there are none, and this asks again.
+			await this.#room(id);
 		}
 		// Still building: a later pull asks again.
 		throw new Offline();
 	}
 
 	/**
-	 * Imports the snapshot of `response` into the pool as `file`. The body is first written to a
-	 * plain OPFS file beside the pool, so the network never holds the pool, which a transfer
-	 * takes whole; then one quick local pass copies it in, hashing it as it goes, and publishes
-	 * it only if the hash is the ETag.
+	 * Imports the gzipped snapshot of `response` into the pool as `file`. The body is first
+	 * written to a plain OPFS file beside the pool, so the network never holds the pool, which a
+	 * transfer takes whole; then one quick local pass inflates it in, hashing the gzip as it goes,
+	 * and publishes it only if the hash is the ETag. A `206` goes on from the end of `partial`,
+	 * the download an earlier try left; any other answer replaces it. A body that breaks off
+	 * leaves its download for the next try to go on from; anything else deletes it.
 	 */
-	async #import(id: string, file: string, response: Response) {
+	async #import(id: string, file: string, response: Response, partial?: Partial) {
 		const etag = response.headers.get('etag')?.replaceAll('"', '');
-		if (!etag || !response.body) throw new Error('the catalog file has no ETag');
+		if (!etag || !ETAG.test(etag) || !response.body) {
+			throw new Error('the catalog file has no ETag');
+		}
+		const start = Number(/^bytes (\d+)-/.exec(response.headers.get('content-range') ?? '')?.[1]);
+		const resumed = response.status === 206 && partial?.etag === etag && start === partial.size;
+		if (!resumed) await this.#unlink(partial?.name);
+		if (response.status === 206 && !resumed) {
+			void response.body.cancel();
+			throw new Error('the server sent part of a catalog file it was not asked for');
+		}
 		const root = await navigator.storage.getDirectory();
-		const name = DOWNLOAD(id);
+		const name = DOWNLOAD(id, etag);
+		let cut = false;
 		try {
 			const handle = (await root.getFileHandle(name, { create: true })) as WorkerFile;
 			const download = await handle.createSyncAccessHandle();
 			try {
+				let at = resumed ? start : 0;
+				download.truncate(at);
 				const reader = response.body.getReader();
-				let at = 0;
 				for (;;) {
 					const { done, value } = await reader.read().catch(() => {
+						cut = true;
 						throw this.#closed ? new Closed() : new Offline();
 					});
 					if (done) break;
@@ -1199,7 +1337,7 @@ export class CatalogSync {
 				download.flush();
 				await this.#pool(async () => {
 					const size = download.getSize();
-					const target = await Import.begin(file, size);
+					const target = await Import.begin(file);
 					// The copy below holds the worker until it is done.
 					this.#hold(true);
 					try {
@@ -1221,8 +1359,27 @@ export class CatalogSync {
 				download.close();
 			}
 		} finally {
-			await root.removeEntry(name).catch(() => {});
+			if (!cut) await this.#unlink(name);
 		}
+	}
+
+	/** The download an earlier try left of library `id`'s snapshot, if there is one. */
+	async #partial(id: string): Promise<Partial | undefined> {
+		const root = await navigator.storage.getDirectory();
+		for await (const [name, handle] of root.entries()) {
+			const [, library, etag] = DOWNLOADS.exec(name) ?? [];
+			if (library !== id || handle.kind !== 'file') continue;
+			const { size } = await (handle as FileSystemFileHandle).getFile();
+			if (size > 0) return { name, etag, size };
+		}
+		return undefined;
+	}
+
+	/** Deletes the plain OPFS file `name`, if there is one. */
+	async #unlink(name: string | undefined) {
+		if (!name) return;
+		const root = await navigator.storage.getDirectory();
+		await root.removeEntry(name).catch(() => {});
 	}
 
 	/** Whether the browser has OPFS at all, which it does not in Safari's private browsing. */
@@ -1235,10 +1392,13 @@ export class CatalogSync {
 		}
 	}
 
-	/** Deletes the downloads a closed worker left behind. */
-	async #clearDownloads() {
+	/** Deletes the downloads, except those of the libraries `keep` says yes to. */
+	async #clearDownloads(keep: (id: string) => boolean) {
 		const root = await navigator.storage.getDirectory();
-		for await (const name of root.keys()) if (DOWNLOADS.test(name)) await root.removeEntry(name);
+		for await (const name of root.keys()) {
+			const match = DOWNLOADS.exec(name);
+			if (match && !keep(match[1])) await root.removeEntry(name);
+		}
 	}
 
 	/** Runs `job` once the pool operations queued before it are done. */
@@ -1268,11 +1428,15 @@ export class CatalogSync {
 		return this.#pool(() => Catalog.open(file));
 	}
 
-	/** Fetches `path` of the API. */
-	async #get(path: string) {
+	/** Fetches `path` of the API with `method`, and any `headers`. */
+	async #get(path: string, headers?: Record<string, string>, method = 'GET') {
 		if (this.#closed) throw new Closed();
 		try {
-			return await this.#fetch(`${this.#api}${path}`, { signal: this.#abort.signal });
+			return await this.#fetch(`${this.#api}${path}`, {
+				method,
+				signal: this.#abort.signal,
+				headers
+			});
 		} catch {
 			throw this.#closed ? new Closed() : new Offline();
 		}

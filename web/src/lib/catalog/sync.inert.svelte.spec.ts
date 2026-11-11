@@ -9,8 +9,8 @@ it('without OPFS the sync does nothing: it asks the server for nothing and repor
 
 	await sync.start();
 	sync.message({ type: 'hello', deviceId: '1', serverTime: '' });
-	sync.message({ type: 'accountChanged', seq: 3 });
-	sync.message({ type: 'libraryChanged', libraryId: '1', seq: 3 });
+	sync.message({ type: 'accountChanged', position: 3 });
+	sync.message({ type: 'libraryChanged', libraryId: '1', position: 3 });
 	await sync.idle();
 	await sync.signOut();
 

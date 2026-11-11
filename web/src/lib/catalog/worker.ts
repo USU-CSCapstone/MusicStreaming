@@ -82,8 +82,11 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 		}
 		try {
 			if (data.type === 'start') {
-				await sync.start().catch((error) => post({ type: 'error', ...describe(error) }));
-				post({ type: 'started' });
+				const found = await sync.start().catch((error) => {
+					post({ type: 'error', ...describe(error) });
+					return undefined;
+				});
+				post({ type: 'started', found });
 			} else if (data.type === 'message') sync.message(data.message);
 			else if (data.type === 'pause') {
 				pausing = true;

@@ -14,7 +14,7 @@ const ACCOUNT_TABLES: &str = "'playlists', 'playlist_items', 'hidden_tracks'";
 /// can reach the copy, and none of the account tables; a tag type is copied only if one of the
 /// library's tags has it.
 ///
-/// Returns the library's feed position. It and the rows are read in one transaction, so the
+/// Returns the position of the library's feed. It and the rows are read in one transaction, so the
 /// copy is exactly the library as of that position. The schema's indexes are dropped for the
 /// copy and created again once it is committed, which is far cheaper than keeping them up to
 /// date row by row, and ends the read of the server's database sooner.
@@ -28,11 +28,10 @@ pub fn copy(conn: &mut Connection, library: i64) -> rusqlite::Result<i64> {
         tx.execute_batch(&format!("DROP INDEX main.{name}"))?;
     }
     // Read first: this opens the server database's snapshot, which every copy below shares.
-    let seq = tx.query_row(
-        "SELECT coalesce(max(seq), 0) FROM server.library_changes WHERE library_id = ?1",
-        [library],
-        |row| row.get(0),
-    )?;
+    let position =
+        tx.query_row("SELECT feed_head FROM server.libraries WHERE id = ?1", [library], |row| {
+            row.get(0)
+        })?;
     let tables: Vec<(String, String)> = tx
         .prepare(&format!(
             "SELECT m.name, group_concat(p.name, ', ') FROM sqlite_schema AS m, \
@@ -61,7 +60,7 @@ pub fn copy(conn: &mut Connection, library: i64) -> rusqlite::Result<i64> {
         tx.execute_batch(&sql)?;
     }
     tx.commit()?;
-    Ok(seq)
+    Ok(position)
 }
 
 #[cfg(test)]
