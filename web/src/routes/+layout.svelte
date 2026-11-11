@@ -19,7 +19,7 @@
 	import { queue } from '$lib/queue/client.svelte';
 	import { sender } from '$lib/sync/sender';
 	import { checkForUpdate } from '$lib/app-update';
-	import { realtime } from '$lib/realtime.svelte';
+	import { MAX_RETRY_MS, realtime } from '$lib/realtime.svelte';
 
 	let { data, children } = $props();
 
@@ -70,6 +70,27 @@
 		if (bare || !userId) return;
 		sender.start(userId);
 		return () => sender.stop();
+	});
+
+	// Offline, search is the device's: the library on screen has its index built ahead, in the
+	// background, rather than on the first search. Online, none is built, which the server's search
+	// makes needless. A lost connection counts once it has stayed lost for the reconnect's longest
+	// wait, so a server restart costs an online device nothing; no network, or working offline,
+	// counts at once. Only a change of that wait starts it again, so a network that comes and goes
+	// still counts.
+	const indexAfter = $derived(
+		connectivity.state === 'online'
+			? undefined
+			: connectivity.state === 'unreachable'
+				? MAX_RETRY_MS
+				: 0
+	);
+	$effect(() => {
+		const library = data.library?.id;
+		const wait = indexAfter;
+		if (bare || !data.me || !library || wait === undefined) return;
+		const timer = setTimeout(() => catalog.prepareIndex(library), wait);
+		return () => clearTimeout(timer);
 	});
 
 	// Working offline closes the realtime connection and keeps the workers from any request;

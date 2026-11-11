@@ -23,14 +23,20 @@ export class Harness {
 	private gone: string[] = [];
 	private told: Record<string, LibraryState>[] = [];
 	private heavies: boolean[] = [];
-	/** The `limit` of each `commit` since the last reset. */
+	/** The `limit` of each `commit` since the last reset, and of each `indexStep`. */
 	private commitLimits: number[] = [];
+	private indexLimits: number[] = [];
+	/** The `indexBegin`s since the last reset. */
+	indexBegins = 0;
 	/**
-	 * What a test asked the catalog's commits do: how long they seem to take (each none, and the
-	 * one after `slowAfter` more `slowCommit` ms, or their real time while unset).
+	 * What a test asked the catalog's calls do: how long commits seem to take (each none, and the
+	 * one after `slowAfter` more `slowCommit` ms, or their real time while unset), an index step's
+	 * size, a hook before one.
 	 */
 	private slowCommit?: number;
 	private slowAfter = 0;
+	private indexSlice?: number;
+	private beforeStep?: (step: number) => void;
 	/** The writes of the mutations the fake log holds, by library, in order. */
 	private log = new Map<string, Call[]>();
 	/** How many calls each `applyCalls` since the last reset was given. */
@@ -56,8 +62,12 @@ export class Harness {
 		this.told = [];
 		this.heavies = [];
 		this.commitLimits = [];
+		this.indexLimits = [];
+		this.indexBegins = 0;
 		this.slowCommit = undefined;
 		this.slowAfter = 0;
+		this.indexSlice = undefined;
+		this.beforeStep = undefined;
 		this.log = new Map();
 		this.applyBatches = [];
 	}
@@ -248,6 +258,26 @@ export class Harness {
 		return this.#sync!.onDevice(library);
 	}
 
+	/** Whether the library's file answers reads with its search index built. */
+	indexed(library: string) {
+		return this.#sync!.indexed(library);
+	}
+
+	/** Has the sync build the library's search index in the background. */
+	prepareIndex(library: string) {
+		this.#sync!.prepareIndex(library);
+	}
+
+	/**
+	 * Searches each of `libraries` at once, as tabs on different libraries do, and lets the rebuilds
+	 * they schedule run.
+	 */
+	async searchTogether(libraries: string[]) {
+		const params = { q: 'a', sectionLimit: 5 };
+		await Promise.all(libraries.map((library) => this.#sync!.query(library, 'search', params)));
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+
 	/** The IDs of the libraries on the device. */
 	libraries() {
 		return [...(this.#sync?.catalogs.keys() ?? [])].sort();
@@ -263,6 +293,11 @@ export class Harness {
 		return this.commitLimits;
 	}
 
+	/** How many `indexStep`s were made, and how many builds were begun. */
+	builds() {
+		return { steps: this.indexLimits.length, begins: this.indexBegins };
+	}
+
 	/**
 	 * Called by the catalog's `commit`: notes `limit`, and gives the ms the commit should seem to
 	 * take, or undefined for its real time.
@@ -274,6 +309,16 @@ export class Harness {
 	}
 
 	/**
+	 * Called by the catalog's `indexStep`: notes the step and runs the test's hook, and gives the
+	 * `limit` to use.
+	 */
+	beforeIndexStep(limit: number) {
+		this.indexLimits.push(limit);
+		this.beforeStep?.(this.indexLimits.length);
+		return this.indexSlice ?? limit;
+	}
+
+	/**
 	 * Makes the `commit` after `calls` more seem to take `ms`, as on a slow device, and every other
 	 * none, whatever the machine running the test takes; and forgets the limits so far.
 	 */
@@ -281,6 +326,40 @@ export class Harness {
 		this.slowAfter = calls;
 		this.slowCommit = ms;
 		this.commitLimits = [];
+	}
+
+	/**
+	 * Makes every `indexStep` do `limit` documents' worth, so a build of a small library takes many
+	 * slices.
+	 */
+	sliceIndexBy(limit: number) {
+		this.indexSlice = limit;
+	}
+
+	/**
+	 * Reads `library` just before the third slice of the build of `building`'s index, which a
+	 * search of it starts, and says what stood when the read was answered: the slices done, whether
+	 * the index was built, and whether the worker said it was busy.
+	 */
+	async readDuringBuild(building: string, library: string, name: string, params: object) {
+		const sync = this.#sync!;
+		let answered:
+			| Promise<{ steps: number; indexed: boolean; heavy: boolean | undefined }>
+			| undefined;
+		this.beforeStep = (step) => {
+			if (step !== 3) return;
+			answered = sync.query(library, name, params).then(() => ({
+				steps: this.indexLimits.length,
+				indexed: sync.indexed(building),
+				heavy: this.heavies.at(-1)
+			}));
+		};
+		try {
+			await sync.query(building, 'search', { q: 'a', sectionLimit: 5 });
+		} finally {
+			this.beforeStep = undefined;
+		}
+		return await answered;
 	}
 
 	/**
@@ -444,8 +523,8 @@ const now = performance.now.bind(performance);
 let behind = 0;
 performance.now = () => now() - behind;
 
-// The harness records the catalog's commits, and a test can time them.
-const { commit } = Catalog.prototype;
+// The harness records the catalog's long calls, and a test can time or slice them.
+const { commit, indexBegin, indexStep } = Catalog.prototype;
 Catalog.prototype.commit = function (feed, through, limit) {
 	const seems = harness.beforeCommit(limit);
 	const started = now();
@@ -454,6 +533,13 @@ Catalog.prototype.commit = function (feed, through, limit) {
 	} finally {
 		if (seems !== undefined) behind += now() - started - seems;
 	}
+};
+Catalog.prototype.indexBegin = function (library) {
+	harness.indexBegins++;
+	return indexBegin.call(this, library);
+};
+Catalog.prototype.indexStep = function (limit) {
+	return indexStep.call(this, harness.beforeIndexStep(limit));
 };
 const ready = init();
 

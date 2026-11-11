@@ -82,7 +82,9 @@ impl Catalog {
     /// applying through `through` (see `applying`); the transaction that applies the last moves
     /// the feed's position to `through` and clears the mark. Between two calls a reader sees part
     /// of the changes, so the caller keeps readers off the file until this says it is done.
-    /// Throws on a change that does not fit the schema, which leaves that chunk as it was.
+    /// Throws on a change that does not fit the schema, which leaves that chunk as it was. The last
+    /// commit gathers the planner's statistics where the library has grown to need them
+    /// (`jewelcase_catalog::statistics`).
     pub fn commit(&self, feed: &str, through: i64, limit: u32) -> Result<bool, JsError> {
         self.totals.clear();
         let tx = self.conn.unchecked_transaction()?;
@@ -136,6 +138,12 @@ impl Catalog {
             )?;
         }
         tx.commit()?;
+        if done {
+            // The planner's statistics follow the file as the feed grows it, by the rule the
+            // server's snapshot followed. They only make reads faster, so a failure to gather them
+            // leaves the apply as done as it is.
+            let _ = jewelcase_catalog::statistics::gather(&self.conn);
+        }
         Ok(done)
     }
 

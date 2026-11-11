@@ -26,15 +26,17 @@ pub fn schema_version() -> i32 {
 }
 
 /// The device database, held in WebAssembly memory and (for `open`) on OPFS, with the search
-/// index built from it once `buildIndex` has run, and the counted totals of lists it has answered,
-/// which every write to the file lets go of. A file holds one library. Call `free()` when done
-/// with one. A snapshot is imported under another file name and opened as a new `Catalog`, so an
-/// import needs no clearing.
+/// index built from it once `buildIndex` has run, or `indexBegin` and its `indexStep`s, and the
+/// counted totals of lists it has answered, which every write to the file lets go of. A file
+/// holds one library. Call `free()` when done with one. A snapshot is imported under another file
+/// name and opened as a new `Catalog`, so an import needs no clearing.
 #[wasm_bindgen]
 pub struct Catalog {
     conn: Connection,
     /// The search index, once built.
     index: Option<Index>,
+    /// The index build under way, between `indexBegin` and the `indexStep` that finishes it.
+    building: Option<query::Building>,
     /// The memo of counted totals, which every write to the file must clear.
     totals: Totals,
 }
@@ -110,7 +112,7 @@ impl Catalog {
     /// version's error says "newer", so the sync keeps that file for the build that wrote it.
     fn ready(conn: Connection) -> Result<Catalog, JsError> {
         Self::tune(&conn)?;
-        let catalog = Catalog { conn, index: None, totals: Totals::default() };
+        let catalog = Catalog { conn, index: None, building: None, totals: Totals::default() };
         match catalog.schema_version()? {
             0 => create_schema(&catalog.conn)?,
             SCHEMA_VERSION => {}

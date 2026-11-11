@@ -47,7 +47,7 @@ it('answers whether a download is under way while a start is still running, and 
 	await vi.waitFor(() => expect(work.running).toBe(true));
 	send({ type: 'busy', id: 2 });
 	await vi.waitFor(() => expect(said).toEqual([{ type: 'answer', id: 2, result: '1' }]));
-	const libraries = { '1': { onDevice: true, applying: false } };
+	const libraries = { '1': { onDevice: true, applying: false, indexed: true } };
 	work.state(libraries);
 	expect(said.at(-1)).toEqual({ type: 'state', libraries });
 	work.heavy(true);
