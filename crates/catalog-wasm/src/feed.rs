@@ -1,7 +1,8 @@
 //! Writing the device database from the feeds: changes staged a page at a time and applied at the
-//! head a chunk at a time (`design/general.md` §3), with the position each feed has reached and
-//! a mark while an apply is part-way. The staging, the positions and the marks are tables of the
-//! database file but not of the device schema, which a downloaded snapshot replaces whole.
+//! head a chunk at a time (`design/general.md` §3), with the position each feed has reached, the
+//! epoch of the server's run it was given in, and a mark while an apply is part-way. The staging,
+//! the positions and the marks are tables of the database file but not of the device schema, which
+//! a downloaded snapshot replaces whole.
 
 use std::collections::BTreeMap;
 
@@ -14,14 +15,15 @@ use wasm_bindgen::prelude::*;
 
 use super::Catalog;
 
-/// What a database file keeps besides the device schema: each feed's last applied position, the
-/// changes pulled past it that are not applied yet, and the position an apply that is part-way
-/// goes to.
+/// What a database file keeps besides the device schema: each feed's last applied position and
+/// the epoch of its latest page, the changes pulled past it that are not applied yet, and the
+/// position an apply that is part-way goes to. A change to these raises the schema version too.
 pub(crate) const FEED_STATE: &str = "\
-    CREATE TABLE IF NOT EXISTS feed_cursors (feed TEXT PRIMARY KEY, seq INTEGER NOT NULL) \
-        WITHOUT ROWID; \
+    CREATE TABLE IF NOT EXISTS feed_cursors ( \
+        feed TEXT PRIMARY KEY, position INTEGER NOT NULL, epoch TEXT \
+    ) WITHOUT ROWID; \
     CREATE TABLE IF NOT EXISTS staged_changes ( \
-        feed TEXT NOT NULL, seq INTEGER NOT NULL, change TEXT NOT NULL, PRIMARY KEY (feed, seq) \
+        feed TEXT NOT NULL, position INTEGER NOT NULL, change TEXT NOT NULL, PRIMARY KEY (feed, position) \
     ); \
     CREATE TABLE IF NOT EXISTS feed_applying (feed TEXT PRIMARY KEY, through INTEGER NOT NULL) \
         WITHOUT ROWID;";
@@ -30,7 +32,7 @@ pub(crate) const FEED_STATE: &str = "\
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Change {
-    seq: i64,
+    position: i64,
     op: Op,
     kind: Kind,
     id: String,
@@ -52,17 +54,25 @@ enum Op {
 #[wasm_bindgen]
 impl Catalog {
     /// Keeps `changes` (a JSON array of a feed's changes, such as a page of the feed's response)
-    /// for `feed` to apply later, replacing any already kept at the same positions. Nothing a
-    /// reader sees changes until `commit`.
-    pub fn stage(&self, feed: &str, changes: &str) -> Result<(), JsError> {
+    /// for `feed` to apply later, replacing any already kept at the same positions, and keeps
+    /// `epoch`, the page's, as the epoch the feed's positions are now asked in (see `epoch`).
+    /// Nothing a reader sees changes until `commit`.
+    pub fn stage(&self, feed: &str, epoch: &str, changes: &str) -> Result<(), JsError> {
         self.totals.clear();
         let changes: Vec<Change> = serde_json::from_str(changes)?;
         let tx = self.conn.unchecked_transaction()?;
+        // The server answered in `epoch` from this file's position, so its earlier positions go
+        // on in it too.
+        tx.prepare_cached(
+            "INSERT INTO feed_cursors (feed, position, epoch) VALUES (?1, 0, ?2) \
+             ON CONFLICT (feed) DO UPDATE SET epoch = excluded.epoch",
+        )?
+        .execute(params![feed, epoch])?;
         for change in &changes {
             tx.prepare_cached(
-                "INSERT OR REPLACE INTO staged_changes (feed, seq, change) VALUES (?1, ?2, ?3)",
+                "INSERT OR REPLACE INTO staged_changes (feed, position, change) VALUES (?1, ?2, ?3)",
             )?
-            .execute(params![feed, change.seq, serde_json::to_string(change)?])?;
+            .execute(params![feed, change.position, serde_json::to_string(change)?])?;
         }
         Ok(tx.commit()?)
     }
@@ -79,7 +89,7 @@ impl Catalog {
         let mut last = None;
         {
             let mut select = tx.prepare_cached(
-                "SELECT seq, change FROM staged_changes WHERE feed = ?1 ORDER BY seq LIMIT ?2",
+                "SELECT position, change FROM staged_changes WHERE feed = ?1 ORDER BY position LIMIT ?2",
             )?;
             let mut staged = select.query(params![feed, limit])?;
             while let Some(row) = staged.next()? {
@@ -103,7 +113,7 @@ impl Catalog {
         }
         if let Some(last) = last {
             tx.execute(
-                "DELETE FROM staged_changes WHERE feed = ?1 AND seq <= ?2",
+                "DELETE FROM staged_changes WHERE feed = ?1 AND position <= ?2",
                 params![feed, last],
             )?;
         }
@@ -115,7 +125,8 @@ impl Catalog {
         if done {
             tx.execute("DELETE FROM feed_applying WHERE feed = ?1", [feed])?;
             tx.execute(
-                "INSERT OR REPLACE INTO feed_cursors (feed, seq) VALUES (?1, ?2)",
+                "INSERT INTO feed_cursors (feed, position) VALUES (?1, ?2) \
+                 ON CONFLICT (feed) DO UPDATE SET position = excluded.position",
                 params![feed, through],
             )?;
         } else {
@@ -141,23 +152,35 @@ impl Catalog {
 
     /// The position `feed` was last applied through, or 0 if it never was.
     pub fn cursor(&self, feed: &str) -> Result<i64, JsError> {
-        let seq = self
+        let position = self
             .conn
-            .query_row("SELECT seq FROM feed_cursors WHERE feed = ?1", [feed], |row| row.get(0))
+            .query_row("SELECT position FROM feed_cursors WHERE feed = ?1", [feed], |row| {
+                row.get(0)
+            })
             .optional()?;
-        Ok(seq.unwrap_or(0))
+        Ok(position.unwrap_or(0))
+    }
+
+    /// The epoch of the server's run that `feed`'s positions were last given in, which a pull
+    /// sends with its position. Undefined before the first page is staged.
+    pub fn epoch(&self, feed: &str) -> Result<Option<String>, JsError> {
+        Ok(self
+            .conn
+            .query_row("SELECT epoch FROM feed_cursors WHERE feed = ?1", [feed], |row| row.get(0))
+            .optional()?
+            .flatten())
     }
 
     /// The position a pull of `feed` resumes after: its last staged change, or its cursor when
     /// none is staged.
     pub fn pulled(&self, feed: &str) -> Result<i64, JsError> {
         let staged: Option<i64> = self.conn.query_row(
-            "SELECT max(seq) FROM staged_changes WHERE feed = ?1",
+            "SELECT max(position) FROM staged_changes WHERE feed = ?1",
             [feed],
             |row| row.get(0),
         )?;
         match staged {
-            Some(seq) => Ok(seq),
+            Some(position) => Ok(position),
             None => self.cursor(feed),
         }
     }

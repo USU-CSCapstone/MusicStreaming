@@ -21,6 +21,10 @@ export type LibraryState = {
 	onDevice: boolean;
 	/** The file is part-way through applying a catch-up, so online reads go to the server. */
 	applying: boolean;
+	/**
+	 * Its snapshot was not downloaded because the device has less room than it needs, both in bytes.
+	 */
+	noRoom?: { need: number; free: number };
 };
 
 /** What the owner tells every tab of the catalog, and every tab holds. */
@@ -58,7 +62,14 @@ export type FromWorker =
 	/** Something went wrong that a person may need to know, such as a full disk. */
 	| { type: 'error'; message: string; quota: boolean }
 	/** The files are open, or could not be. */
-	| { type: 'started' }
+	| {
+			type: 'started';
+			/**
+			 * The libraries that had a database file at start, deleted or kept; absent if the start
+			 * failed or there is no OPFS.
+			 */
+			found?: string[];
+	  }
 	/** What each library on the device stands at now, sent whenever it changes. */
 	| { type: 'state'; libraries: Record<string, LibraryState> }
 	/**

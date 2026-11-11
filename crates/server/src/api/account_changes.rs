@@ -10,17 +10,17 @@ use jewelcase_catalog::sync::{Kind, Row, export_for};
 use rusqlite::{Connection, params};
 use serde::Serialize;
 
-use super::changes::{Changes, ChangesQuery, next};
+use super::changes::{Changes, ChangesQuery, head, next};
 use super::extract::Query;
 use super::scope::Caller;
-use super::{Code, Id, Problem};
-use crate::db::feed::Op;
+use super::{Id, Problem};
+use crate::db::feed::{Feed, Op};
 use crate::db::{Database, reaches};
 
 /// The spec's `AccountChange`.
 #[derive(Serialize)]
 pub struct Change {
-    seq: i64,
+    position: i64,
     op: Op,
     kind: Kind,
     id: Id,
@@ -32,35 +32,33 @@ pub struct Change {
 
 /// `listAccountChanges`: the caller's changes after `after`, at most `limit`, each upsert with
 /// the playlist's or item's current rows, read from one snapshot. Only libraries the caller
-/// reaches are listed. `after` beyond the caller's latest change is `410 cursor_expired`.
+/// reaches are listed. A position this run cannot go on from is `410 cursor_expired`.
 pub async fn list(
     State(db): State<Arc<Database>>,
     caller: Caller,
     Query(query): Query<ChangesQuery>,
 ) -> Result<Json<Changes<Change>>, Problem> {
-    let (after, limit) = query.check()?;
-    db.try_read(move |conn| read(conn, caller, after, limit)).await.map(Json)
+    let (after, epoch, limit) = query.check()?;
+    let current = db.epoch();
+    db.try_read(move |conn| read(conn, caller, (after, epoch), limit, current)).await.map(Json)
 }
 
-/// The changes of `caller` after `after` as [`list`] answers them.
+/// The changes of `caller` after the cursor `(after, epoch)` as [`list`] answers them, in run
+/// `current`.
 fn read(
     conn: &Connection,
     caller: Caller,
-    after: i64,
+    (after, epoch): (i64, Option<i64>),
     limit: u32,
+    current: i64,
 ) -> Result<Changes<Change>, Problem> {
-    let head: i64 = conn
-        .prepare_cached("SELECT coalesce(max(seq), 0) FROM account_changes WHERE user_id = ?1")?
-        .query_row([caller.user], |row| row.get(0))?;
-    if after > head {
-        return Err(Problem::new(Code::CursorExpired));
-    }
+    let head = head(conn, Feed::Account(caller.user), epoch, after)?;
     // A library the caller lost is stepped over; its playlists are not theirs to read now.
     let listed: Vec<(i64, i64, String, i64, i64, String)> = conn
         .prepare_cached(&format!(
-            "SELECT c.seq, c.library_id, c.kind, c.entity_id, c.item_key, c.op \
-             FROM account_changes AS c WHERE c.user_id = ?1 AND c.seq > ?2 AND {} \
-             ORDER BY c.seq LIMIT ?4",
+            "SELECT c.position, c.library_id, c.kind, c.entity_id, c.item_key, c.op \
+             FROM account_changes AS c WHERE c.user_id = ?1 AND c.position > ?2 AND {} \
+             ORDER BY c.position LIMIT ?4",
             reaches!(admin: "?3", user: "?1", library: "c.library_id")
         ))?
         .query_map(params![caller.user, after, caller.admin, limit], |row| {
@@ -69,7 +67,7 @@ fn read(
         .collect::<rusqlite::Result<_>>()?;
     let next = next(listed.last().map(|row| row.0), listed.len(), limit, head);
     let mut changes = Vec::with_capacity(listed.len());
-    for (seq, library, kind, entity, item_key, op) in listed {
+    for (position, library, kind, entity, item_key, op) in listed {
         let (kind, key) = match kind.as_str() {
             "playlist" => (Kind::Playlist, None),
             "hiddenTrack" => (Kind::HiddenTrack, None),
@@ -85,9 +83,9 @@ fn read(
             };
             (Op::Upsert, Some(rows.tables))
         };
-        changes.push(Change { seq, op, kind, id: Id(entity), key, rows });
+        changes.push(Change { position, op, kind, id: Id(entity), key, rows });
     }
-    Ok(Changes { changes, next, head })
+    Ok(Changes { changes, next, head, epoch: Id(current) })
 }
 
 #[cfg(test)]

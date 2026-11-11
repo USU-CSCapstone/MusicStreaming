@@ -1,10 +1,12 @@
 import { page } from 'vitest/browser';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
+import { claim, remember } from '$lib/last-known';
 
 const fake = vi.hoisted(() => ({
 	calls: [] as string[],
-	role: 'owner' as 'owner' | 'admin' | 'user'
+	role: 'owner' as 'owner' | 'admin' | 'user',
+	libraries: {} as Record<string, object>
 }));
 
 vi.mock('$lib/realtime.svelte', () => ({
@@ -18,7 +20,10 @@ vi.mock('$lib/realtime.svelte', () => ({
 }));
 vi.mock('$lib/catalog/client.svelte', () => ({
 	catalog: {
-		signOut: async () => void fake.calls.push('wipe')
+		signOut: async () => void fake.calls.push('wipe'),
+		get libraries() {
+			return fake.libraries;
+		}
 	}
 }));
 vi.mock('$lib/last-known', async (original) => ({
@@ -49,6 +54,7 @@ const { memoryEnv } = await import('$lib/sync/store');
 beforeEach(() => {
 	fake.calls.length = 0;
 	fake.role = 'owner';
+	fake.libraries = {};
 	localStorage.clear();
 	// The wait for the server is never over, so the page does not go to the login page.
 	vi.useFakeTimers({ toFake: ['setTimeout'] });
@@ -139,4 +145,52 @@ it('offers administration to an admin, and not to a user', async () => {
 	render(Account, { data: { connectable: [] } } as never);
 	await expect.element(page.getByRole('heading', { name: 'Devices' })).toBeVisible();
 	expect(admin.elements()).toHaveLength(0);
+});
+
+it('says plainly, per library, what the device holds and which download it left for want of room', async () => {
+	claim('1');
+	remember({
+		libraries: {
+			items: [
+				{ id: '1', name: 'Main' },
+				{ id: '2', name: 'Vinyl' }
+			] as never
+		}
+	});
+	fake.libraries = {
+		'1': { onDevice: true, applying: false, indexed: false },
+		'2': {
+			onDevice: false,
+			applying: false,
+			indexed: false,
+			noRoom: { need: 540_000_000, free: 120_000_000 }
+		}
+	};
+	render(Account, { data: { connectable: [] } } as never);
+	await expect.element(page.getByText('On this device', { exact: true })).toBeVisible();
+	await expect.element(page.getByText('Main')).toBeVisible();
+	await expect.element(page.getByText('Vinyl')).toBeVisible();
+	await expect
+		.element(page.getByText('Not downloaded: a copy needs 540 MB free and this device has 120 MB.'))
+		.toBeVisible();
+});
+
+it('says of a library already on the device that its new copy was not downloaded, and that it keeps up from the changes', async () => {
+	fake.libraries = {
+		'1': {
+			onDevice: true,
+			applying: false,
+			indexed: false,
+			noRoom: { need: 540_000_000, free: 120_000_000 }
+		}
+	};
+	render(Account, { data: { connectable: [] } } as never);
+	await expect
+		.element(
+			page.getByText(
+				'Not downloaded again: a new copy needs 540 MB free and this device has 120 MB.'
+			)
+		)
+		.toBeVisible();
+	await expect.element(page.getByText('It keeps up with the server’s changes')).toBeVisible();
 });

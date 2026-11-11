@@ -65,31 +65,32 @@ pub fn start(db: Arc<Database>, hub: Arc<Hub>) -> JoinHandle<()> {
                     (libraries.due(now), accounts.due(now))
                 }
             };
-            for (library, seq) in library_hints {
-                send(&db, &hub, library, seq).await;
+            for (library, position) in library_hints {
+                send(&db, &hub, library, position).await;
             }
-            for (user, seq) in account_hints {
-                hub.broadcast(user, &ServerMessage::AccountChanged { seq });
+            for (user, position) in account_hints {
+                hub.broadcast(user, &ServerMessage::AccountChanged { position });
             }
         }
     })
 }
 
-/// The query for each library with changes after `?1`, and its latest position.
-const LIBRARIES: &str =
-    "SELECT library_id, max(seq) FROM library_changes WHERE seq > ?1 GROUP BY library_id";
+/// The query for each library with changes after the internal sequence number `?1`: its ID,
+/// its latest sequence number, and its own feed's head, which is what a client is told.
+const LIBRARIES: &str = "SELECT c.library_id, max(c.seq), l.feed_head FROM library_changes AS c \
+     JOIN libraries AS l ON l.id = c.library_id WHERE c.seq > ?1 GROUP BY c.library_id";
 
-/// The query for each account with changes after `?1`, and its latest position.
-const ACCOUNTS: &str =
-    "SELECT user_id, max(seq) FROM account_changes WHERE seq > ?1 GROUP BY user_id";
+/// The query for each account with changes after `?1`, as [`LIBRARIES`] finds libraries.
+const ACCOUNTS: &str = "SELECT c.user_id, max(c.seq), u.feed_head FROM account_changes AS c \
+     JOIN users AS u ON u.id = c.user_id WHERE c.seq > ?1 GROUP BY c.user_id";
 
-/// Each library or account `sql` finds with changes after `seen`, and its latest position. An
-/// error is logged and reads as no change.
-async fn moved_since(db: &Database, sql: &'static str, seen: i64) -> Vec<(i64, i64)> {
+/// Each library or account `sql` finds with changes after `seen`, as `(key, seq, position)`:
+/// its latest sequence number and its own feed's head. An error is logged and reads as no change.
+async fn moved_since(db: &Database, sql: &'static str, seen: i64) -> Vec<(i64, i64, i64)> {
     let moved = db
         .read(move |conn| {
             conn.prepare_cached(sql)?
-                .query_map([seen], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .query_map([seen], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
                 .collect()
         })
         .await;
@@ -99,21 +100,23 @@ async fn moved_since(db: &Database, sql: &'static str, seen: i64) -> Vec<(i64, i
     })
 }
 
-/// The latest position `seen` moved to, given what [`moved_since`] found.
-fn advance(seen: i64, moved: &[(i64, i64)]) -> i64 {
-    moved.iter().map(|&(_, seq)| seq).fold(seen, i64::max)
+/// The latest sequence number `seen` moved to, given what [`moved_since`] found.
+fn advance(seen: i64, moved: &[(i64, i64, i64)]) -> i64 {
+    moved.iter().map(|&(_, seq, _)| seq).fold(seen, i64::max)
 }
 
-/// What `throttle` lets through of `moved` at `now`: the positions to hint at once.
-fn hinted(throttle: &mut Throttle, now: Instant, moved: Vec<(i64, i64)>) -> Vec<(i64, i64)> {
+/// What `throttle` lets through of `moved` at `now`: the feeds' positions to hint at once.
+fn hinted(throttle: &mut Throttle, now: Instant, moved: Vec<(i64, i64, i64)>) -> Vec<(i64, i64)> {
     moved
         .into_iter()
-        .filter_map(|(key, seq)| throttle.moved(now, key, seq).map(|seq| (key, seq)))
+        .filter_map(|(key, _, position)| {
+            throttle.moved(now, key, position).map(|position| (key, position))
+        })
         .collect()
 }
 
 /// Sends `libraryChanged` to each connection of each active account that reaches `library`.
-async fn send(db: &Database, hub: &Hub, library: i64, seq: i64) {
+async fn send(db: &Database, hub: &Hub, library: i64, position: i64) {
     let users = db
         .read(move |conn| {
             conn.prepare_cached(&format!(
@@ -126,7 +129,7 @@ async fn send(db: &Database, hub: &Hub, library: i64, seq: i64) {
         .await;
     match users {
         Ok(users) => {
-            let message = ServerMessage::LibraryChanged { library_id: Id(library), seq };
+            let message = ServerMessage::LibraryChanged { library_id: Id(library), position };
             for user in users {
                 hub.broadcast(user, &message);
             }
@@ -148,18 +151,18 @@ struct Window {
 }
 
 impl Throttle {
-    /// Notes that `library` moved to `seq` at `now`. Returns the position to hint at once if the
-    /// library's window has ended, and otherwise holds it for [`due`](Self::due) and returns
+    /// Notes that `library` moved to `position` at `now`. Returns the position to hint at once if
+    /// the library's window has ended, and otherwise holds it for [`due`](Self::due) and returns
     /// `None`.
-    pub(super) fn moved(&mut self, now: Instant, library: i64, seq: i64) -> Option<i64> {
+    pub(super) fn moved(&mut self, now: Instant, library: i64, position: i64) -> Option<i64> {
         match self.0.get_mut(&library) {
             Some(window) if now < window.opened + WINDOW => {
-                window.pending = window.pending.max(Some(seq));
+                window.pending = window.pending.max(Some(position));
                 None
             }
             _ => {
                 self.0.insert(library, Window { opened: now, pending: None });
-                Some(seq)
+                Some(position)
             }
         }
     }
@@ -170,10 +173,10 @@ impl Throttle {
         let mut due = Vec::new();
         for (&library, window) in &mut self.0 {
             if now >= window.opened + WINDOW
-                && let Some(seq) = window.pending.take()
+                && let Some(position) = window.pending.take()
             {
                 window.opened = now;
-                due.push((library, seq));
+                due.push((library, position));
             }
         }
         due

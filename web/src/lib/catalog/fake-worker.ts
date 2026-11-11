@@ -37,11 +37,17 @@ export class Harness {
 	applyBatches: number[] = [];
 	#sync: CatalogSync | undefined;
 
-	/** Closes any sync, deletes every file, and clears the fake server, with the snapshot to serve. */
+	/**
+	 * Closes any sync, deletes every file and download, and clears the fake server, with the
+	 * database to serve as the snapshot.
+	 */
 	async reset(snapshot: Uint8Array) {
 		await this.#sync?.close();
 		for (const name of await storeNames()) await storeRemove(name);
+		const root = await navigator.storage.getDirectory();
+		for (const name of await this.downloads()) await root.removeEntry(name);
 		this.api = new FakeApi();
+		delete (navigator.storage as { estimate?: unknown }).estimate;
 		await this.api.setSnapshot(snapshot);
 		this.reports = [];
 		this.changed = [];
@@ -56,7 +62,10 @@ export class Harness {
 		this.applyBatches = [];
 	}
 
-	/** Starts a new sync for `user` as a restarted worker does, closing the old one. */
+	/**
+	 * Starts a new sync for `user` as a restarted worker does, closing the old one. Resolves with
+	 * the libraries the sync says had a database file at its start.
+	 */
 	async start(user = '1') {
 		await this.#sync?.close();
 		this.#sync = new CatalogSync({
@@ -73,7 +82,7 @@ export class Harness {
 			lost: (library) => void this.gone.push(library),
 			pending: async (library) => this.log.get(library) ?? []
 		});
-		await this.#sync.start();
+		return this.#sync.start();
 	}
 
 	/** Sets the writes of the mutations the log holds for `library`, as the sender keeps them. */
@@ -129,6 +138,31 @@ export class Harness {
 	/** How many writes the library's file holds that it can take back. */
 	applied(library: string) {
 		return this.#sync!.catalogs.get(library)!.applied();
+	}
+
+	/**
+	 * Makes the browser's storage estimate say the origin has `quota` bytes and uses `usage` of
+	 * them besides the downloads kept, which it counts as the browser does.
+	 */
+	storage(quota: number, usage: number) {
+		(navigator.storage as { estimate: unknown }).estimate = async () => {
+			const root = await navigator.storage.getDirectory();
+			let kept = 0;
+			for (const name of await this.downloads()) {
+				kept += (await (await root.getFileHandle(name)).getFile()).size;
+			}
+			return { quota, usage: usage + kept };
+		};
+	}
+
+	/** Makes the browser give no storage estimate at all. */
+	noEstimate() {
+		(navigator.storage as { estimate: unknown }).estimate = undefined;
+	}
+
+	/** The paths of the `HEAD`s the fake server was asked. */
+	heads() {
+		return this.api.heads;
 	}
 
 	/** What the sync has reported. */
@@ -335,6 +369,11 @@ export class Harness {
 		return Number(this.#sync!.catalogs.get(library)!.cursor(feed));
 	}
 
+	/** The epoch the library's file holds for `feed`. */
+	epoch(library: string, feed: string) {
+		return this.#sync!.catalogs.get(library)!.epoch(feed);
+	}
+
 	/** The position the library's next pull of `feed` resumes after. */
 	pulled(library: string, feed: string) {
 		return Number(this.#sync!.catalogs.get(library)!.pulled(feed));
@@ -357,10 +396,14 @@ export class Harness {
 		catalog.free();
 	}
 
-	/** Leaves a download file at the OPFS root, as a worker closed mid-download does. */
-	async leaveDownload(name: string) {
+	/**
+	 * Leaves a download file holding `bytes` at the OPFS root, as a worker closed mid-download does.
+	 */
+	async leaveDownload(name: string, bytes: Uint8Array = new Uint8Array(0)) {
 		const root = await navigator.storage.getDirectory();
-		await root.getFileHandle(name, { create: true });
+		const writable = await (await root.getFileHandle(name, { create: true })).createWritable();
+		await writable.write(bytes as BlobPart);
+		await writable.close();
 	}
 
 	/** The names of the download files at the OPFS root. */
