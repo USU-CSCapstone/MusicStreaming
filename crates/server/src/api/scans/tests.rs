@@ -147,15 +147,27 @@ async fn the_list_is_what_is_under_way_and_the_last_finished_scan() {
         [root],
     )
     .unwrap();
+    // Scopes that are an array, as the column requires, but of something no scan writes.
+    conn.execute(
+        "INSERT INTO scans (id, library_id, trigger, state, scopes, created_at) \
+         VALUES (18, 1, 'manual', 'queued', '[\"x\", 1, null]', 8)",
+        [],
+    )
+    .unwrap();
 
     let (status, list) = json(&app, SCANS).await;
     assert_eq!(status, StatusCode::OK);
     let items = list["items"].as_array().unwrap();
     let ids: Vec<&Value> = items.iter().map(|scan| &scan["id"]).collect();
-    assert_eq!(ids, [&json!("15"), &json!("14"), &json!("12")], "up next, running, last that ran");
-    assert_eq!(items[1]["currentFolder"], "Album/Disc 1", "relative to its root");
-    assert_eq!(items[1]["filesSeen"], 7);
-    assert_eq!(items[1]["startedAt"], "1970-01-01T00:00:00.004Z");
+    assert_eq!(
+        ids,
+        [&json!("18"), &json!("15"), &json!("14"), &json!("12")],
+        "queued, up next, running, last that ran"
+    );
+    assert_eq!(items[0]["wholeLibrary"], false, "scopes it cannot read cover nothing");
+    assert_eq!(items[2]["currentFolder"], "Album/Disc 1", "relative to its root");
+    assert_eq!(items[2]["filesSeen"], 7);
+    assert_eq!(items[2]["startedAt"], "1970-01-01T00:00:00.004Z");
     assert_eq!(items[0]["startedAt"], Value::Null, "a queued scan has not started");
 }
 
