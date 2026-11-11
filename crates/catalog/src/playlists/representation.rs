@@ -3,19 +3,19 @@
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
-use crate::api::refs::ImageRef;
-use crate::api::time::serialize_rfc3339;
-use crate::api::{Id, hidden};
+use crate::refs::ImageRef;
+use crate::time::serialize_rfc3339;
+use crate::{Id, hidden};
 
 /// The spec's `Playlist`. `image` is the generated artwork (`artwork`), `customImage` is false
 /// as custom images are not served yet, and `personal` is left out.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Playlist {
-    pub(super) id: Id,
-    pub(super) library_id: Id,
+    pub id: Id,
+    pub library_id: Id,
     /// `liked` for the user's Liked Songs, `saved` for the rest (`requirements/playlists.md` §11).
-    kind: String,
+    pub kind: String,
     title: String,
     description: Option<String>,
     image: Option<ImageRef>,
@@ -27,7 +27,7 @@ pub struct Playlist {
     created_at: i64,
     #[serde(serialize_with = "serialize_rfc3339")]
     modified_at: i64,
-    pub(super) version: i64,
+    pub version: i64,
 }
 
 impl Playlist {

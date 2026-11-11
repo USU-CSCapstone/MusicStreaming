@@ -19,7 +19,9 @@ use artist::refresh_artist;
 use tag::refresh_tag;
 
 pub use album::recompute_album_loudness;
-pub use art::{mosaic_id, playlist as playlist_artwork};
+pub use art::mosaic_id;
+#[cfg(test)]
+pub use art::playlist as playlist_artwork;
 
 mod album;
 mod art;

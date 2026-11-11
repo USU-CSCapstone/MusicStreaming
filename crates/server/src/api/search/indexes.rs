@@ -15,7 +15,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-use jewelcase_core::{Document, Index};
+use jewelcase_catalog::search::documents;
+use jewelcase_core::Index;
 use rusqlite::Connection;
 
 use super::tagged::TaggedSets;
@@ -147,30 +148,6 @@ async fn build(db: &Database, library: i64) -> Result<Built, DbError> {
             DbError::Aborted
         })?;
     Ok(Built { index: Arc::new(index), version, ready: Instant::now(), took: started.elapsed() })
-}
-
-/// The library's tracks, albums and artists, as the core's rule makes them documents.
-fn documents(conn: &Connection, library: i64) -> rusqlite::Result<Vec<Document>> {
-    let mut documents = Vec::new();
-    let mut tracks = conn.prepare_cached("SELECT id, title FROM tracks WHERE library_id = ?1")?;
-    for track in
-        tracks.query_map([library], |row| Ok(Document::from_track(row.get(0)?, row.get(1)?)))?
-    {
-        documents.push(track?);
-    }
-    let mut albums = conn.prepare_cached("SELECT id, title FROM albums WHERE library_id = ?1")?;
-    for album in
-        albums.query_map([library], |row| Ok(Document::from_album(row.get(0)?, row.get(1)?)))?
-    {
-        documents.extend(album?);
-    }
-    let mut artists = conn.prepare_cached("SELECT id, name FROM artists WHERE library_id = ?1")?;
-    for artist in
-        artists.query_map([library], |row| Ok(Document::from_artist(row.get(0)?, row.get(1)?)))?
-    {
-        documents.extend(artist?);
-    }
-    Ok(documents)
 }
 
 #[cfg(test)]
