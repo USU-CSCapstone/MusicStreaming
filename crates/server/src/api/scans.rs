@@ -35,8 +35,9 @@ pub struct Scan {
     updated: i64,
     missing: i64,
     problems: i64,
-    /// The folder being scanned, relative to its root: never a path on the server
-    /// (`requirements/general.md` §3.7).
+    /// The folder being scanned, relative to whichever of the library's roots holds it: never a
+    /// path on the server (`requirements/general.md` §3.7). Which root is not said, since roots
+    /// are not served.
     current_folder: Option<String>,
 }
 
@@ -81,21 +82,31 @@ pub async fn start(
 
 /// `adminListScans`: the library's queued and running scans, and the last one to finish, newest
 /// first. The running scan and any queued after it are what is under way; the finished one is
-/// how the library was last scanned, which retention always keeps (`db::retention`).
+/// how the library was last scanned, which retention always keeps (`db::retention`). That is the
+/// last scan that ran, completed or suspended: a cancelled one never ran, so it is left out.
+/// A row that cannot be read is logged and left out, so one bad row hides only itself.
 pub async fn list(
     State(db): State<Arc<Database>>,
     Scope { library, .. }: Scope,
 ) -> Result<Json<Scans>, Problem> {
     let items = db
         .read(move |conn| {
-            conn.prepare_cached(&format!(
+            let mut stmt = conn.prepare_cached(&format!(
                 "{SELECT} WHERE library_id = ?1 AND (state IN ('queued', 'running') \
-                 OR id = (SELECT id FROM scans WHERE library_id = ?1 AND finished_at IS NOT NULL \
+                 OR id = (SELECT id FROM scans WHERE library_id = ?1 \
+                          AND state IN ('completed', 'suspended') \
                           ORDER BY created_at DESC, id DESC LIMIT 1)) \
                  ORDER BY created_at DESC, id DESC"
-            ))?
-            .query_map([library], scan)?
-            .collect()
+            ))?;
+            let rows = stmt.query_map([library], |row| match scan(row) {
+                Ok(found) => Ok(Some(found)),
+                Err(error) => {
+                    let id: i64 = row.get(0)?;
+                    tracing::error!(library, scan = id, %error, "scan row cannot be read; skipping it");
+                    Ok(None)
+                }
+            })?;
+            rows.filter_map(Result::transpose).collect::<rusqlite::Result<Vec<_>>>()
         })
         .await?;
     Ok(Json(Scans { items }))

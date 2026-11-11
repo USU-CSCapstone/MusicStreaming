@@ -52,8 +52,9 @@ fn scan(conn: &Connection, id: i64, library: i64, state: &str, created: i64) -> 
     .map(drop)
 }
 
-/// Finished scans past the window go, but each library keeps its last finished scan and its
-/// last completed one, however old, whatever the other library holds. A running scan stays.
+/// Finished scans past the window go, but each library keeps its last scan that ran and its
+/// last completed one, however old, whatever the other library holds. A cancelled scan never
+/// ran, so it is not kept for being the last. A running scan stays.
 #[test]
 fn finished_scans_age_out_but_each_library_keeps_its_last() {
     let (_temp, db) = open(|conn| {
@@ -64,11 +65,11 @@ fn finished_scans_age_out_but_each_library_keeps_its_last() {
         scan(conn, 5, 1, "running", NOW - 40 * DAY)?;
         scan(conn, 9, 1, "completed", NOW - 28 * DAY)?;
         scan(conn, 6, 2, "completed", NOW - 50 * DAY)?;
-        scan(conn, 7, 2, "cancelled", NOW - 45 * DAY)?;
+        scan(conn, 7, 2, "suspended", NOW - 45 * DAY)?;
         scan(conn, 8, 2, "cancelled", NOW - 40 * DAY)
     });
     sweep(&db, NOW);
-    assert_eq!(column(&db, "SELECT id FROM scans ORDER BY id"), [4, 5, 6, 8, 9]);
+    assert_eq!(column(&db, "SELECT id FROM scans ORDER BY id"), [4, 5, 6, 7, 9]);
 }
 
 #[test]

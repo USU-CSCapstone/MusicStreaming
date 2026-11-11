@@ -1,7 +1,6 @@
 //! What the plugins' tests share: a small catalog, plugins installed with real manifests and
 //! granted and enabled as an admin does it, and the steps only a running plugin can take.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use jewelcase_plugins::{Manifest, Permission, manifest};
@@ -54,7 +53,7 @@ pub async fn database() -> (tempfile::TempDir, Arc<Database>) {
 
 /// The plugins over `db`, keeping their files in `temp`, with no scanners.
 pub fn plugins(temp: &tempfile::TempDir, db: &Arc<Database>) -> Arc<Plugins> {
-    Arc::new(Plugins::new(db.clone(), temp.path().join("plugins"), HashMap::new()))
+    Arc::new(Plugins::new(db.clone(), temp.path().join("plugins"), Arc::default()))
 }
 
 /// A manifest for plugin `id`, named after it and built against the contract, that asks for
