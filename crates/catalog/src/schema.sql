@@ -192,3 +192,53 @@ CREATE TABLE artist_tags (
 ) STRICT, WITHOUT ROWID;
 
 CREATE INDEX artist_tags_by_tag ON artist_tags (tag_id, artist_id);
+
+-- The account's own playlists, which the account feed (`GET /me/changes`) carries: only the
+-- signed-in user's, so the rows have no owner. Never in a library's snapshot, which every
+-- account that reaches the library shares.
+CREATE TABLE playlists (
+    id          INTEGER PRIMARY KEY,
+    library_id  INTEGER NOT NULL,
+    -- 'liked' for the user's Liked Songs, whose items are their likes, and 'saved' for the rest
+    kind        TEXT    NOT NULL DEFAULT 'saved' CHECK (kind IN ('saved', 'liked')),
+    title       TEXT    NOT NULL,
+    -- The title as search folds it, which a name filter looks inside
+    folded      TEXT    NOT NULL,
+    sort_key    BLOB    NOT NULL,
+    description TEXT,
+    pinned      INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)),
+    version     INTEGER NOT NULL DEFAULT 1,
+    created_at  INTEGER NOT NULL,
+    modified_at INTEGER NOT NULL,
+    track_count INTEGER NOT NULL DEFAULT 0,
+    duration_us INTEGER NOT NULL DEFAULT 0,
+    -- The artwork's key as the API gives it: an image ID, or a mosaic of four
+    image_key   TEXT
+) STRICT;
+
+-- A playlist's tracks in the user's order: `key` orders an item among its playlist's items
+CREATE TABLE playlist_items (
+    playlist_id INTEGER NOT NULL,
+    key         INTEGER NOT NULL,
+    library_id  INTEGER NOT NULL,
+    track_id    INTEGER NOT NULL,
+    added_at    INTEGER NOT NULL,
+    PRIMARY KEY (playlist_id, key)
+) STRICT, WITHOUT ROWID;
+
+-- Each item of a track, so a like is one probe and what a hidden track takes from each playlist
+-- is read from the hidden tracks alone
+CREATE INDEX playlist_items_by_track ON playlist_items (library_id, track_id);
+
+-- The tracks the account hid, per library, which the account feed carries like its playlists:
+-- gone from every list, count and search, and shown only in Hidden Songs.
+CREATE TABLE hidden_tracks (
+    user_id    INTEGER NOT NULL,
+    library_id INTEGER NOT NULL,
+    track_id   INTEGER NOT NULL,
+    hidden_at  INTEGER NOT NULL,
+    PRIMARY KEY (user_id, library_id, track_id)
+) STRICT, WITHOUT ROWID;
+
+-- Hidden Songs, newest first
+CREATE INDEX hidden_tracks_by_time ON hidden_tracks (user_id, library_id, hidden_at, track_id);

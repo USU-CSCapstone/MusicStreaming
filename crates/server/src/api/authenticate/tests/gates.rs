@@ -23,6 +23,7 @@ use crate::db::testing::{Artist, Image, access};
 pub(super) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/auth/logout"),
     ("GET", "/me"),
+    ("GET", "/me/changes"),
     ("GET", "/me/devices"),
     ("GET", "/me/player"),
     ("POST", "/me/player/commands"),
@@ -37,6 +38,8 @@ pub(super) const ROUTES: &[(&str, &str)] = &[
     ("GET", "/libraries/2"),
     ("GET", "/libraries/2/albums"),
     ("GET", "/libraries/2/albums/201"),
+    ("GET", "/libraries/2/changes"),
+    ("GET", "/libraries/2/catalog"),
     ("GET", "/libraries/2/artists"),
     ("GET", "/libraries/2/artists/20"),
     ("GET", "/libraries/2/playlists"),
@@ -201,13 +204,18 @@ async fn a_library_out_of_reach_answers_exactly_as_one_that_does_not_exist() {
             let missing = send(&app, base, method, &format!("/libraries/9{rest}"), &user).await;
             assert_eq!(unreached.0, StatusCode::NOT_FOUND, "{at}");
             assert_eq!(unreached, missing, "{at}");
+            assert!(unreached.1.contains_key("x-jewelcase-user"), "{at}");
             // Handlers rely on this: none checks again that its library exists, or that the
             // path names one at all.
             for library in ["9", "x", "01"] {
                 let path = format!("/libraries/{library}{rest}");
                 for (who, headers) in [("a user", &user), ("an admin", &admin)] {
-                    let answer = send(&app, base, method, &path, headers).await;
-                    assert_eq!(answer, missing, "{method} {base}{path} as {who}");
+                    // Each answer names its own caller, and is the same otherwise.
+                    let (mut answer, mut expected) =
+                        (send(&app, base, method, &path, headers).await, missing.clone());
+                    answer.1.remove("x-jewelcase-user");
+                    expected.1.remove("x-jewelcase-user");
+                    assert_eq!(answer, expected, "{method} {base}{path} as {who}");
                 }
             }
         }
@@ -247,4 +255,30 @@ async fn the_table_lists_every_method_on_its_paths() {
             }
         }
     }
+}
+
+/// A write repeated under a key the caller used answers what was stored, whichever route it is
+/// for: the handler is never reached, so none of them does its work again. A read is not
+/// replayed.
+#[tokio::test]
+async fn every_write_answers_a_repeated_key_with_the_stored_answer() {
+    let (temp, app) = server("").await;
+    conn(&temp)
+        .execute(
+            "INSERT INTO idempotency_keys (user_id, key, status, content_type, body, created_at) \
+             VALUES (1, 'k', 202, 'text/plain', 'stored', unixepoch() * 1000)",
+            [],
+        )
+        .unwrap();
+    let owner_token = format!("Bearer {TOKEN}");
+    let owner = [("authorization", owner_token.as_str()), ("idempotency-key", "k")];
+    let writes = ROUTES.iter().filter(|(method, _)| *method != "GET");
+    for &(method, path) in writes {
+        let (status, headers, body) = send(&app, "", method, path, &owner).await;
+        let at = format!("{method} {path}");
+        assert_eq!((status, body.as_slice()), (StatusCode::ACCEPTED, &b"stored"[..]), "{at}");
+        assert_eq!(headers[header::CONTENT_TYPE], "text/plain", "{at}");
+    }
+    let (status, ..) = send(&app, "", "GET", "/me", &owner).await;
+    assert_eq!(status, StatusCode::OK);
 }

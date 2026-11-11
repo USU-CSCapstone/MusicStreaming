@@ -214,6 +214,83 @@ mod tests {
         assert!(!foreign_keys(&conn));
     }
 
+    /// Adds library `id` and one root as a database at an earlier migration holds them: their
+    /// rows alone, since creating a library today also makes its users' Liked Songs and records
+    /// them in feeds that may not exist yet.
+    fn older_library(conn: &Connection, id: i64) {
+        conn.execute_batch(&format!(
+            "INSERT INTO libraries (id, name, created_at) VALUES ({id}, 'Music', 0);
+             INSERT INTO library_roots (id, library_id, path, created_at)
+             VALUES ({id}, {id}, '/music/{id}', 0);"
+        ))
+        .unwrap();
+    }
+
+    #[test]
+    fn the_account_feed_starts_with_the_playlists_that_existed() {
+        use crate::db::testing::{Album, Track, User};
+
+        let mut conn = configured();
+        let before = MIGRATIONS.iter().position(|m| m.name.starts_with("0011")).unwrap();
+        migrate(&mut conn, &MIGRATIONS[..before]).unwrap();
+
+        User::new(1, "owner").insert(&conn).unwrap();
+        older_library(&conn, 1);
+        Album::new(1, 1).insert(&conn).unwrap();
+        Track::new(1, 1, 1).insert(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO playlists (id, library_id, user_id, title, folded, sort_key, created_at, \
+                                    modified_at)
+             VALUES (7, 1, 1, 'Old', 'old', x'', 0, 0);
+             INSERT INTO playlist_items (playlist_id, key, library_id, track_id, added_at)
+             VALUES (7, 1048576, 1, 1, 0), (7, 2097152, 1, 1, 0);",
+        )
+        .unwrap();
+
+        migrate(&mut conn, MIGRATIONS).unwrap();
+
+        let feed: Vec<(i64, i64, String, i64, i64, String)> = conn
+            .prepare(
+                "SELECT user_id, library_id, kind, entity_id, item_key, op FROM account_changes \
+                 ORDER BY seq",
+            )
+            .unwrap()
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        let row = |kind: &str, key| (1, 1, kind.to_owned(), 7, key, "upsert".to_owned());
+        assert_eq!(
+            feed,
+            [row("playlist", 0), row("playlistItem", 1_048_576), row("playlistItem", 2_097_152)]
+        );
+    }
+
+    #[test]
+    fn answers_stored_before_content_types_were_kept_replay_as_json() {
+        use crate::db::testing::User;
+
+        let mut conn = configured();
+        let before = MIGRATIONS.iter().position(|m| m.name.starts_with("0012")).unwrap();
+        migrate(&mut conn, &MIGRATIONS[..before]).unwrap();
+        User::new(1, "owner").insert(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO idempotency_keys (user_id, key, status, body, created_at) \
+             VALUES (1, 'k', 201, '{}', 0)",
+            [],
+        )
+        .unwrap();
+
+        migrate(&mut conn, MIGRATIONS).unwrap();
+
+        let content_type: String = conn
+            .query_row("SELECT content_type FROM idempotency_keys", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(content_type, "application/json");
+    }
+
     #[test]
     fn refuses_a_database_from_a_newer_version() {
         let mut conn = Connection::open_in_memory().unwrap();

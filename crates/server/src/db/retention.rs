@@ -7,7 +7,7 @@
 //! ago, with the lists no queue uses after them; and tracks missing that long,
 //! with whatever of the catalog goes with them. A request to forget searches (`stopped`) is
 //! kept until it is delivered instead, however old it is. Art and biographies that nothing
-//! points at go whatever their age, and idempotency keys go after a day, not the window.
+//! points at go whatever their age, and idempotency keys go after 8 days, not the window.
 //!
 //! The sweep is one write per chunk of rows ([`sweep`]), so a write queued behind it waits for
 //! one chunk, never the whole sweep. A kind of row that fails is passed over until the next
@@ -38,8 +38,8 @@ pub const FIRST_SWEEP: Duration = Duration::from_secs(300);
 /// How often the sweep runs.
 const EVERY: Duration = Duration::from_secs(3600);
 
-/// How long an idempotency key is kept: a day.
-const IDEMPOTENCY_MS: i64 = 24 * 60 * 60 * 1000;
+/// How long an idempotency key is kept: 8 days, longer than the 7 a device keeps a change to send.
+const IDEMPOTENCY_MS: i64 = 8 * 24 * 60 * 60 * 1000;
 
 /// The most rows one statement of the sweep deletes or looks at, so a write stays short.
 /// Tracks go in smaller chunks ([`catalog::tracks`]).
@@ -244,7 +244,8 @@ fn forgets_delivered(tx: &Transaction<'_>, _: i64, _: &mut i64) -> Result<bool> 
     Ok(deleted < CHUNK)
 }
 
-/// Idempotency keys older than a day, whatever the window, through `idempotency_keys_by_age`.
+/// Idempotency keys older than [`IDEMPOTENCY_MS`], whatever the window, through
+/// `idempotency_keys_by_age`.
 fn idempotency_keys(tx: &Transaction<'_>, now: i64, _: &mut i64) -> Result<bool> {
     let deleted = tx
         .prepare_cached(

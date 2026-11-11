@@ -8,7 +8,8 @@
 use jewelcase_plugins::Playing;
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::super::library::{TRACK_COLUMNS, track};
+use super::super::library::track;
+use crate::db::plugin_view::TRACK;
 
 /// How long after the server first hears of a play it is still worth announcing.
 pub const FRESH_MS: i64 = 60_000;
@@ -39,10 +40,9 @@ pub fn playing(
         "SELECT {}, pl.started_at, st.seq FROM play_events st \
          JOIN plays pl ON pl.user_id = st.user_id AND pl.id = st.play_id \
          JOIN tracks t ON t.id = pl.track_id AND t.library_id = st.library_id \
-         JOIN albums al ON al.id = t.album_id \
          JOIN plugin_connections s ON s.plugin_id = ?5 AND s.user_id = st.user_id \
          WHERE {deliverable} ORDER BY st.seq DESC LIMIT 1",
-        TRACK_COLUMNS.join(", ")
+        TRACK.columns.join(", ")
     ))?
     .query_row(params![now, library, user, position, plugin], |row| {
         let started_at_ms = row.get(13)?;
