@@ -3,33 +3,23 @@
 //! Both are scoped to the caller's own playlist in the library, so another account's, an
 //! admin's included, is as absent as one that never was (`requirements/users.md` §10).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
+use jewelcase_catalog::playlists::{self, ItemPage, header};
 use rusqlite::params;
-use rusqlite::types::Value;
 use serde::{Deserialize, Serialize};
 
-use super::representation::header;
-use crate::api::cursor;
 use crate::api::extract::{self, Path, Query};
-use crate::api::hidden;
 use crate::api::playables::{self, Playable};
-use crate::api::problem::Code;
 use crate::api::scope::Scope;
-use crate::api::time::serialize_rfc3339;
-use crate::api::tracks::{self, TrackSummary};
-use crate::api::{Id, Problem, page};
-use crate::db::{Database, Json as JsonColumn, by_ids};
+use crate::api::{Id, Problem};
+use crate::db::{Database, Json as JsonColumn};
 
-/// What names the list in its cursors.
-const LABEL: &str = "playlists.items";
-
-/// A playlist's items after a key, in order: one range of the primary key.
-pub(super) const ITEMS: &str = "SELECT key, track_id, added_at FROM playlist_items \
-                     WHERE playlist_id = ?1 AND key > ?2 ORDER BY key LIMIT ?3";
+#[cfg(test)]
+pub(super) use jewelcase_catalog::playlists::ITEMS;
 
 /// Which of the IDs in a JSON array the playlist holds, in the array's order, each found by
 /// `playlist_items_by_track`.
@@ -45,47 +35,6 @@ pub struct ListQuery {
     limit: Option<u32>,
 }
 
-/// The spec's `PlaylistItem`; an item of an external track is not possible yet.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Item {
-    track: TrackSummary,
-    #[serde(serialize_with = "serialize_rfc3339")]
-    added_at: i64,
-    /// A track the caller hid, which keeps its place but is not shown or played
-    /// (`requirements/playlists.md` §3).
-    hidden: bool,
-}
-
-/// The spec's `PlaylistItemPage`.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ItemPage {
-    items: Vec<Item>,
-    next_cursor: Option<String>,
-    total: i64,
-    version: i64,
-}
-
-/// The version of `user`'s playlist `id` in `library` and every one of its items in the user's
-/// order, as (track, added at), a duplicate as often as it occurs and a missing track in place,
-/// from one read. Not found, as `listPlaylistItems` answers, if the playlist is not theirs in
-/// the library.
-pub fn all_items(
-    conn: &rusqlite::Connection,
-    user: i64,
-    library: i64,
-    id: i64,
-) -> Result<(i64, Vec<(i64, i64)>), Problem> {
-    let (version, _) = header(conn, user, library, id)?.ok_or_else(Problem::not_found)?;
-    // No limit: a negative one reads every item.
-    let items = conn
-        .prepare_cached(ITEMS)?
-        .query_map(params![id, i64::MIN, -1], |row| Ok((row.get(1)?, row.get(2)?)))?
-        .collect::<Result<_, _>>()?;
-    Ok((version, items))
-}
-
 /// One page of the playlist's items in the user's order, a duplicate as often as it occurs and
 /// a missing track in place. The version check, the rows and the summaries come from one read,
 /// so a page is of one version. A cursor from another version is `410 cursor_expired`.
@@ -95,59 +44,10 @@ pub async fn list_items(
     Path((_, Id(id))): Path<(Id, Id)>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<ItemPage>, Problem> {
-    let limit = page::limit(query.limit)?;
-    let after = query
-        .cursor
-        .map(|cursor| cursor::decode(&cursor, LABEL, 2))
-        .transpose()?
-        .map(|values| match values[..] {
-            [Value::Integer(version), Value::Integer(key)] => Ok((version, key)),
-            _ => Err(Problem::invalid("cursor is not valid for this list")),
-        })
-        .transpose()?;
     let page = db
         .try_read(move |conn| {
-            let (version, total) =
-                header(conn, user, library, id)?.ok_or_else(Problem::not_found)?;
-            if after.is_some_and(|(cursor_version, _)| cursor_version != version) {
-                return Err(Problem::new(Code::CursorExpired)
-                    .detail("The playlist changed since the first page; start again."));
-            }
-            let start = after.map_or(i64::MIN, |(_, key)| key);
-            // One more than the page, to know whether another follows. Keyset on the primary key.
-            let mut rows: Vec<(i64, i64, i64)> = conn
-                .prepare_cached(ITEMS)?
-                .query_map(params![id, start, limit + 1], |row| {
-                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-                })?
-                .collect::<Result<_, _>>()?;
-            let more = rows.len() > limit as usize;
-            rows.truncate(limit as usize);
-            let next_cursor = rows
-                .last()
-                .filter(|_| more)
-                .map(|(key, ..)| cursor::encode(LABEL, &[version.into(), (*key).into()]));
-            let mut wanted: Vec<i64> = rows.iter().map(|row| row.1).collect();
-            wanted.sort_unstable();
-            wanted.dedup();
-            let mut summaries: HashMap<i64, TrackSummary> =
-                by_ids(conn, tracks::SELECT, "tracks t", tracks::JOINS, library, &wanted, |row| {
-                    let track = tracks::list_summary(row)?;
-                    Ok((row.get::<_, i64>(0)?, track))
-                })?
-                .into_iter()
-                .collect();
-            tracks::mark_liked(conn, user, library, summaries.values_mut())?;
-            let hid = hidden::ids(conn, user, library)?;
-            // Every item's track is kept by retention, so none is left out in practice.
-            let items = rows
-                .iter()
-                .filter_map(|(_, id, added_at)| {
-                    let track = summaries.get(id)?.clone();
-                    Some(Item { track, added_at: *added_at, hidden: hid.contains(id) })
-                })
-                .collect();
-            Ok::<_, Problem>(ItemPage { items, next_cursor, total, version })
+            playlists::items(conn, user, library, id, query.cursor.as_deref(), query.limit)
+                .map_err(Problem::from)
         })
         .await?;
     Ok(Json(page))

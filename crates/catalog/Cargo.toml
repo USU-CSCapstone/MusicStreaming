@@ -5,14 +5,20 @@ edition = "2024"
 
 [dependencies]
 base64 = "0.23.1"
+jewelcase-core = { version = "0.1.0", path = "../core" }
 rusqlite = "0.41.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+time = { version = "0.3.55", default-features = false }
 
 # Natively SQLite is bundled, so a test run of this crate alone needs no system SQLite. On wasm
 # rusqlite uses sqlite-wasm-rs instead.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 rusqlite = { version = "0.41.1", features = ["bundled"] }
+
+[features]
+# Test helpers the server's tests share, such as the index-use check of a list's queries.
+testing = []
 
 [lints]
 workspace = true

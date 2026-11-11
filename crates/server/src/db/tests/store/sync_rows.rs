@@ -22,7 +22,18 @@ const SERVER_ONLY: &[(&str, &[&str])] = &[
     ("albums", &["artists_key", "title_key"]),
     ("artists", &["name_key"]),
     ("images", &["hash", "path", "root_id"]),
-    ("playlists", &["user_id"]),
+    (
+        "libraries",
+        &[
+            "created_at",
+            "duration_us",
+            "excludes",
+            "name",
+            "names_version",
+            "scan_interval_minutes",
+            "watch",
+        ],
+    ),
     ("tag_types", &["field", "plugin_id", "since"]),
     ("tags", &["name_key"]),
     (
@@ -138,6 +149,7 @@ fn schema(
 fn entities(conn: &Connection) -> Vec<(Kind, String)> {
     let mut all = Vec::new();
     for (kind, sql) in [
+        (Kind::Library, "SELECT id FROM libraries"),
         (Kind::Artist, "SELECT id FROM artists"),
         (Kind::Album, "SELECT id FROM albums"),
         (Kind::Track, "SELECT id FROM tracks"),
@@ -164,7 +176,7 @@ fn every_device_column_exists_in_the_server_schema_with_the_same_type() {
             assert!(server[table].contains(column), "{table}.{} is not on the server", column.0);
         }
     }
-    assert_eq!(device.len(), 16);
+    assert_eq!(device.len(), 17);
 }
 
 #[test]
@@ -172,7 +184,7 @@ fn the_device_schema_changes_only_with_its_version() {
     let hash = format!("{:x}", Sha256::digest(SCHEMA));
     assert_eq!(
         (SCHEMA_VERSION, hash.as_str()),
-        (2, "6fba8946c3b6af82dc2474b63895529c496b159fe30c31065568b8efbf9e9107"),
+        (4, "f84ac3b088fb5dab0fb0efc56f070843e1a5d1e694002dc40051bf0f5b762d7a"),
         "schema.sql changed: raise SCHEMA_VERSION, and pin its new hash here"
     );
 }
@@ -219,7 +231,7 @@ fn no_server_only_column_is_exported() {
             assert!(list.iter().all(|row| row.len() == widths[table]), "{table}");
         }
     }
-    assert_eq!(seen.len(), 15, "{seen:?}");
+    assert_eq!(seen.len(), 16, "{seen:?}");
 }
 
 #[test]
@@ -230,7 +242,7 @@ fn export_then_apply_reproduces_each_entitys_device_rows() {
         .db()
         .read_blocking(move |conn| {
             let all = entities(conn);
-            assert_eq!(all.len(), 10, "{all:?}");
+            assert_eq!(all.len(), 11, "{all:?}");
             for (kind, id) in &all {
                 let rows = export(conn, 1, *kind, id, 0).unwrap().unwrap();
                 // Through JSON, as the change feed carries it.
@@ -323,6 +335,7 @@ fn another_librarys_entity_is_absent() {
             let id: i64 = conn.query_row("SELECT id FROM tracks LIMIT 1", [], |r| r.get(0))?;
             assert!(export(conn, 2, Kind::Track, &id.to_string(), 0).unwrap().is_none());
             assert!(export(conn, 1, Kind::Track, "not an id", 0).unwrap().is_none());
+            assert!(export(conn, 2, Kind::Library, "1", 0).unwrap().is_none());
             Ok(())
         })
         .unwrap();

@@ -5,8 +5,8 @@ use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension};
 use serde::Deserialize;
 
-use super::AnyId;
-use super::page::Lead;
+use crate::AnyId;
+use crate::page::Lead;
 
 /// The spec's `ArtistCredit`: how the artist a list is filtered by is credited on its rows.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]

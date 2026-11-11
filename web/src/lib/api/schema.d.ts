@@ -321,8 +321,8 @@ export interface paths {
         /**
          * List the library's changes
          * @description The library's catalog as a feed of changes, for a device that keeps a copy of it
-         *     (`requirements/offline.md`). Each track, album, artist, and tag appears at most once, as
-         *     its latest change, in the order the changes were made, so `after=0` is the whole catalog
+         *     (`requirements/offline.md`). Each library, track, album, artist, and tag appears at most
+         *     once, as its latest change (a library's is its counts), in the order the changes were made, so `after=0` is the whole catalog
          *     and a later `after` is only what changed since. An upsert carries the entity's current
          *     rows, keyed by table, each row an object keyed by column name; a delete is a tombstone
          *     with no rows. The tables and columns are those of the device schema
@@ -1720,11 +1720,11 @@ export interface components {
             /** @enum {string} */
             op: "upsert" | "delete";
             /** @enum {string} */
-            kind: "track" | "album" | "artist" | "tag";
+            kind: "library" | "track" | "album" | "artist" | "tag";
             id: components["schemas"]["Id"];
             /**
              * @description With an upsert: the entity's rows by table name (`tracks`, `track_artists`, `images`
-             *     and so on). A table the entity has no rows in is left out.
+             *     and so on; a `library` has one `libraries` row of its counts). A table the entity has no rows in is left out.
              */
             rows?: {
                 [key: string]: {

@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use rusqlite::types::Value;
 use rusqlite::{Connection, params, params_from_iter};
 
-use super::page::{self, Check, Lead, Source, Table, Total};
-use super::{AnyId, Problem};
+use crate::page::{self, Check, Counting, Lead, Source, Table, Total, Walk};
+use crate::{AnyId, Invalid};
 
 /// How a group's rows carry its tags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -70,10 +70,26 @@ pub fn source(
     };
     let alone = lead.is_none() && check.is_none();
     let plan = tags.plan(tagged, table.alias, lead, rows, alone, share);
-    let mut source =
-        table.source(conn, library, plan.lead, Check::all(check.into_iter().chain(plan.check)))?;
+    let mut source = table.source(
+        conn,
+        library,
+        plan.lead,
+        Check::all(check.iter().cloned().chain(plan.check)),
+    )?;
     if let Some(total) = plan.total {
         source.total = total;
+    }
+    if let Some((lead, check)) = plan.counting {
+        let by_tags = table.source(conn, library, Some(lead), check)?;
+        source.counting =
+            Some(Counting { from: by_tags.from, filter: by_tags.filter, params: by_tags.params });
+    }
+    if let Some(instead) = plan.instead {
+        let (filter, params) = table.filter(library, check.clone());
+        let lead = Check::all(check.into_iter().chain(instead.check));
+        let lead = table.source(conn, library, Some(instead.lead), lead)?;
+        let lead = Box::new(lead);
+        source.walk = Some(Box::new(Walk { filter, params, per_row: instead.per_row, lead }));
     }
     Ok(source)
 }
@@ -90,14 +106,14 @@ pub struct TagFilter {
 impl TagFilter {
     /// The filter `all` and `any`, each comma-separated tag IDs, make, refused when they name
     /// more than [`MAX_TAGS`] together.
-    pub fn new(all: Option<&str>, any: Option<&str>) -> Result<TagFilter, Problem> {
+    pub fn new(all: Option<&str>, any: Option<&str>) -> Result<TagFilter, Invalid> {
         let ids = |list: Option<&str>| -> Vec<AnyId> {
             let ids = list.into_iter().flat_map(|list| list.split(',')).filter(|id| !id.is_empty());
             ids.map(AnyId::from).collect()
         };
         let filter = TagFilter { all: ids(all), any: ids(any) };
         if filter.all.len() + filter.any.len() > MAX_TAGS {
-            return Err(Problem::invalid(format!(
+            return Err(Invalid(format!(
                 "tagAll and tagAny must name at most {MAX_TAGS} tags together"
             )));
         }
@@ -122,6 +138,7 @@ pub enum Tags {
 
 /// The tags of one type a filter names in one list, `tagAll`'s or `tagAny`'s, and how its rows
 /// must carry them.
+#[derive(Clone)]
 pub struct Group {
     ids: Vec<i64>,
     tag_match: TagMatch,
@@ -138,6 +155,21 @@ pub struct Plan {
     pub check: Option<Check>,
     /// The page's total, when the filter changes how it is known: `None` for no filter.
     pub total: Option<Total>,
+    /// How to count the rows when the page walks and the total is counted: the smallest group
+    /// leads and the others check, so the count costs what that group holds, not the library.
+    pub counting: Option<(Lead, Option<Check>)>,
+    /// When the page walks the sort's index for rows that carry the tags, what it reads instead
+    /// if the walk runs over its budget ([`Walk`]).
+    pub instead: Option<Instead>,
+}
+
+/// What a page that walks reads if its walk runs over: its smallest group leading and the others
+/// checked.
+pub struct Instead {
+    pub lead: Lead,
+    pub check: Option<Check>,
+    /// How many rows the walk is expected to read for each it returns, from that group's share.
+    pub per_row: i64,
 }
 
 impl Tags {
@@ -200,9 +232,11 @@ impl Tags {
     /// How a list of `rows` rows of `tagged`, aliased `alias`, reads the filter. A list given a
     /// `lead` keeps it; otherwise its smallest group leads when it holds one row in `share` of the
     /// list at most ([`LEAD_SHARE`], [`RESOLVE_SHARE`]): 0 has the smallest always lead, and
-    /// `i64::MAX` has every group checked. Every other group becomes a check. The total is the one
-    /// tag's stored count where it is all that filters the list, which `alone` says, and is
-    /// counted otherwise.
+    /// `i64::MAX` has every group checked. Every other group becomes a check. A list with no lead
+    /// that walks is also given what it reads [`instead`](Plan::instead) if the walk runs over. The
+    /// total is the one tag's stored count where it is all that filters the list, which `alone`
+    /// says, and is counted otherwise; a list `alone` that walks counts from its smallest group all
+    /// the same ([`Plan::counting`]).
     pub fn plan(
         self,
         tagged: &Tagged,
@@ -213,10 +247,18 @@ impl Tags {
         share: i64,
     ) -> Plan {
         let mut groups = match self {
-            Tags::Unfiltered => return Plan { lead, check: None, total: None },
+            Tags::Unfiltered => {
+                return Plan { lead, check: None, total: None, counting: None, instead: None };
+            }
             Tags::Nothing => {
                 let check = Check { condition: "0".to_owned(), params: Vec::new() };
-                return Plan { lead, check: Some(check), total: Some(Total::Stored(0)) };
+                return Plan {
+                    lead,
+                    check: Some(check),
+                    total: Some(Total::Stored(0)),
+                    counting: None,
+                    instead: None,
+                };
             }
             Tags::Groups(groups) => groups,
         };
@@ -224,13 +266,31 @@ impl Tags {
             [one] if alone && one.ids.len() == 1 => Total::Stored(one.size),
             _ => Total::Counted,
         };
+        let mut instead = None;
         let lead = lead.or_else(|| {
             let smallest = (0..groups.len()).min_by_key(|&i| groups[i].size)?;
-            (groups[smallest].size.saturating_mul(share) <= rows)
-                .then(|| groups.swap_remove(smallest).lead(tagged))
+            if groups[smallest].size.saturating_mul(share) <= rows {
+                return Some(groups.swap_remove(smallest).lead(tagged));
+            }
+            let mut others = groups.clone();
+            let group = others.swap_remove(smallest);
+            instead = Some(Instead {
+                per_row: (rows / group.size.max(1)).max(1),
+                lead: group.lead(tagged),
+                check: Check::all(others.iter().map(|group| group.check(tagged, alias))),
+            });
+            None
         });
+        let counting = (lead.is_none() && alone && matches!(total, Total::Counted))
+            .then(|| {
+                let mut rest = groups.clone();
+                let smallest = (0..rest.len()).min_by_key(|&i| rest[i].size)?;
+                let lead = rest.swap_remove(smallest).lead(tagged);
+                Some((lead, Check::all(rest.iter().map(|group| group.check(tagged, alias)))))
+            })
+            .flatten();
         let checks: Vec<Check> = groups.iter().map(|group| group.check(tagged, alias)).collect();
-        Plan { lead, check: Check::all(checks), total: Some(total) }
+        Plan { lead, check: Check::all(checks), total: Some(total), counting, instead }
     }
 }
 
@@ -338,6 +398,7 @@ impl Group {
         Check { condition, params: self.params() }
     }
 
+    /// The group's tag IDs as SQL parameters, in order.
     fn params(&self) -> Vec<Value> {
         self.ids.iter().map(|&id| Value::from(id)).collect()
     }
@@ -349,6 +410,7 @@ mod tests {
 
     const TAGGED: Tagged = Tagged { links: "track_tags", owner: "track_id", count: "track_count" };
 
+    /// A group of tag `ids` combined as `tag_match` says, which `size` tracks match.
     fn group(ids: &[i64], tag_match: TagMatch, size: i64) -> Group {
         Group { ids: ids.to_vec(), tag_match, size }
     }
@@ -372,6 +434,19 @@ mod tests {
         let plan = tags().plan(&TAGGED, "t", None, 10_000, true, LEAD_SHARE);
         assert!(plan.lead.is_none());
         assert_eq!(plan.check.unwrap().params.len(), 3);
+        // The page walks, but the count starts from the smaller group and checks the other.
+        let (lead, check) = plan.counting.expect("a counted total leads from its smallest group");
+        assert_eq!((lead.size, lead.params.len()), (100, 1));
+        assert_eq!(check.unwrap().params.len(), 2);
+    }
+
+    #[test]
+    fn a_count_keeps_the_page_source_where_the_page_already_leads_or_another_filter_does() {
+        let tags = || {
+            Tags::Groups(vec![group(&[1], TagMatch::Any, 50_000), group(&[3], TagMatch::Any, 100)])
+        };
+        assert!(tags().plan(&TAGGED, "t", None, 300_000, true, LEAD_SHARE).counting.is_none());
+        assert!(tags().plan(&TAGGED, "t", None, 10_000, false, LEAD_SHARE).counting.is_none());
     }
 
     #[test]
@@ -380,6 +455,33 @@ mod tests {
         let tags = || Tags::Groups(vec![group(&[3], TagMatch::Any, 15_000)]);
         assert!(tags().plan(&TAGGED, "t", None, 300_000, true, LEAD_SHARE).lead.is_none());
         assert!(tags().plan(&TAGGED, "t", None, 300_000, true, RESOLVE_SHARE).lead.is_some());
+    }
+
+    #[test]
+    fn a_page_that_walks_is_given_the_lead_it_reads_if_the_walk_runs_over() {
+        let tags = || {
+            Tags::Groups(vec![
+                group(&[1, 2], TagMatch::Any, 50_000),
+                group(&[3], TagMatch::Any, 3_000),
+            ])
+        };
+        // One track in 100: too many to start from, so the page walks, expecting to read about
+        // 100 rows for each it returns.
+        let plan = tags().plan(&TAGGED, "t", None, 300_000, true, LEAD_SHARE);
+        assert!(plan.lead.is_none());
+        let instead = plan.instead.expect("a walk has a lead to fall back to");
+        assert_eq!(instead.lead.ids, "SELECT track_id AS id FROM track_tags WHERE tag_id = ?");
+        assert!(instead.check.unwrap().condition.contains("tag_id IN (?, ?)"));
+        assert_eq!(instead.per_row, 100);
+        // A page that leads, or was given a lead, has nothing instead.
+        assert!(tags().plan(&TAGGED, "t", None, 3_000_000, true, LEAD_SHARE).instead.is_none());
+        let artist = Lead { ids: "SELECT 7 AS id".to_owned(), params: Vec::new(), size: 1 };
+        assert!(
+            tags().plan(&TAGGED, "t", Some(artist), 300_000, false, LEAD_SHARE).instead.is_none()
+        );
+        assert!(
+            Tags::Nothing.plan(&TAGGED, "t", None, 300_000, true, LEAD_SHARE).instead.is_none()
+        );
     }
 
     #[test]

@@ -42,10 +42,10 @@ pub fn copy(conn: &mut Connection, library: i64) -> rusqlite::Result<i64> {
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
     for (table, columns) in tables {
-        let scope = if table == "tag_types" {
-            "key IN (SELECT type FROM server.tags WHERE library_id = ?1)"
-        } else {
-            "library_id = ?1"
+        let scope = match table.as_str() {
+            "tag_types" => "key IN (SELECT type FROM server.tags WHERE library_id = ?1)",
+            "libraries" => "id = ?1",
+            _ => "library_id = ?1",
         };
         tx.execute(
             &format!(

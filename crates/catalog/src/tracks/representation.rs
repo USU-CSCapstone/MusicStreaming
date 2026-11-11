@@ -11,12 +11,11 @@ use jewelcase_core::SortRow;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::Serialize;
 
-use crate::api::refs::{
+use crate::refs::{
     AlbumRef, Credit, ImageRef, TagsByType, artists_json, availability, placeholder, tags_json,
 };
-use crate::api::time::serialize_rfc3339;
-use crate::api::{Id, hidden};
-use crate::db::{Json, by_ids, liked_songs};
+use crate::time::serialize_rfc3339;
+use crate::{Id, Json, by_ids::by_ids, hidden, liked};
 
 /// The spec's `TrackSummary`, without `personal`. A full `Track` has the same fields with more
 /// `audio`, so the audio type is a parameter. `liked` and `hidden` are the caller's, so they are
@@ -224,7 +223,7 @@ pub fn mark_liked<'a, A: 'a>(
     library: i64,
     tracks: impl IntoIterator<Item = &'a mut TrackSummary<A>>,
 ) -> rusqlite::Result<()> {
-    let Some((liked, _)) = liked_songs::find(conn, user, library)? else { return Ok(()) };
+    let Some((liked, _)) = liked::find(conn, user, library)? else { return Ok(()) };
     let mut probe = conn.prepare_cached(
         "SELECT EXISTS (SELECT 1 FROM playlist_items INDEXED BY playlist_items_by_track \
          WHERE library_id = ?1 AND track_id = ?2 AND playlist_id = ?3)",
