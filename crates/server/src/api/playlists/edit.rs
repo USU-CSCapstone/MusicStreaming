@@ -10,9 +10,10 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use jewelcase_core::playlist::{Op, apply_ops};
 use jewelcase_core::{sort_key, words};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -20,7 +21,6 @@ use serde::{Deserialize, Deserializer};
 
 use super::KEY_GAP;
 use super::announce::{AppliedOp, Change};
-use super::idempotency::{Answer, Key};
 use super::keys::assign;
 use super::liked;
 use super::representation::{self, header};
@@ -30,6 +30,7 @@ use crate::api::realtime::Hub;
 use crate::api::scope::Scope;
 use crate::api::{Id, Problem};
 use crate::api::{Images, hidden};
+use crate::db::feed::{self, Kind, Op as FeedOp};
 use crate::db::marks::{self, Mark};
 use crate::db::{Database, catalog, now_ms};
 
@@ -111,7 +112,6 @@ pub async fn edit(
     State(hub): State<Arc<Hub>>,
     Scope { user, library }: Scope,
     Path((_, Id(id))): Path<(Id, Id)>,
-    Key(key): Key,
     extract::Json(body): extract::Json<Edit>,
 ) -> Result<Response, Problem> {
     let title = body.check()?;
@@ -123,15 +123,12 @@ pub async fn edit(
         // The next plan leaves that track out, so each attempt adds fewer, and this ends.
         loop {
             let now = now_ms();
-            // Read first, off the writer: a retry already answered, a stale version, the items an
-            // add expands to, and the plan. The write checks the version again, so an edit made in
-            // between is a conflict and not a lost update.
-            let (asked, ops) = (key.clone(), ops.clone());
-            let prepared = db
+            // Read first, off the writer: a stale version, the items an add expands to, and the
+            // plan. The write checks the version again, so an edit made in between is a
+            // conflict and not a lost update.
+            let ops = ops.clone();
+            let (plan, liked) = db
                 .try_read(move |conn| {
-                    if let Some(answer) = Answer::find(conn, user, asked.as_deref())? {
-                        return Ok::<_, Problem>(Err(answer));
-                    }
                     at(conn, user, library, id, base)?;
                     let liked = liked::is_liked(conn, id)?;
                     if liked && names {
@@ -144,28 +141,16 @@ pub async fn edit(
                         .map(|op| expand(conn, user, library, op))
                         .collect::<Result<Vec<_>, _>>()?;
                     let ops = if liked { liked::only_new(conn, library, id, ops)? } else { ops };
-                    Ok(Ok((plan(conn, library, id, ops, now)?, liked)))
+                    Ok::<_, Problem>((plan(conn, library, id, ops, now)?, liked))
                 })
                 .await?;
-            let (plan, liked) = match prepared {
-                Ok(prepared) => prepared,
-                Err(answer) => return Ok(answer.into_response()),
-            };
-            let (key, title, description) = (key.clone(), title.clone(), description.clone());
+            let (title, description) = (title.clone(), description.clone());
             let moves_items = plan.totals.is_some();
-            let answer = db
+            let applied = db
                 .try_write(move |tx| {
-                    if let Some(answer) = Answer::find(tx, user, key.as_deref())? {
-                        return Ok::<_, Problem>(Some((
-                            answer,
-                            None,
-                            Vec::new(),
-                            Default::default(),
-                        )));
-                    }
                     // Retention keeps the tracks the playlist holds; only an added one can be gone.
                     if !fresh(tx, library, &plan)? {
-                        return Ok(None);
+                        return Ok::<_, Problem>(None);
                     }
                     write(tx, user, library, id, base, &plan)?;
                     // A track Liked Songs gains is liked, and so not hidden; one it loses is
@@ -216,26 +201,25 @@ pub async fn edit(
                         count,
                         duration,
                     ])?;
+                    feed::record_account(tx, user, library, Kind::Playlist, id, 0, FeedOp::Upsert)?;
                     let edited = representation::get(tx, user, library, id)?
                         .ok_or_else(Problem::not_found)?;
-                    let answer = Answer::new(StatusCode::OK, &edited)?;
-                    if let Some(key) = &key {
-                        answer.store(tx, user, key, now)?;
-                    }
-                    Ok(Some((answer, Some(Change::of(edited, plan.applied)), unhidden, likes)))
+
+                    let body = serde_json::to_value(&edited)?;
+                    Ok(Some((body, Change::of(edited, plan.applied), unhidden, likes)))
                 })
                 .await?;
-            if let Some((answer, change, unhidden, (liked, unliked))) = answer {
+            if let Some((body, change, unhidden, (liked, unliked))) = applied {
                 hidden::announce(&hub, user, library, unhidden, false);
                 liked::announce(&hub, user, library, liked, true);
                 liked::announce(&hub, user, library, unliked, false);
-                if moves_items && change.is_some() {
+                if moves_items {
                     // The edit may have moved the artwork on; its old mosaics go, off the request.
                     let db = db.clone();
                     tokio::spawn(async move { images.prune_mosaics(&db, library, user).await });
                 }
-                super::announce(&hub, user, change);
-                return Ok(answer.into_response());
+                super::announce(&hub, user, Some(change));
+                return Ok((StatusCode::OK, Json(body)).into_response());
             }
         }
     })
@@ -432,7 +416,8 @@ pub(super) fn fresh(tx: &Connection, library: i64, plan: &Plan) -> rusqlite::Res
 
 /// Writes `plan`, made from playlist `id` at version `base`, if the playlist is still `user`'s
 /// in `library` and at `base`: otherwise `404` or `409 version_conflict`, and nothing is
-/// written. The details, totals and version are the caller's to write.
+/// written. Records each item row it deletes or inserts in the account feed. The details,
+/// totals and version, and the playlist's own feed row, are the caller's to write.
 pub(super) fn write(
     tx: &Connection,
     user: i64,
@@ -445,18 +430,25 @@ pub(super) fn write(
     // was made from.
     at(tx, user, library, id, base)?;
     // Deleted before anything is inserted, so no new key meets an old one on its way out.
-    match &plan.delete {
+    let gone: Vec<i64> = match &plan.delete {
         Some(keys) => {
             let mut delete = tx
                 .prepare_cached("DELETE FROM playlist_items WHERE playlist_id = ?1 AND key = ?2")?;
             for key in keys {
                 delete.execute(params![id, key])?;
             }
+            keys.clone()
         }
-        None => {
-            tx.prepare_cached("DELETE FROM playlist_items WHERE playlist_id = ?1")?
-                .execute([id])?;
-        }
+        None => tx
+            .prepare_cached("DELETE FROM playlist_items WHERE playlist_id = ?1 RETURNING key")?
+            .query_map([id], |row| row.get(0))?
+            .collect::<Result<_, _>>()?,
+    };
+    // Recorded after the deletes and before the inserts, so a key an insert takes again ends as
+    // an upsert and not a tombstone.
+    let item = |key, op| feed::record_account(tx, user, library, Kind::PlaylistItem, id, key, op);
+    for key in gone {
+        item(key, FeedOp::Delete)?;
     }
     let mut insert = tx.prepare_cached(
         "INSERT INTO playlist_items (playlist_id, key, library_id, track_id, added_at) \
@@ -464,6 +456,7 @@ pub(super) fn write(
     )?;
     for (key, track, added_at) in &plan.insert {
         insert.execute(params![id, key, library, track, added_at])?;
+        item(*key, FeedOp::Upsert)?;
     }
     Ok(())
 }

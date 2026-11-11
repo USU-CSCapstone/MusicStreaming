@@ -7,8 +7,9 @@
 use jewelcase_plugins::{Manifest, Permission, PermissionRequest};
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::db::feed::{self, Entity, Op};
 use crate::db::store::tag_types;
-use crate::db::{Json, Text};
+use crate::db::{Json, Text, now_ms};
 
 /// Why a library was disabled by the server rather than by the admin.
 const REVOKED: &str = "A required permission was revoked.";
@@ -119,13 +120,21 @@ pub fn set(
 /// ([`Manifest::tag_type_key`]), and answers whether any is new or read from another field than
 /// before, which a scan must read files again for. Those raise the generation of tag types and
 /// are registered in the new one (`design/scanning.md` §4); one registered with the field it
-/// asks for keeps its generation and takes only its name. The generation never falls, so the
+/// asks for keeps its generation and takes only its name, and a changed name puts the type's tags
+/// on the change feed ([`record_renamed`]). The generation never falls, so the
 /// next one is above every type's, those of types since removed included. A type is never
 /// removed here, so it outlives its grant and its plugin (`requirements/plugins.md` §4.2).
 fn register_tag_types(conn: &Connection, manifest: &Manifest) -> rusqlite::Result<bool> {
     let next = tag_types::generation(conn)? + 1;
     let mut read_anew = false;
     for tag_type in manifest.tag_types() {
+        let key = manifest.tag_type_key(&tag_type.key);
+        let name = tag_type.name.trim();
+        let renamed: bool = conn
+            .prepare_cached("SELECT name IS NOT ?2 FROM tag_types WHERE key = ?1")?
+            .query_row(params![key, name], |row| row.get(0))
+            .optional()?
+            .unwrap_or(false);
         let since: u32 = conn
             .prepare_cached(
                 "INSERT INTO tag_types (key, name, plugin_id, field, since) \
@@ -136,21 +145,32 @@ fn register_tag_types(conn: &Connection, manifest: &Manifest) -> rusqlite::Resul
                  RETURNING since",
             )?
             .query_row(
-                params![
-                    manifest.tag_type_key(&tag_type.key),
-                    tag_type.name.trim(),
-                    manifest.id,
-                    tag_type.field.to_ascii_uppercase(),
-                    next,
-                ],
+                params![key, name, manifest.id, tag_type.field.to_ascii_uppercase(), next,],
                 |row| row.get(0),
             )?;
         read_anew |= since == next;
+        if renamed {
+            record_renamed(conn, &key)?;
+        }
     }
     if read_anew {
         tag_types::raise(conn)?;
     }
     Ok(read_anew)
+}
+
+/// Puts every tag of the type `key`, in every library, on the change feed: a tag's device rows
+/// carry its type's name.
+fn record_renamed(conn: &Connection, key: &str) -> rusqlite::Result<()> {
+    let now = now_ms();
+    let tags: Vec<(i64, i64)> = conn
+        .prepare_cached("SELECT library_id, id FROM tags WHERE type = ?1")?
+        .query_map([key], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (library, tag) in tags {
+        feed::record(conn, library, Entity::Tag, tag, Op::Upsert, now)?;
+    }
+    Ok(())
 }
 
 /// Enables or disables `id` in `library`. Enabling answers the required permissions still

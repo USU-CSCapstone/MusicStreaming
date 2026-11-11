@@ -24,6 +24,7 @@ use crate::api::hidden;
 use crate::api::realtime::{Hub, ServerMessage};
 use crate::api::scope::Scope;
 use crate::api::{Id, Problem};
+use crate::db::feed::{self, Kind, Op as FeedOp};
 use crate::db::marks::{self, Mark};
 use crate::db::{Database, liked_songs, now_ms};
 
@@ -127,11 +128,16 @@ pub fn take_out(
         return Ok(None);
     }
     positions.sort_unstable();
-    tx.prepare_cached(
-        "DELETE FROM playlist_items INDEXED BY playlist_items_by_track \
-         WHERE library_id = ?1 AND track_id = ?2 AND playlist_id = ?3",
-    )?
-    .execute(params![library, track, id])?;
+    let keys: Vec<i64> = tx
+        .prepare_cached(
+            "DELETE FROM playlist_items INDEXED BY playlist_items_by_track \
+             WHERE library_id = ?1 AND track_id = ?2 AND playlist_id = ?3 RETURNING key",
+        )?
+        .query_map(params![library, track, id], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    for key in keys {
+        feed::record_account(tx, user, library, Kind::PlaylistItem, id, key, FeedOp::Delete)?;
+    }
     // Retention keeps a track any playlist holds, so it is still there to subtract.
     let duration = duration(tx, library, track)?.unwrap_or(0);
     let count = i64::try_from(positions.len()).unwrap_or(i64::MAX);
@@ -194,6 +200,7 @@ fn put_first(
          VALUES (?1, ?2, ?3, ?4, ?5)",
     )?
     .execute(params![id, key, library, track, now])?;
+    feed::record_account(tx, user, library, Kind::PlaylistItem, id, key, FeedOp::Upsert)?;
     Ok(())
 }
 
@@ -214,6 +221,7 @@ fn changed(
          WHERE id = ?1",
     )?
     .execute(params![id, count, duration, now])?;
+    feed::record_account(tx, user, library, Kind::Playlist, id, 0, FeedOp::Upsert)?;
     let liked = representation::get(tx, user, library, id)?.ok_or_else(Problem::not_found)?;
     Ok(Change::of(liked, vec![op]))
 }

@@ -11,6 +11,7 @@ use rusqlite::{Result, Transaction};
 use serde_json::Value;
 
 use super::json;
+use crate::api::Snapshots;
 use crate::db::Database;
 use crate::db::testing::{Album, Artist, Image, Track, library};
 
@@ -19,6 +20,16 @@ pub async fn app() -> (tempfile::TempDir, Arc<Database>, Router) {
     let (temp, db, app) = super::app("");
     db.write(insert).await.unwrap();
     (temp, db, app)
+}
+
+/// [`app`], and the catalog files' [`Snapshots`] it serves from, for a test that waits on builds.
+pub async fn app_with_snapshots() -> (tempfile::TempDir, Arc<Database>, Router, Arc<Snapshots>) {
+    let (temp, db) = crate::db::testing::open();
+    let state = super::state(&temp, db.clone());
+    let snapshots = state.snapshots.clone();
+    super::add_owner(&temp);
+    db.write(insert).await.unwrap();
+    (temp, db, super::router_over(state), snapshots)
 }
 
 /// Adds two libraries. Library 1, "Music", holds:

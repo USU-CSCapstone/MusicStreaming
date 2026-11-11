@@ -172,9 +172,22 @@ async fn a_scan_that_changes_the_album_art_moves_the_artwork_on() {
     let uri = format!("{URI}/{}", playlist["id"].as_str().unwrap());
     let image = || async { call(&app, TOKEN, "GET", &uri, None).await.1["image"]["id"].clone() };
 
+    let feed_seq = || async {
+        db.read(|conn| {
+            conn.query_row(
+                "SELECT max(seq) FROM account_changes WHERE kind = 'playlist'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+        })
+        .await
+        .unwrap()
+    };
+    let before = feed_seq().await;
     // Track 2, retagged onto album 105 with no art of its own, shows that album's cover.
     scanned(&db, 2, "UPDATE tracks SET album_id = 105, image_id = NULL WHERE id = ?1").await;
     assert_eq!(image().await, "m1-5-3-4");
+    assert!(feed_seq().await > before, "a scan that moves the artwork is a change of the playlist");
     // Track 7, which no playlist holds, now comes first on album 101 with cover 6, which
     // replaces album 101's.
     scanned(&db, 7, "UPDATE tracks SET image_id = 6, track_number = 1 WHERE id = ?1").await;

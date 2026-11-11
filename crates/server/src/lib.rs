@@ -84,6 +84,13 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
     if let Err(error) = images.sweep(&db).await {
         warn!(error = %format!("{error:#}"), "cannot sweep the image cache");
     }
+    let snapshots = api::Snapshots::new(
+        data_dir.cache().join("catalog"),
+        data_dir.state().join("jewelcase.db"),
+    );
+    if let Err(error) = snapshots.sweep(&db).await {
+        warn!(error = %format!("{error:#}"), "cannot sweep the catalog files");
+    }
     let installed = data_dir.state().join("plugins");
     // One map for plugins and the API both, so both reach the same scanners.
     let scanners = Arc::new(scanning.scanners());
@@ -97,9 +104,11 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
     let indexes = Arc::new(api::Indexes::default());
     indexes.build_all(&db);
     let hub = Arc::new(api::Hub::default());
+    let hints = api::hint_feed_changes(db.clone(), hub.clone());
     let mut app = api::router(api::AppState {
         db: db.clone(),
         images: Arc::new(images),
+        snapshots: Arc::new(snapshots),
         indexes,
         setup: Arc::default(),
         plugins: plugins.clone(),
@@ -107,6 +116,7 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
         hub: hub.clone(),
         players: players.clone(),
         queues: queues.clone(),
+        idempotency: Arc::default(),
         prefix: api::prefix(&config.base_path),
         trusted_proxies: Arc::new(config.trusted_proxies.clone()),
     });
@@ -126,6 +136,7 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
     let as_it_stops = async {
         plugins.stop_hooks();
         hub.close_all();
+        hints.abort();
         // The periodic save stops first, leaving a write already begun to finish.
         saving.abort();
         // The sweep stops before its next chunk, leaving one already begun to finish.

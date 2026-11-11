@@ -1,5 +1,6 @@
 //! An entity's device rows: what the library change feed carries for one changed track, album,
-//! artist or tag, and how a device writes them (`design/general.md` §3).
+//! artist or tag, what the account feed carries for one playlist or playlist item, and how a
+//! device writes them (`design/general.md` §3).
 //!
 //! The rows are the entity's own table row and the join rows that hang off it (a track's
 //! artists and tags, an album's artists, credits, discs and tags), with exactly the columns of
@@ -9,9 +10,10 @@
 //! `tag_types` row in those of its tag. Embedded summaries are not carried: the device joins
 //! them from its own rows.
 //!
-//! On the wire a row is an array of cells in the device schema's column order. As in the API, an
+//! On the wire a row is an object keyed by the device schema's column names. As in the API, an
 //! ID is a decimal string, since a random 63-bit ID does not survive JSON in JavaScript, and a
-//! blob is base64.
+//! blob is base64. A key that is not a column is ignored on `apply`, so a server that adds a
+//! column never breaks a device that has not learned it; a column a row lacks is refused.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -22,7 +24,10 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use rusqlite::types::{Value as Sql, ValueRef};
 use rusqlite::{Connection, params_from_iter};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
+
+/// A row as it travels: its cells by column name.
+pub type Row = Map<String, Value>;
 
 /// What a change names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,29 +37,43 @@ pub enum Kind {
     Album,
     Track,
     Tag,
+    /// A playlist's own row, from the account feed.
+    Playlist,
+    /// One item of a playlist, named by the playlist's ID and the item's key.
+    PlaylistItem,
+    /// A track the account hid, from the account feed, named by the track's ID.
+    HiddenTrack,
 }
 
 /// A table of an entity's rows.
 struct Part {
     table: &'static str,
-    /// The condition selecting the entity's rows, with its ID as `?1` and, on the server, its
-    /// library as `?2`.
+    /// The condition selecting the entity's rows, with its ID as `?1`, its library as `?2` where
+    /// the server has it, and a playlist item's key as `?3`.
     by: &'static str,
     /// The column the rows are listed by.
     order: &'static str,
     /// Rows other entities share, such as an image: written over on `apply`, never deleted.
     shared: bool,
+    /// Rows a user owns, of which the server holds every user's: read only for the user the
+    /// account feed is for ([`export_for`]). A device holds its own user's alone.
+    owned: bool,
 }
 
 /// A table whose rows belong to one entity: `apply` replaces them and `delete` removes them.
 const fn own(table: &'static str, by: &'static str, order: &'static str) -> Part {
-    Part { table, by, order, shared: false }
+    Part { table, by, order, shared: false, owned: false }
+}
+
+/// A table whose rows belong to one entity of one user, as [`own`].
+const fn owned(table: &'static str, by: &'static str, order: &'static str) -> Part {
+    Part { table, by, order, shared: false, owned: true }
 }
 
 /// A table whose rows other entities may share, so `delete` leaves them. `by` selects them
 /// through the entity's own row, and they have no order.
 const fn shared(table: &'static str, by: &'static str) -> Part {
-    Part { table, by, order: "1", shared: true }
+    Part { table, by, order: "1", shared: true, owned: false }
 }
 
 /// The tables an artist's rows are in.
@@ -82,6 +101,15 @@ const TRACK: &[Part] = &[
     shared("images", "id = (SELECT image_id FROM tracks WHERE id = ?1 AND library_id = ?2)"),
 ];
 
+/// The tables a playlist's rows are in.
+const PLAYLIST: &[Part] = &[own("playlists", "id = ?1", "id")];
+
+/// The tables a playlist item's rows are in.
+const PLAYLIST_ITEM: &[Part] = &[own("playlist_items", "playlist_id = ?1 AND key = ?3", "key")];
+
+/// The tables a hidden track's rows are in.
+const HIDDEN_TRACK: &[Part] = &[owned("hidden_tracks", "track_id = ?1", "track_id")];
+
 /// The tables a tag's rows are in.
 const TAG: &[Part] = &[
     own("tags", "id = ?1", "id"),
@@ -97,6 +125,9 @@ impl Kind {
             Kind::Album => ALBUM,
             Kind::Track => TRACK,
             Kind::Tag => TAG,
+            Kind::Playlist => PLAYLIST,
+            Kind::PlaylistItem => PLAYLIST_ITEM,
+            Kind::HiddenTrack => HIDDEN_TRACK,
         }
     }
 }
@@ -105,10 +136,13 @@ impl Kind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Rows {
     pub kind: Kind,
-    /// The entity's ID as the API spells it.
+    /// The entity's ID as the API spells it: a playlist item's is its playlist's.
     pub id: String,
+    /// A playlist item's key, and 0 for every other kind.
+    #[serde(default)]
+    pub key: i64,
     /// Each table's rows, in order. A table with none is left out.
-    pub tables: BTreeMap<String, Vec<Vec<Value>>>,
+    pub tables: BTreeMap<String, Vec<Row>>,
 }
 
 /// Why rows could not be applied.
@@ -176,30 +210,68 @@ fn parse_id(id: &str) -> Option<i64> {
 }
 
 /// Reads the rows of the entity `id` of `kind` in `library`, or `None` if there is no such
-/// entity there. `conn` may be the server's database or a device's: both have the device
-/// columns, and only those are read.
+/// entity there; `key` is a playlist item's and 0 for every other kind. `conn` may be the
+/// server's database or a device's: both have the device columns, and only those are read. A
+/// playlist is read whoever owns it, so a caller on the server reads only what the account feed
+/// named for its account. Rows a user owns, such as a hidden track, are read only by
+/// [`export_for`]: here they are `None`.
 pub fn export(
     conn: &Connection,
     library: i64,
     kind: Kind,
     id: &str,
+    key: i64,
+) -> rusqlite::Result<Option<Rows>> {
+    read(conn, None, library, kind, id, key)
+}
+
+/// [`export`] for the account feed of `user`, which also reads the rows `user` owns, and no
+/// other user's.
+pub fn export_for(
+    conn: &Connection,
+    user: i64,
+    library: i64,
+    kind: Kind,
+    id: &str,
+    key: i64,
+) -> rusqlite::Result<Option<Rows>> {
+    read(conn, Some(user), library, kind, id, key)
+}
+
+/// The rows [`export`] and [`export_for`] read, for `user` where there is one.
+fn read(
+    conn: &Connection,
+    user: Option<i64>,
+    library: i64,
+    kind: Kind,
+    id: &str,
+    key: i64,
 ) -> rusqlite::Result<Option<Rows>> {
     let Some(entity) = parse_id(id) else { return Ok(None) };
-    let params = [entity, library];
+    let params = [entity, library, key, user.unwrap_or(0)];
     let mut tables = BTreeMap::new();
-    for Part { table, by, order, .. } in kind.parts() {
+    for Part { table, by, order, owned, .. } in kind.parts() {
         let cols = columns(table);
         let names: Vec<&str> = cols.iter().map(|c| c.name.as_str()).collect();
-        let scope = if *table == "tag_types" { "" } else { " AND library_id = ?2" };
+        let mut scope = if *table == "tag_types" { "" } else { " AND library_id = ?2" }.to_owned();
+        if *owned {
+            if user.is_none() {
+                return Ok(None);
+            }
+            scope += " AND user_id = ?4";
+        }
         let sql =
             format!("SELECT {} FROM {table} WHERE {by}{scope} ORDER BY {order}", names.join(", "));
-        let rows = conn
-            .prepare_cached(&sql)?
-            .query_map(params, |row| {
+        let mut stmt = conn.prepare_cached(&sql)?;
+        let used = stmt.parameter_count();
+        let rows = stmt
+            .query_map(params_from_iter(&params[..used]), |row| {
                 cols.iter()
                     .enumerate()
-                    .map(|(i, col)| row.get_ref(i).map(|cell| to_json(col, cell)))
-                    .collect::<rusqlite::Result<Vec<Value>>>()
+                    .map(|(i, col)| {
+                        row.get_ref(i).map(|cell| (col.name.clone(), to_json(col, cell)))
+                    })
+                    .collect::<rusqlite::Result<Row>>()
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         if rows.is_empty() && tables.is_empty() {
@@ -209,7 +281,7 @@ pub fn export(
             tables.insert((*table).to_owned(), rows);
         }
     }
-    Ok(Some(Rows { kind, id: id.to_owned(), tables }))
+    Ok(Some(Rows { kind, id: id.to_owned(), key, tables }))
 }
 
 /// A cell as it travels.
@@ -253,7 +325,7 @@ pub fn apply(conn: &Connection, rows: &Rows) -> Result<(), Error> {
         return Err(Error::Invalid("a table is not one of the entity's"));
     }
     let id = parse_id(&rows.id).ok_or(Error::Invalid("the entity's ID is not an ID"))?;
-    delete(conn, rows.kind, id)?;
+    clear(conn, rows.kind, id, rows.key)?;
     for Part { table, shared, .. } in parts {
         let Some(list) = rows.tables.get(*table) else { continue };
         let cols = columns(table);
@@ -265,11 +337,13 @@ pub fn apply(conn: &Connection, rows: &Rows) -> Result<(), Error> {
             names.join(", ")
         ))?;
         for row in list {
-            if row.len() != cols.len() {
-                return Err(Error::Invalid("a row has the wrong number of cells"));
-            }
-            let cells =
-                cols.iter().zip(row).map(|(c, v)| to_sql(c, v)).collect::<Result<Vec<_>, _>>()?;
+            let cells = cols
+                .iter()
+                .map(|col| {
+                    let cell = row.get(&col.name).ok_or(Error::Invalid("a row lacks a column"))?;
+                    to_sql(col, cell)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             stmt.execute(params_from_iter(cells))?;
         }
     }
@@ -277,10 +351,23 @@ pub fn apply(conn: &Connection, rows: &Rows) -> Result<(), Error> {
 }
 
 /// Removes the entity's own rows from the device. The images and tag type it showed stay, as
-/// other entities may show them. An entity that is not there is no change.
-pub fn delete(conn: &Connection, kind: Kind, id: i64) -> rusqlite::Result<()> {
+/// other entities may show them, and a deleted playlist takes its items with it. An entity that
+/// is not there is no change.
+pub fn delete(conn: &Connection, kind: Kind, id: i64, key: i64) -> rusqlite::Result<()> {
+    clear(conn, kind, id, key)?;
+    if kind == Kind::Playlist {
+        conn.prepare_cached("DELETE FROM playlist_items WHERE playlist_id = ?1")?.execute([id])?;
+    }
+    Ok(())
+}
+
+/// Removes the rows [`apply`] writes in place of the entity's.
+fn clear(conn: &Connection, kind: Kind, id: i64, key: i64) -> rusqlite::Result<()> {
+    let params = [id, 0, key];
     for Part { table, by, .. } in kind.parts().iter().filter(|part| !part.shared) {
-        conn.prepare_cached(&format!("DELETE FROM {table} WHERE {by}"))?.execute([id])?;
+        let mut stmt = conn.prepare_cached(&format!("DELETE FROM {table} WHERE {by}"))?;
+        let used = stmt.parameter_count();
+        stmt.execute(params_from_iter(&params[..used]))?;
     }
     Ok(())
 }
@@ -291,9 +378,27 @@ mod tests {
 
     use super::*;
 
+    /// The tag's row, with `edit` applied to its cells.
+    fn tag_row(edit: impl FnOnce(&mut Row)) -> Row {
+        let mut row = json!({
+            "id": "5", "library_id": "1", "type": "genre", "name": "Rock", "sort_key": "AA==",
+            "track_count": 0, "album_count": 0, "artist_count": 0,
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        edit(&mut row);
+        row
+    }
+
     /// Rows of the tag `id` with the given tables.
     fn tag(id: &str, tables: Value) -> Rows {
-        Rows { kind: Kind::Tag, id: id.into(), tables: serde_json::from_value(tables).unwrap() }
+        Rows {
+            kind: Kind::Tag,
+            id: id.into(),
+            key: 0,
+            tables: serde_json::from_value(tables).unwrap(),
+        }
     }
 
     /// A device database with the schema.
@@ -311,18 +416,26 @@ mod tests {
     #[test]
     fn rows_that_do_not_fit_the_device_schema_are_refused() {
         let conn = device();
-        let row = |cells: Value| tag("5", json!({ "tags": [cells] }));
+        let with = |edit: fn(&mut Row)| tag("5", json!({ "tags": [tag_row(edit)] }));
         for bad in [
             tag("5", json!({ "tracks": [] })),
-            row(json!(["5", "1", "genre", "Rock", "AA==", 0, 0])),
-            row(json!([5, "1", "genre", "Rock", "AA==", 0, 0, 0])),
-            row(json!(["5", "1", "genre", "Rock", "AA==", "0", 0, 0])),
-            row(json!(["5", "1", "genre", "Rock", "not base64!", 0, 0, 0])),
+            with(|r| drop(r.remove("sort_key"))),
+            with(|r| drop(r.insert("id".into(), json!(5)))),
+            with(|r| drop(r.insert("track_count".into(), json!("0")))),
+            with(|r| drop(r.insert("sort_key".into(), json!("not base64!")))),
             tag("05", json!({})),
         ] {
             assert!(matches!(apply(&conn, &bad), Err(Error::Invalid(_))), "{bad:?}");
         }
         assert_eq!(count(&conn, "tags"), 0);
+    }
+
+    #[test]
+    fn a_key_that_is_no_column_is_ignored() {
+        let conn = device();
+        let row = tag_row(|r| drop(r.insert("added_later".into(), json!({ "any": [1] }))));
+        apply(&conn, &tag("5", json!({ "tags": [row] }))).unwrap();
+        assert_eq!(count(&conn, "tags"), 1);
     }
 
     #[test]
@@ -332,8 +445,8 @@ mod tests {
             tag(
                 "5",
                 json!({
-                    "tags": [["5", "1", "genre", "Rock", "AA==", 0, 0, 0]],
-                    "tag_types": [["genre", name]],
+                    "tags": [tag_row(|_| {})],
+                    "tag_types": [{ "key": "genre", "name": name }],
                 }),
             )
         };
@@ -343,7 +456,7 @@ mod tests {
             .query_row("SELECT name FROM tag_types WHERE key = 'genre'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(name, "Style");
-        delete(&conn, Kind::Tag, 5).unwrap();
+        delete(&conn, Kind::Tag, 5, 0).unwrap();
         assert_eq!((count(&conn, "tags"), count(&conn, "tag_types")), (0, 1));
     }
 }

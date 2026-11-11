@@ -343,3 +343,28 @@ async fn start_broadcasts_queues_changed() {
     start(&app, TOKEN, body).await;
     hears_no_change(&mut socket).await;
 }
+
+/// A restore from a client that accepts gzip, sent again under its key, is answered as the first
+/// was and not refused as `queue_active`: the answer is stored as the handler made it.
+#[tokio::test]
+async fn a_restore_repeated_under_its_key_is_answered_not_refused() {
+    let (_temp, state, app) = setup().await;
+    begin(&app, QUEUE, KEY, true).await;
+    begin(&app, OTHER, KEY2, true).await;
+    state.queues.save(&state.db).await;
+
+    let send = || {
+        let request = axum::http::Request::post(format!("/api/v1/me/queues/{QUEUE}/restore"))
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .header("accept-encoding", "gzip")
+            .header("idempotency-key", "restore-1")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        crate::api::testing::respond(app.clone(), request)
+    };
+    let (status, _, first) = send().await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, second) = send().await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(second, first);
+}

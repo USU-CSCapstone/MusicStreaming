@@ -12,11 +12,7 @@ use crate::db::testing::{
 const URI: &str = "/api/v1/libraries/1/playlists";
 const LIBRARY_2: &str = "/api/v1/libraries/2/playlists";
 
-/// Takes away every Liked Songs, which a library's creation gives each admin in it, so a test of
-/// saved playlists finds only those it makes. Liked Songs is tested in `liked`.
-pub(super) fn saved_only(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
-    conn.execute("DELETE FROM playlists WHERE kind = 'liked'", []).map(drop)
-}
+pub(super) use crate::api::testing::saved_only;
 
 /// Library 1 with tracks 1 and 2 on album 101, and album 102 holding tracks 13 (disc 1 number
 /// 1), 12 (1, 2), 14 (disc 1, no number) and 11 (disc 2, 1), listed in that album order. Artist
@@ -776,6 +772,7 @@ async fn items_and_duplicates_read_from_an_index() {
     .unwrap();
 }
 
+mod account_feed;
 mod artwork;
 mod edit;
 mod liked;

@@ -12,15 +12,15 @@ use crate::db::feed::{self, Entity, Op};
 /// credits it. Whether one does is read from the credits themselves, so a wrong count can never
 /// delete a credited artist. The unknown artist has no image or biography. A changed sort key
 /// reaches the albums the artist heads and the tracks crediting it first
-/// ([`follow_artist_sort_key`]).
+/// ([`follow_artist_sort_key`]), and a changed name every album it is an album artist of.
 pub(super) fn refresh_artist(tx: &Transaction<'_>, lib: i64, artist: i64, now: i64) -> Result<()> {
-    let Some((credited, name, tagged_sort, old_sort)) = tx
+    let Some((credited, name, tagged_sort, old_sort, old_name)) = tx
         .prepare_cached(
             "SELECT EXISTS (SELECT 1 FROM track_artists WHERE artist_id = ?1) \
                  OR EXISTS (SELECT 1 FROM track_album_artists WHERE artist_id = ?1), \
              (SELECT name FROM artist_spellings WHERE artist_id = ?1 ORDER BY uses DESC, name LIMIT 1), \
              (SELECT sort_key FROM artist_sort_keys WHERE artist_id = ?1 ORDER BY uses DESC, sort_key LIMIT 1), \
-             sort_key FROM artists WHERE id = ?1",
+             sort_key, name FROM artists WHERE id = ?1",
         )?
         .query_row([artist], |r| {
             Ok((
@@ -28,6 +28,7 @@ pub(super) fn refresh_artist(tx: &Transaction<'_>, lib: i64, artist: i64, now: i
                 r.get::<_, Option<String>>(1)?,
                 r.get::<_, Option<Vec<u8>>>(2)?,
                 r.get::<_, Vec<u8>>(3)?,
+                r.get::<_, Option<String>>(4)?,
             ))
         })
         .optional()?
@@ -48,16 +49,25 @@ pub(super) fn refresh_artist(tx: &Transaction<'_>, lib: i64, artist: i64, now: i
     if sort_key != old_sort {
         follow_artist_sort_key(tx, lib, artist, &sort_key, now)?;
     }
+    // Plugins see an album's artists by name, so a renamed artist changes albums the batch may
+    // not have touched.
+    if name != old_name {
+        let mut albums =
+            tx.prepare_cached("SELECT album_id FROM album_artists WHERE artist_id = ?1")?;
+        for album in albums.query_map([artist], |r| r.get::<_, i64>(0))? {
+            feed::record(tx, lib, Entity::Album, album?, Op::Upsert, now)?;
+        }
+    }
     art::artist(tx, artist, name.is_some())?;
     feed::record(tx, lib, Entity::Artist, artist, Op::Upsert, now)
 }
 
 /// Gives every album `artist` heads, as its first album artist, and every track crediting it
-/// first the artist's `sort_key`, and records each of those albums in the feed. Albums the
-/// batch touched take it again as they are recomputed; this reaches the rest. It costs the
-/// artist's albums and tracks, so the caller runs it only when the artist's key changes. Each row
-/// is written by id, so no planner statistics can turn it into a scan of every album or track
-/// (`design/database.md` §4).
+/// first the artist's `sort_key`, and records each of those albums and tracks in the feed, since
+/// their device rows carry it. Albums the batch touched take it again as they are recomputed;
+/// this reaches the rest. It costs the artist's albums and tracks, so the caller runs it only
+/// when the artist's key changes. Each row is written by id, so no planner statistics can turn
+/// it into a scan of every album or track (`design/database.md` §4).
 fn follow_artist_sort_key(
     tx: &Transaction<'_>,
     lib: i64,
@@ -81,7 +91,9 @@ fn follow_artist_sort_key(
     let mut track_key =
         tx.prepare_cached("UPDATE tracks SET artist_sort_key = ?2 WHERE id = ?1")?;
     for track in tracks.query_map([artist], |r| r.get::<_, i64>(0))? {
-        track_key.execute(params![track?, sort_key])?;
+        let track = track?;
+        track_key.execute(params![track, sort_key])?;
+        feed::record(tx, lib, Entity::Track, track, Op::Upsert, now)?;
     }
     Ok(())
 }

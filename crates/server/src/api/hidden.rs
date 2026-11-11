@@ -21,6 +21,7 @@ use super::realtime::{Hub, ServerMessage};
 use super::scope::Scope;
 use super::tracks::{self, TrackSummary};
 use super::{Id, Problem};
+use crate::db::feed::{self, Kind, Op};
 use crate::db::marks::{self, Mark};
 use crate::db::{Database, now_ms};
 
@@ -67,6 +68,15 @@ pub async fn hide(
                     > 0;
                 if hid {
                     marks::record(tx, user, library, [track], Mark::Hidden)?;
+                    feed::record_account(
+                        tx,
+                        user,
+                        library,
+                        Kind::HiddenTrack,
+                        track,
+                        0,
+                        Op::Upsert,
+                    )?;
                 }
                 Ok((hid, unliked))
             })
@@ -256,6 +266,7 @@ pub fn unhide_in(tx: &Connection, user: i64, library: i64, track: i64) -> rusqli
         > 0;
     if deleted {
         marks::record(tx, user, library, [track], Mark::Unhidden)?;
+        feed::record_account(tx, user, library, Kind::HiddenTrack, track, 0, Op::Delete)?;
     }
     Ok(deleted)
 }

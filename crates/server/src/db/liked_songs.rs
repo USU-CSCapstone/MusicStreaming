@@ -4,6 +4,7 @@
 use jewelcase_core::{sort_key, words};
 use rusqlite::{Connection, OptionalExtension, Result, params};
 
+use super::feed::{self, Kind, Op};
 use super::reach::reaches;
 use super::{new_id, now_ms};
 
@@ -58,6 +59,8 @@ pub fn create(conn: &Connection, user: i64, library: i64, now: i64) -> Result<i6
         sort_key(TITLE, None).as_bytes(),
         now
     ])?;
+    // Their devices keep it, as any playlist of theirs.
+    feed::record_account(conn, user, library, Kind::Playlist, id, 0, Op::Upsert)?;
     Ok(id)
 }
 

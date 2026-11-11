@@ -35,6 +35,10 @@ use crate::db::{Text, now_ms, reaches};
 /// ([`session::Session::respond`]).
 pub(super) const CLIENT: &str = "x-jewelcase-client";
 
+/// The header every response to a signed-in caller carries: the caller's account ID, as `getMe`
+/// shows it. A client that keeps data per account checks it on what it fetches.
+pub(super) const USER: &str = "x-jewelcase-user";
+
 /// How stale a device's `last_seen_at` may get before a request refreshes it. Coarse, so that
 /// using a device does not cost a write per request.
 const LAST_SEEN_EVERY: Duration = Duration::from_secs(5 * 60);
@@ -103,10 +107,10 @@ async fn gate(
             .into_response();
     }
     if admin_only && !caller.admin {
-        return Problem::new(Code::Forbidden).into_response();
+        return of_user(Problem::new(Code::Forbidden).into_response(), caller);
     }
     if !reaches_library {
-        return Problem::not_found().into_response();
+        return of_user(Problem::not_found().into_response(), caller);
     }
     let stale_before = now_ms() - LAST_SEEN_EVERY.as_millis() as i64;
     let stale = last_seen_at < stale_before;
@@ -137,7 +141,7 @@ async fn gate(
     if let Some(AnyId(Some(library))) = library {
         request.extensions_mut().insert(Scope { user: caller.user, library });
     }
-    let mut response = next.run(request).await;
+    let mut response = of_user(next.run(request).await, caller);
     if let Some(cookie) = refresh {
         // A cookie the handler set, such as `logout`'s, wins. No shared cache may keep the
         // token, so a handler that sets its own `Cache-Control`, such as an image's, must make
@@ -146,6 +150,12 @@ async fn gate(
         headers.entry(header::SET_COOKIE).or_insert(cookie);
         headers.entry(header::CACHE_CONTROL).or_insert(HeaderValue::from_static("private"));
     }
+    response
+}
+
+/// `response` with the caller's account ID in [`USER`].
+fn of_user(mut response: Response, caller: Caller) -> Response {
+    response.headers_mut().insert(USER, HeaderValue::from(caller.user));
     response
 }
 

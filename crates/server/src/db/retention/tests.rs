@@ -159,10 +159,11 @@ fn delivered(conn: &Connection, library: i64, hook: &str, position: i64) -> Resu
     .map(drop)
 }
 
-/// Idempotency keys go after a day, not the window, whoever's they are; a younger one stays, and
+/// Idempotency keys go after 8 days, not the window, whoever's they are; a younger one stays, and
 /// a sweep with more than a chunk of them deletes a chunk at a time.
 #[test]
-fn idempotency_keys_age_out_after_a_day() {
+fn idempotency_keys_age_out_after_8_days() {
+    assert_eq!(IDEMPOTENCY_MS, 8 * DAY);
     let n = i64::try_from(CHUNK).unwrap() + 20;
     let (_temp, db) = open(move |conn| {
         User { role: "user", ..User::new(2, "other") }.insert(conn)?;

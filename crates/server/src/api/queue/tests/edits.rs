@@ -654,3 +654,94 @@ async fn a_requeue_key_that_is_not_a_uuid_is_refused() {
     );
     assert_eq!(snapshot(&app).await["version"], 2);
 }
+
+/// An edit sent again long after, with 33 others between, is answered and not applied again: the
+/// server's memory of it is not a few of the latest.
+#[tokio::test]
+async fn an_edit_sent_again_after_many_others_is_applied_once() {
+    let (_temp, _state, app) = setup().await;
+    start(&app, TOKEN, start_body(QUEUE, KEY, &["1", "2"], 0)).await;
+    let first = add(ADDED, &["2"], manual_end());
+    let answered = send(&app, TOKEN, QUEUE, 1, first.clone()).await;
+    assert_eq!(answered.0, StatusCode::OK);
+    for n in 2..35 {
+        let mode = if n % 2 == 0 { "all" } else { "off" };
+        let (status, _) =
+            send(&app, TOKEN, QUEUE, n, json!({ "type": "repeat", "mode": mode })).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    assert_eq!(send(&app, TOKEN, QUEUE, 1, first).await, answered);
+    assert_eq!(snapshot(&app).await["version"], 34);
+}
+
+/// An edit sent again after the server restarted is answered and not applied again, since its
+/// answer is stored with the database's.
+#[tokio::test]
+async fn an_edit_sent_again_after_a_restart_is_applied_once() {
+    let (_temp, state, app) = setup().await;
+    start(&app, TOKEN, start_body(QUEUE, KEY, &["1", "2"], 0)).await;
+    let first = add(ADDED, &["2"], manual_end());
+    let answered = send(&app, TOKEN, QUEUE, 1, first.clone()).await;
+    assert_eq!(answered.0, StatusCode::OK);
+
+    let db = state.db.clone();
+    state.queues.save(&db).await;
+    let queues = std::sync::Arc::new(crate::queue::Queues::load(&db).await.unwrap());
+    let app = crate::api::testing::router_over(crate::api::AppState {
+        queues,
+        idempotency: Default::default(),
+        ..state
+    });
+    assert_eq!(send(&app, TOKEN, QUEUE, 1, first).await, answered);
+    assert_eq!(snapshot(&app).await["version"], 1);
+}
+
+/// An edit under an `Idempotency-Key` is keyed by it, and not by its `editId`: the same key with
+/// another edit ID is the same edit.
+#[tokio::test]
+async fn an_edit_with_an_idempotency_key_is_keyed_by_it() {
+    let (_temp, _state, app) = setup().await;
+    start(&app, TOKEN, start_body(QUEUE, KEY, &["1", "2"], 0)).await;
+    let send_keyed = |n: usize| {
+        let body = json!({
+            "editId": edit_id(n), "queueId": QUEUE, "edit": add(ADDED, &["2"], manual_end()),
+        });
+        let request = axum::http::Request::post("/api/v1/me/queue/edits")
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .header("content-type", "application/json")
+            .header("idempotency-key", "one-edit")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+        crate::api::testing::respond(app.clone(), request)
+    };
+    let first = send_keyed(1).await;
+    assert_eq!(first.0, StatusCode::OK);
+    assert_eq!(send_keyed(2).await, first);
+    assert_eq!(snapshot(&app).await["version"], 1);
+}
+
+/// The client's own form, an `Idempotency-Key` equal to the `editId`, applies once and answers:
+/// the handler must not take the key's turn again after the layer holds it.
+#[tokio::test]
+async fn an_edit_whose_key_is_its_edit_id_applies_once() {
+    let (_temp, _state, app) = setup().await;
+    start(&app, TOKEN, start_body(QUEUE, KEY, &["1", "2"], 0)).await;
+    let send_keyed = || {
+        let body = json!({
+            "editId": edit_id(1), "queueId": QUEUE, "edit": add(ADDED, &["2"], manual_end()),
+        });
+        let request = axum::http::Request::post("/api/v1/me/queue/edits")
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .header("content-type", "application/json")
+            .header("idempotency-key", edit_id(1))
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+        crate::api::testing::respond(app.clone(), request)
+    };
+    let first = tokio::time::timeout(std::time::Duration::from_secs(5), send_keyed())
+        .await
+        .expect("the edit is not stuck behind its own key");
+    assert_eq!(first.0, StatusCode::OK);
+    assert_eq!(send_keyed().await, first);
+    assert_eq!(snapshot(&app).await["version"], 1);
+}
