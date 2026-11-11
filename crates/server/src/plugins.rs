@@ -86,7 +86,7 @@ pub struct Plugins {
     /// `state/plugins`, where installed components are kept.
     dir: PathBuf,
     /// Each library's scanner, to pick up what a plugin saves.
-    scanners: HashMap<i64, Scanner>,
+    scanners: Arc<HashMap<i64, Scanner>>,
     /// Each started on first use, the host by an install or a run and the runtime by a run, and
     /// idle between runs, so a server with no plugin enabled pays nothing for them.
     host: OnceLock<anyhow::Result<Arc<Host<RunLibrary>>>>,
@@ -106,7 +106,7 @@ pub struct Plugins {
 impl Plugins {
     /// The plugins over `db`, installed in `dir`, with each library's scanner in `scanners` to
     /// pick up what a plugin saves.
-    pub fn new(db: Arc<Database>, dir: PathBuf, scanners: HashMap<i64, Scanner>) -> Plugins {
+    pub fn new(db: Arc<Database>, dir: PathBuf, scanners: Arc<HashMap<i64, Scanner>>) -> Plugins {
         Plugins {
             db,
             dir,

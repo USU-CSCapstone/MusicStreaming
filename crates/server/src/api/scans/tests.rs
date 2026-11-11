@@ -97,6 +97,8 @@ async fn a_library_that_does_not_exist_is_not_found() {
 }
 
 /// What is under way and the last scan to finish, newest first, and nothing of another library.
+/// The last to finish is the last that ran, so a scan cancelled since is passed over, and a row
+/// that cannot be read hides only itself.
 #[tokio::test]
 async fn the_list_is_what_is_under_way_and_the_last_finished_scan() {
     let (temp, _db, app) = app("");
@@ -121,12 +123,13 @@ async fn the_list_is_what_is_under_way_and_the_last_finished_scan() {
         i64,
         Option<&'static str>,
     );
-    let rows: [Row; 5] = [
+    let rows: [Row; 6] = [
         (11, 1, "scheduled", "completed", 1, Some(1), Some(2), 10, None),
         (12, 1, "watch", "suspended", 2, Some(2), Some(3), 4, None),
-        (13, 1, "scheduled", "running", 3, Some(3), None, 7, Some("Album/Disc 1")),
-        (14, 1, "manual", "queued", 4, None, None, 0, None),
-        (15, 2, "manual", "queued", 5, None, None, 0, None),
+        (13, 1, "watch", "cancelled", 3, None, Some(4), 0, None),
+        (14, 1, "scheduled", "running", 4, Some(4), None, 7, Some("Album/Disc 1")),
+        (15, 1, "manual", "queued", 5, None, None, 0, None),
+        (16, 2, "manual", "queued", 6, None, None, 0, None),
     ];
     for (id, lib, trigger, state, created, started, finished, seen, folder) in rows {
         let root = folder.map(|_| root);
@@ -136,14 +139,21 @@ async fn the_list_is_what_is_under_way_and_the_last_finished_scan() {
         )
         .unwrap();
     }
+    // A folder that is not UTF-8, which no scan writes, so the row cannot be read.
+    conn.execute(
+        "INSERT INTO scans (id, library_id, trigger, state, scopes, created_at, current_root_id, \
+         current_path) VALUES (17, 1, 'manual', 'queued', '[]', 7, ?1, CAST(x'ff' AS TEXT))",
+        [root],
+    )
+    .unwrap();
 
     let (status, list) = json(&app, SCANS).await;
     assert_eq!(status, StatusCode::OK);
     let items = list["items"].as_array().unwrap();
     let ids: Vec<&Value> = items.iter().map(|scan| &scan["id"]).collect();
-    assert_eq!(ids, [&json!("14"), &json!("13"), &json!("12")], "up next, running, last finished");
+    assert_eq!(ids, [&json!("15"), &json!("14"), &json!("12")], "up next, running, last that ran");
     assert_eq!(items[1]["currentFolder"], "Album/Disc 1", "relative to its root");
     assert_eq!(items[1]["filesSeen"], 7);
-    assert_eq!(items[1]["startedAt"], "1970-01-01T00:00:00.003Z");
+    assert_eq!(items[1]["startedAt"], "1970-01-01T00:00:00.004Z");
     assert_eq!(items[0]["startedAt"], Value::Null, "a queued scan has not started");
 }

@@ -1724,7 +1724,9 @@ paths:
       summary: List a library's scans
       description: |
         What is under way, and how the library was last scanned: its queued and running scans,
-        and the last one to finish, newest first. A scan queued while another runs is next. Any
+        and the last one to finish, newest first. That is the last scan that ran, `completed` or
+        `suspended`; a `cancelled` one never ran, so it is not listed. A scan queued while
+        another runs is next. Any
         trigger's scans are listed, not only the ones an admin started
         (`requirements/scanning.md` §5).
       operationId: adminListScans
@@ -2590,7 +2592,9 @@ components:
         currentFolder:
           type: [string, 'null']
           description: |
-            While it runs, the folder it is in, relative to its root (`''` is the root itself).
+            While it runs, the folder it is in, relative to whichever of the library's roots holds
+            it (`''` is that root itself). Which root is not said: a library's roots are not
+            served, and their paths never leave the server (`requirements/general.md` §3.7).
             Otherwise `null`.
 
     # ───────────────────────────── Tracks ─────────────────────────────

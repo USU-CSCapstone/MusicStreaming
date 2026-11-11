@@ -2,7 +2,7 @@
 //!
 //! A task runs it every hour, first a few minutes after the server starts.
 //! Rows go once they are older than [`WINDOW_MS`]: finished scans, but each library's last
-//! finished and last completed; login attempts; ended plays' events for the `played` hook;
+//! that ran and last completed; login attempts; ended plays' events for the `played` hook;
 //! recent searches and what the `searched` hook noted of them; kept queues parked that long
 //! ago, with the lists no queue uses after them; and tracks missing that long,
 //! with whatever of the catalog goes with them. A request to forget searches (`stopped`) is
@@ -115,14 +115,15 @@ fn aged(tx: &Transaction<'_>, now: i64, sql: &str) -> Result<bool> {
     Ok(tx.prepare_cached(sql)?.execute(params![now - WINDOW_MS, CHUNK])? < CHUNK)
 }
 
-/// Finished scans aged out, but in each library its last finished scan, which the admin sees,
-/// and its last completed one, which says the library has been scanned, so its next startup
+/// Finished scans aged out, but in each library its last scan that ran (completed or suspended,
+/// not cancelled), which the admin sees, and its last completed one, which says the library has been scanned, so its next startup
 /// scan is not taken for its first.
 fn scans(tx: &Transaction<'_>, now: i64, _: &mut i64) -> Result<bool> {
     let mut stmt = tx.prepare_cached(
         "DELETE FROM scans WHERE id IN (SELECT id FROM scans \
          WHERE library_id = ?3 AND created_at < ?1 AND finished_at < ?1 \
-         AND id NOT IN (SELECT id FROM scans WHERE library_id = ?3 AND finished_at IS NOT NULL \
+         AND id NOT IN (SELECT id FROM scans WHERE library_id = ?3 \
+                        AND state IN ('completed', 'suspended') \
                         ORDER BY created_at DESC, id DESC LIMIT 1) \
          AND id NOT IN (SELECT id FROM scans WHERE library_id = ?3 AND state = 'completed' \
                         ORDER BY finished_at DESC LIMIT 1) \

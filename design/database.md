@@ -187,7 +187,7 @@ Migrations are the exception: they run with foreign keys off, because rebuilding
 
 | Rows | Kept |
 |---|---|
-| `scans` | 30 days after they finished. Each library keeps its last finished scan, which the admin sees, and its last completed one, which says the library has been scanned, so its next startup scan is not taken for its first (`design/scanning.md` §9). Unfinished scans stay. |
+| `scans` | 30 days after they finished. Each library keeps its last scan that ran (completed or suspended, not cancelled), which the admin sees, and its last completed one, which says the library has been scanned, so its next startup scan is not taken for its first (`design/scanning.md` §9). Unfinished scans stay. |
 | `login_attempts` | 30 days, through `login_attempts_age`, so admins can still see an account under pressure. While an account's success from an origin is kept, its limit there counts only that origin's failures (`login_attempts_signed_in`), so failures elsewhere cannot lock its owner out there. Anyone who shares that origin, or claims it from a trusted proxy's address (`api/origin.rs`), still gets only the account's free attempts there. |
 | `play_events` ends | 30 days, delivered or not, through `play_events_ended_age`. Starts over an hour old go as each new play is recorded (§6), so they stay few. |
 | `mark_events` | 30 days, delivered or not. A `marked` position older than what is kept starts again from the user's current likes and hides (`design/hooks.md` §1.4), so nothing is lost. |

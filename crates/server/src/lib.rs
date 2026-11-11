@@ -80,7 +80,9 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
         warn!(error = %format!("{error:#}"), "cannot sweep the image cache");
     }
     let installed = data_dir.state().join("plugins");
-    let plugins = Arc::new(Plugins::new(db.clone(), installed, scanning.scanners()));
+    // One map for plugins and the API both, so both reach the same scanners.
+    let scanners = Arc::new(scanning.scanners());
+    let plugins = Arc::new(Plugins::new(db.clone(), installed, scanners.clone()));
     plugins.start_hooks();
     let players = Arc::new(api::Players::load(&db).await?);
     let saving = players.keep_saved(db.clone());
@@ -96,7 +98,7 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
         indexes,
         setup: Arc::default(),
         plugins: plugins.clone(),
-        scanners: Arc::new(scanning.scanners()),
+        scanners,
         hub: hub.clone(),
         players: players.clone(),
         queues: queues.clone(),
