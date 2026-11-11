@@ -16,25 +16,40 @@ use axum::http::StatusCode;
 use jewelcase_catalog::mutate::{Liked, Removed, Writer};
 use jewelcase_catalog::playlists;
 use rusqlite::Connection;
+use serde::Deserialize;
 
 use super::announce::{AppliedOp, Change};
 use super::record;
-use crate::api::extract::Path;
+use crate::api::extract::{Path, Query};
 use crate::api::hidden;
 use crate::api::realtime::{Hub, ServerMessage};
 use crate::api::scope::Scope;
 use crate::api::{Id, Problem};
 use crate::db::{Database, liked_songs, new_id, now_ms};
 
+/// What `likeTrack` takes besides its path.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LikeQuery {
+    /// The ID the client chose for the Liked Songs, used only if the like has to make it again.
+    liked_id: Option<Id>,
+}
+
 /// `likeTrack`: puts the track at the top of the caller's Liked Songs, unless it is in it
-/// already, making the playlist again, pinned, if they deleted it, and unhides it. A track the
-/// library does not have is not found.
+/// already, making the playlist again, pinned, under `likedId` if one is given, if they deleted
+/// it, and unhides it. A track the library does not have is not found; a `likedId` of 0 is
+/// `422`, and one any playlist has already is `409 id_taken`, checked only when it is used.
 pub async fn like(
     State(db): State<Arc<Database>>,
     State(hub): State<Arc<Hub>>,
     Scope { user, library }: Scope,
     Path((_, Id(track))): Path<(Id, Id)>,
+    Query(LikeQuery { liked_id }): Query<LikeQuery>,
 ) -> Result<StatusCode, Problem> {
+    let chosen = match liked_id {
+        Some(Id(0)) => return Err(Problem::invalid("likedId must be a positive 63-bit integer.")),
+        chosen => chosen.map(|Id(id)| id),
+    };
     super::settle(async move {
         let (change, unhidden) = db
             .try_write(move |tx| {
@@ -47,7 +62,10 @@ pub async fn like(
                             "DELETE FROM liked_songs_deleted WHERE user_id = ?1 AND library_id = ?2",
                         )?
                         .execute([user, library])?;
-                        Some(new_id()?)
+                        Some(match chosen {
+                            Some(id) => id,
+                            None => new_id()?,
+                        })
                     }
                 };
                 let mut effects = |effect| record(tx, user, library, effect);

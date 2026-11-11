@@ -12,6 +12,8 @@ vi.mock('$lib/api/client', async (actual) => ({
 }));
 
 const { marks } = await import('$lib/marks.svelte');
+const { sender } = await import('$lib/sync/sender');
+const { memoryEnv } = await import('$lib/sync/store');
 const { toaster } = await import('$lib/toast.svelte');
 const { default: HiddenSongs } = await import('./HiddenSongs.svelte');
 
@@ -29,12 +31,16 @@ const first = {
 	total: 2
 };
 
-beforeEach(() => {
+beforeEach(async () => {
 	marks.clear();
 	sent.length = 0;
+	sender.start('1', { env: memoryEnv() });
 });
 
-afterEach(() => toaster.dismiss());
+afterEach(() => {
+	toaster.dismiss();
+	sender.stop();
+});
 
 describe('HiddenSongs.svelte', () => {
 	it('lists the hidden songs under a count, and Unhide brings one back, with Undo', async () => {

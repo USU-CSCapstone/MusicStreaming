@@ -49,7 +49,7 @@
 	const WHY: Record<string, string> = {
 		anchor_gone: 'That spot has changed: the song it was beside has played or been removed.',
 		play_gone: 'That song is no longer in History.',
-		superseded: 'Another device started a different queue, so this change did not apply.',
+		superseded: 'A different queue was started, so this change did not apply.',
 		lost: 'The server no longer has that queue, so this change did not apply.',
 		no_queue: 'There is no queue to change.'
 	};

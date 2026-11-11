@@ -96,6 +96,7 @@ test('catalog-wasm reproduces the golden parity file', () => {
 
 test('catalog-wasm refuses what it cannot answer with an error', () => {
 	const catalog = Catalog.openInMemory();
+	/** A call of the query `name` for the test to expect a throw from. */
 	const query = (name: string, params: object) => () =>
 		catalog.query('1', '1', name, JSON.stringify(params));
 	expect(query('noSuchQuery', {})).toThrow('unknown query noSuchQuery');
@@ -196,8 +197,10 @@ test('catalog-wasm applies staged changes a chunk at a time, marked until the la
 
 test('catalog-wasm takes the API defaults for the parameters a request leaves out', () => {
 	const catalog = device();
+	/** The parsed answer of the query `name` on library 1. */
 	const ask = (name: string, params: object) =>
 		JSON.parse(catalog.query('1', '1', name, JSON.stringify(params)));
+	/** The server's recorded answer to the query `name` with exactly `params`. */
 	const golden = (name: string, params: object) =>
 		(parity('browse.json') as Case[]).find(
 			(c) => c.query === name && JSON.stringify(c.params) === JSON.stringify(params)
@@ -217,6 +220,7 @@ test('catalog-wasm takes the API defaults for the parameters a request leaves ou
 
 test('catalog-wasm search keeps only what carries the tags', () => {
 	const catalog = device();
+	/** The item count of each section a search for "a" with `params` answers. */
 	const ids = (params: object) =>
 		JSON.parse(
 			catalog.query('1', '1', 'search', JSON.stringify({ q: 'a', ...params }))
@@ -263,6 +267,7 @@ test('catalog-wasm shows a counted total anew after a commit', () => {
 
 test('catalog-wasm commits nothing when a staged change fails, and only the feed asked for', () => {
 	const catalog = Catalog.openInMemory();
+	/** The name of tag `id`, or undefined when there is none. */
 	const name = (id: string) =>
 		JSON.parse(catalog.query('1', '1', 'getTag', `{"tagId":"${id}"}`))?.name;
 	const broken = upsert(4, 'Jazz', '10');

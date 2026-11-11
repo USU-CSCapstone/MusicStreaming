@@ -1,15 +1,20 @@
 // The page's side of the queue worker (`worker.ts`): the queue's state to render, and the edits
 // to send it. The queue itself, which can be hundreds of thousands of items, never leaves the
-// worker.
+// worker. The worker's starts, edits and restores go through here to the page's one log, which
+// sends them, and what became of each goes back to it.
 
 import { API } from '$lib/api/client';
-import { offline } from '$lib/catalog/read';
+import { connectivity } from '$lib/connectivity.svelte';
+import { toast } from '$lib/toast.svelte';
 import wasmUrl from '$lib/core-wasm/jewelcase_core_wasm_bg.wasm?url';
 import type { RealtimeServerMessage, SentEdit } from '$lib/api/types';
 import type { marks as Marks } from '$lib/marks.svelte';
 import type { Realtime } from '$lib/realtime.svelte';
+import type { Mutation } from '$lib/sync/mutation';
+import { type Result, type Settled, sender } from '$lib/sync/sender';
 import type {
 	FromWorker,
+	QueueMutation,
 	Refusal,
 	RestoreResult,
 	Repeat,
@@ -25,6 +30,20 @@ const QUEUE_MESSAGES = new Set(['hello', 'queueEdit', 'queueReplaced']);
 
 /** Starts the queue worker. */
 const spawn = () => new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+
+/** The kinds of mutation the worker gives the log, whose outcomes go back to it. */
+const WORKER_MUTATIONS = new Set(['startQueue', 'editQueue', 'restoreQueue']);
+
+/**
+ * What of the page's log the queue uses: where its mutations go, what became of them, and which
+ * failed to be sent, which may be taken back.
+ */
+export type Log = {
+	enqueue(name: QueueMutation['name'], args: QueueMutation['args']): unknown;
+	onSettled(listener: (rec: Mutation, outcome: Settled, result: Result) => void): () => void;
+	onRetry(listener: (rec: Mutation) => void): () => void;
+	cancel(key: string): Promise<boolean>;
+};
 
 export class QueueClient {
 	/** The account's queue; null before it is loaded, and when the account has none. */
@@ -49,6 +68,7 @@ export class QueueClient {
 	refusal = $state<Refusal | null>(null);
 
 	#spawn: () => Worker;
+	#log: Log;
 	#worker: Worker | null = null;
 	#unsubscribe: (() => void) | null = null;
 	/** What waits for the worker's answer to a start, a restore or rows, by the asking message's ID. */
@@ -56,9 +76,21 @@ export class QueueClient {
 	#waiting = new Map<number, (answer: never) => void>();
 	#askId = 0;
 
-	/** Makes a client that starts its worker with `create` on `connect`; tests pass a fake. */
-	constructor(create: () => Worker = spawn) {
+	/**
+	 * Makes a client that starts its worker with `create` on `connect`, and gives its mutations to
+	 * `log`, the page's sender; tests pass fakes.
+	 */
+	constructor(
+		create: () => Worker = spawn,
+		log: Log = {
+			enqueue: (name, args) => sender.enqueue(name, args as never),
+			onSettled: (listener) => sender.onSettled(listener),
+			onRetry: (listener) => sender.onRetry(listener),
+			cancel: (key) => sender.cancel(key)
+		}
+	) {
 		this.#spawn = create;
+		this.#log = log;
 	}
 
 	/**
@@ -70,16 +102,44 @@ export class QueueClient {
 		const worker = (this.#worker = this.#spawn());
 		worker.onmessage = ({ data }: MessageEvent<FromWorker>) => this.#heard(data);
 		this.#send({ type: 'init', api: API, wasm: wasmUrl, user });
+		if (connectivity.workOffline) this.#send({ type: 'offline', value: true });
 		const unsubscribe = realtime.on((message: RealtimeServerMessage) => {
 			if (QUEUE_MESSAGES.has(message.type)) this.#send({ type: 'message', message });
 		});
 		const unhear = marks?.onHidden((libraryId, trackId, hidden) =>
 			this.#send({ type: 'hidden', libraryId, trackId, hidden })
 		);
+		// What became of the worker's mutations, this tab's own or adopted from a closed one.
+		const unsettle = this.#log.onSettled(({ name, args }, outcome, result) => {
+			if (!WORKER_MUTATIONS.has(name)) return;
+			const mutation = { name, args } as QueueMutation;
+			this.#send({ type: 'settled', mutation, outcome, result });
+		});
+		/**
+		 * Has the worker keep the queue when the page becomes hidden, so a page going away keeps it
+		 * first.
+		 */
+		const hide = () => document.visibilityState === 'hidden' && void this.save();
+		globalThis.document?.addEventListener('visibilitychange', hide);
+		// Kept queues are the server's alone until devices keep them, so a restore that could not
+		// reach it is taken back, once its request is over, and told as unreachable.
+		const unretry = this.#log.onRetry(({ name, key }) => {
+			if (name === 'restoreQueue') queueMicrotask(() => void this.#log.cancel(key));
+		});
 		this.#unsubscribe = () => {
 			unsubscribe();
 			unhear?.();
+			unsettle();
+			unretry();
+			globalThis.document?.removeEventListener('visibilitychange', hide);
 		};
+	}
+
+	/**
+	 * Tells the worker whether the device is working offline, so it makes no request until it is not.
+	 */
+	setWorkingOffline(value: boolean) {
+		this.#send({ type: 'offline', value });
 	}
 
 	/** Stops the worker, and with it the queue held on this device. */
@@ -107,7 +167,7 @@ export class QueueClient {
 	 * device only then.
 	 */
 	edit(edit: SentEdit, length?: number) {
-		this.#send({ type: 'edit', edit, length, offline: offline() });
+		this.#send({ type: 'edit', edit, length, offline: connectivity.state !== 'online' });
 	}
 
 	/**
@@ -117,16 +177,22 @@ export class QueueClient {
 	 * app counts itself offline, as with `edit`.
 	 */
 	start(request: StartRequest): Promise<boolean> {
-		return this.#ask((id) => ({ type: 'start', id, request: { ...request, offline: offline() } }));
+		return this.#ask((id) => ({
+			type: 'start',
+			id,
+			request: { ...request, offline: connectivity.state !== 'online' }
+		}));
 	}
 
 	/**
 	 * Makes a kept queue the account's active one (`QueueStore.restore`): settles once the worker
-	 * has it, and then the queue's state is the restored queue's, or with why it was not. Never
-	 * settles if the worker is stopped first.
+	 * has it, and then the queue's state is the restored queue's, or with why it was not: `offline`
+	 * at once while the app counts itself offline, when nothing is restored, and `unreachable` when
+	 * the server could not be reached. Never settles if the worker is stopped first.
 	 */
 	restore(queueId: string): Promise<RestoreResult> {
-		return this.#ask((id) => ({ type: 'restore', id, queueId }));
+		const offline = connectivity.state !== 'online';
+		return this.#ask((id) => ({ type: 'restore', id, queueId, offline }));
 	}
 
 	/**
@@ -136,6 +202,16 @@ export class QueueClient {
 	 */
 	rows(section: RowSection, offset: number, limit: number): Promise<RowsWindow> {
 		return this.#ask((id) => ({ type: 'rows', id, section, offset, limit }));
+	}
+
+	/**
+	 * Has the worker write the queue to the database for the next time the app opens: settles once
+	 * the write is done or has failed, and every start and edit made before is in the log, at once
+	 * with no worker. Never settles if the worker is stopped first, so a caller should not wait long.
+	 */
+	save(): Promise<void> {
+		if (!this.#worker) return Promise.resolve();
+		return this.#ask((id) => ({ type: 'save', id }));
 	}
 
 	/** Sends the message `make` builds with a fresh ID, settling with the worker's answer to it. */
@@ -154,15 +230,30 @@ export class QueueClient {
 
 	/** Takes in what the worker said. */
 	#heard(message: FromWorker) {
-		if (message.type === 'rows' || message.type === 'started' || message.type === 'restored') {
+		if (
+			message.type === 'rows' ||
+			message.type === 'started' ||
+			message.type === 'restored' ||
+			message.type === 'saved'
+		) {
 			const answer =
 				message.type === 'rows'
 					? message.window
 					: message.type === 'started'
 						? message.ok
-						: message.result;
+						: message.type === 'restored'
+							? message.result
+							: undefined;
 			this.#waiting.get(message.id)?.(answer as never);
 			this.#waiting.delete(message.id);
+			return;
+		}
+		if (message.type === 'notice') {
+			toast(message.message);
+			return;
+		}
+		if (message.type === 'enqueue') {
+			this.#log.enqueue(message.mutation.name, message.mutation.args);
 			return;
 		}
 		if (message.type === 'refused') {

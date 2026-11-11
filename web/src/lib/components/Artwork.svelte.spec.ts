@@ -15,6 +15,9 @@ vi.mock('$lib/placeholder', async (original) => {
 	};
 });
 
+const { connectivity } = await import('$lib/connectivity.svelte');
+const { imageCache } = await import('$lib/image-cache');
+const IMAGE_CACHE = imageCache('5');
 const { default: Artwork } = await import('./Artwork.svelte');
 
 /** The base64 ThumbHash of a 4 by 4 red picture, as the server sends it. */
@@ -26,6 +29,11 @@ const hash = btoa(
 			new Uint8Array(64).map((_, i) => (i % 4 === 0 || i % 4 === 3 ? 255 : 0))
 		)
 	)
+);
+/** A 1 by 1 GIF, which a browser decodes. */
+const PIXEL = Uint8Array.from(
+	atob('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'),
+	(c) => c.charCodeAt(0)
 );
 const props = { image: { id: '9', placeholder: hash }, seed: '9', size: 40 };
 
@@ -90,5 +98,45 @@ describe('Artwork', () => {
 		await vi.waitFor(() => expect(container.querySelector('img.thumb')).not.toBeNull());
 		expect(decode.calls).toBe(1);
 		target.remove();
+	});
+
+	describe('working offline', () => {
+		afterEach(async () => {
+			connectivity.setWorkOffline(false);
+			await caches.delete(IMAGE_CACHE);
+		});
+
+		it('asks for no image the device does not keep, and shows the placeholder', async () => {
+			connectivity.setWorkOffline(true);
+			const { container } = await render(Artwork, props);
+
+			await vi.waitFor(() => expect(container.querySelector('img.thumb')).not.toBeNull());
+			expect(picture(container)).toBeNull();
+		});
+
+		it('reads the cache only for a picture that nears the viewport', async () => {
+			connectivity.setWorkOffline(true);
+			const open = vi.spyOn(caches, 'open');
+			const target = document.body.appendChild(document.createElement('div'));
+			target.style.cssText = 'position: fixed; top: 20000px; width: 40px';
+			await render(Artwork, { props, target });
+
+			await new Promise((resolve) => setTimeout(resolve, 200));
+			expect(open).not.toHaveBeenCalled();
+			target.style.top = '0';
+			await vi.waitFor(() => expect(open).toHaveBeenCalled());
+			target.remove();
+			open.mockRestore();
+		});
+
+		it('shows a kept image from the cache, not the network', async () => {
+			await (
+				await caches.open(IMAGE_CACHE)
+			).put('/images/9', new Response(PIXEL, { headers: { 'content-type': 'image/gif' } }));
+			connectivity.setWorkOffline(true);
+			const { container } = await render(Artwork, props);
+
+			await vi.waitFor(() => expect(picture(container)?.outerHTML).toContain('src="blob:'));
+		});
 	});
 });

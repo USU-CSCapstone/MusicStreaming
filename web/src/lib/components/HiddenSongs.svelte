@@ -33,8 +33,8 @@
 	function unhide(song: TrackSummary) {
 		// Read as hidden, which a refused unhide goes back to.
 		const track = { ...song, hidden: true };
-		void marks.hide(fetch, library, track, false);
-		const undo = () => void marks.hide(fetch, library, track, true);
+		void marks.hide(library, track, false);
+		const undo = () => void marks.hide(library, track, true);
 		toast(`“${track.title}” is back in your library`, { action: { label: 'Undo', run: undo } });
 	}
 </script>

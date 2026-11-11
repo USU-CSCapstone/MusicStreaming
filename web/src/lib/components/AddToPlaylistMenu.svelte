@@ -7,9 +7,9 @@
 	// liked or unliked, or hidden, with Undo (`requirements/conventions.md` §2, §8).
 	import { onMount, tick } from 'svelte';
 	import { page } from '$app/state';
-	import { createPlaylist, listPlaylists } from '$lib/api/client';
-	import type { Playlist, PlaylistCreate, TrackSummary } from '$lib/api/types';
-	import { type Adding, addTo, alreadyIn } from '$lib/adding.svelte';
+	import { listPlaylists } from '$lib/api/client';
+	import type { Playlist, TrackSummary } from '$lib/api/types';
+	import { type Adding, addTo, alreadyIn, newPlaylist } from '$lib/adding.svelte';
 	import { catalog } from '$lib/catalog/client.svelte';
 	import { deleted } from '$lib/deletions.svelte';
 	import { marks } from '$lib/marks.svelte';
@@ -119,14 +119,14 @@
 	}
 
 	function likeIt(song: TrackSummary, liked: boolean) {
-		void marks.like(fetch, libraryId, song, liked);
+		void marks.like(libraryId, song, liked);
 		onclose();
 	}
 
 	/** Hides the song at once, gone from every list, and offers Undo. */
 	function hideIt(song: TrackSummary) {
-		void marks.hide(fetch, libraryId, song, true);
-		const undo = () => void marks.hide(fetch, libraryId, song, false);
+		void marks.hide(libraryId, song, true);
+		const undo = () => void marks.hide(libraryId, song, false);
 		toast(`Hid “${song.title}”`, { action: { label: 'Undo', run: undo } });
 		onclose();
 	}
@@ -192,19 +192,10 @@
 		return `${repeated} ${of} ${verb} already in “${playlist}”. Add them anyway?`;
 	}
 
-	/**
-	 * The last request and its `Idempotency-Key`. Sending the same request again reuses the key,
-	 * so a retry after a lost response still makes one playlist; a changed one gets a new key.
-	 */
-	let sent: { request: string; key: string } | null = null;
-
-	async function create({ title, description }: PlaylistDetails) {
-		const body: PlaylistCreate = { title, items: what.refs };
-		if (description) body.description = description;
-		const request = JSON.stringify(body);
-		if (sent?.request !== request) sent = { request, key: crypto.randomUUID() };
-		await createPlaylist(fetch, libraryId, body, sent.key);
-		toast(`Added ${what.label} to “${title}”`);
+	/** Makes a playlist holding `what`, saying so once it can be opened, then closes the menu. */
+	async function create(details: PlaylistDetails) {
+		const { open } = await newPlaylist(libraryId, details, what);
+		if (open) toast(`Added ${what.label} to “${details.title}”`);
 		onclose();
 	}
 </script>

@@ -40,6 +40,17 @@ describe('PlayRecorder', () => {
 		expect(sent.at(-1)!.listenTimeMs).toBe(10_000 + 250 + 500);
 	});
 
+	it('checkpoints the play under way with what has been heard, under its own ID', () => {
+		const { r, sent } = recorder();
+		r.checkpoint();
+		expect(sent).toEqual([]);
+		r.start('1', '7', album, 'context');
+		for (let t = 0.5; t <= 5; t += 0.5) r.heard(t);
+		r.checkpoint();
+		expect(sent.at(-1)).toMatchObject({ trackId: '7', listenTimeMs: 5000, end: null });
+		expect(sent.at(-1)!.playId).toBe(sent[0].playId);
+	});
+
 	it('skips the play under way when another starts, and starts the next from nothing', () => {
 		const { r, sent } = recorder();
 		r.start('1', '7', album, 'context');

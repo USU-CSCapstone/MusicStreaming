@@ -1,9 +1,15 @@
 import { readFileSync } from 'node:fs';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initSync, Queue } from '$lib/core-wasm/jewelcase_core_wasm.js';
 import type { QueueEdit, RealtimeServerMessage, SentEdit, StartQueue } from '$lib/api/types';
-import type { Refusal, Summary } from './protocol';
-import { QueueStore } from './store';
+import { connectivity } from '$lib/connectivity.svelte';
+import type { Device } from '$lib/sync/device';
+import { Sender } from '$lib/sync/sender';
+import { type Env, type StoreName, type Stored, memoryEnv, unsent } from '$lib/sync/store';
+import type { QueueMutation, Refusal, Summary } from './protocol';
+import { type QueueRecord, QueueStore } from './store';
+
+vi.mock('$app/paths', () => ({ base: '', resolve: (path: string) => path }));
 
 /** Loads the core's WebAssembly, which the browser would otherwise fetch. */
 beforeAll(() => {
@@ -67,6 +73,8 @@ class FakeServer {
 	startGate: Promise<void> | null = null;
 	/** What a recipe resolves to, as the tracks of the list the server holds for a recipe's start. */
 	resolved5 = ['200', '201', '202', '203', '204'];
+	/** The queues a start replaced that were adjusted, which the server keeps, in order. */
+	parked: string[] = [];
 	/** The kept queues, by ID: the queue, and where playback was left. */
 	kept = new Map<string, { queue: Queue; position: { item: string; positionMs: number } }>();
 	/** The status pages of rows are answered with instead of the page. */
@@ -116,7 +124,8 @@ class FakeServer {
 		const tracks: string[] = source.tracks ?? this.resolved5;
 		const at = source.tracks ? start : tracks.indexOf(startTrackId!);
 		const list = `hs-${queueId.slice(0, 4)}`;
-		const repeat = JSON.parse(this.queue.toJson()).repeat;
+		const { repeat, adjusted } = JSON.parse(this.queue.toJson());
+		if (adjusted) this.parked.push(this.queueId);
 		const state = JSON.parse(Queue.started(source.key, 'lib', tracks.length, at, repeat).toJson());
 		state.sources[0].list = list;
 		this.queue = Queue.fromJson(JSON.stringify(state));
@@ -365,8 +374,59 @@ const problem = (status: number, code: string) =>
 /** Lets the store's requests and retries finish. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 
+/** The device's catalog, which queue mutations do not touch. */
+const noDevice: Device = {
+	apply: async () => {},
+	rebase: async () => {},
+	confirmed: async () => {}
+};
+
+/** The kinds of mutation the queue gives the log. */
+const QUEUE_MUTATIONS = new Set(['startQueue', 'editQueue', 'restoreQueue']);
+
+/** Every sender a spec made, stopped after it. */
+let senders: Sender[] = [];
+afterEach(() => {
+	for (const one of senders) one.stop();
+	senders = [];
+	connectivity.setWorkOffline(false);
+	connectivity.reach();
+});
+
+/** Waits `ms` of real time. */
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A page's log for user `user` over `env`, sending with `fetcher`, as the page's sender does:
+ * `log` is what the store gives its mutations to, and what becomes of each goes to the store
+ * `to` gives, as the page tells its worker; a restore that could not reach the server is taken
+ * back, as the page takes it.
+ */
+function pageLog(
+	fetcher: typeof fetch,
+	to: () => QueueStore | undefined,
+	{ env = memoryEnv(), user = '7' }: { env?: Env; user?: string } = {}
+) {
+	const sender = new Sender();
+	senders.push(sender);
+	sender.start(user, { env, fetch: fetcher, device: noDevice });
+	sender.onSettled(({ name, args }, outcome, result) => {
+		if (QUEUE_MUTATIONS.has(name)) to()?.settled({ name, args } as QueueMutation, outcome, result);
+	});
+	// As the page does: a restore that could not reach the server is taken back.
+	sender.onRetry(({ name, key }) => {
+		if (name === 'restoreQueue') queueMicrotask(() => void sender.cancel(key));
+	});
+	const log = {
+		enqueue: ({ name, args }: QueueMutation) => void sender.enqueue(name, args as never)
+	};
+	return { sender, log };
+}
+
 let server: FakeServer;
 let store: QueueStore;
+/** The page's sender the store's mutations go through. */
+let sender: Sender;
 let summary: Summary;
 let refusals: Refusal[];
 let caches: FakeCaches;
@@ -398,11 +458,13 @@ beforeEach(() => {
 	caches = new FakeCaches();
 	device = new FakeCatalog();
 	// A store from an earlier test can still be retrying; only this test's store reports here.
+	const page = pageLog(server.fetch as typeof fetch, () => store);
+	sender = page.sender;
 	const created: QueueStore = new QueueStore({
 		api: API,
 		user: '7',
 		fetch: server.fetch as typeof fetch,
-		retryMs: 0,
+		log: page.log,
 		storage: caches as unknown as CacheStorage,
 		catalog: device,
 		changed: (s) => {
@@ -475,11 +537,56 @@ describe('QueueStore', () => {
 		expect(refusals).toEqual([]);
 	});
 
+	it('makes no request while working offline, and sends its changes in order once it is not', async () => {
+		await hello();
+		const before = server.requests.length;
+		connectivity.setWorkOffline(true);
+		store.edit(next);
+		store.start({
+			queueId: '55555555-5555-4555-8555-555555555555',
+			context: CONTEXT,
+			source: { key: '22222222-2222-4222-8222-222222222222', libraryId: 'lib', tracks: ['1', '2'] },
+			start: 0
+		});
+		await wait(300);
+		expect(server.requests).toHaveLength(before);
+		expect(refusals).toEqual([]);
+
+		connectivity.setWorkOffline(false);
+		await settle();
+		const posts = server.requests.filter((r) => r.method === 'POST').map((r) => r.path);
+		expect(posts).toEqual(['/me/queue/edits', '/me/queue']);
+		expect(refusals).toEqual([]);
+	});
+
+	it('sends a change that could not reach the server again after the log’s pause, not at once', async () => {
+		await hello();
+		server.failures = [0];
+		store.edit(next);
+		await wait(300);
+		const sent = () => server.requests.filter((r) => r.path === '/me/queue/edits');
+		expect(sent()).toHaveLength(1);
+		await sender.flush();
+		expect(sent()).toHaveLength(2);
+	});
+
+	it('asks for the queue once when it cannot be fetched, and again only once the server is heard from', async () => {
+		await hello();
+		server.failures = [0];
+		await hello();
+		await wait(300);
+		expect(server.gets()).toBe(2);
+		await hello();
+		expect(server.gets()).toBe(3);
+	});
+
 	it('sends an edit once when its answer is lost', async () => {
 		await hello();
 		server.loseAnswers = 1;
 		store.edit(next);
 		await settle();
+		// Sent again by the log, without waiting out its pause.
+		await sender.flush();
 
 		const sent = server.requests.filter((r) => r.path === '/me/queue/edits');
 		expect(sent).toHaveLength(2);
@@ -558,7 +665,9 @@ describe('QueueStore', () => {
 		expect(summary.upNext).toBe(4);
 		await settle();
 
-		expect(refusals).toEqual([{ code: 'anchor_gone', message: 'anchor_gone', edit: move }]);
+		expect(refusals).toEqual([
+			{ code: 'anchor_gone', message: 'Couldn’t change the queue. anchor_gone', edit: move }
+		]);
 		expect(summary.upNext).toBe(4);
 		store.message(removal);
 		expect(summary).toMatchObject({ upNext: 3, version: 1 });
@@ -583,7 +692,9 @@ describe('QueueStore', () => {
 		expect(summary).toMatchObject({ current: 'a.0', history: 0 });
 		await settle();
 
-		expect(refusals).toEqual([{ code: 'play_gone', message: 'play_gone', edit: rewind }]);
+		expect(refusals).toEqual([
+			{ code: 'play_gone', message: 'Couldn’t change the queue. play_gone', edit: rewind }
+		]);
 		expect(summary).toMatchObject({ current: 'a.2', history: 2 });
 		store.message(removal);
 		expect(summary).toMatchObject({ current: 'a.2', history: 1, version: 3 });
@@ -764,12 +875,16 @@ describe('QueueStore', () => {
 		server.queueId = '22222222-2222-4222-8222-222222222222';
 		store.message({ type: 'queueReplaced', queueId: server.queueId });
 		await settle();
+		// The queue is not fetched while the edit waits to be sent again.
+		expect(server.gets()).toBe(1);
+		await sender.flush();
+		await settle();
 
 		expect(refusals).toMatchObject([{ code: 'superseded', edit: queueManual('m') }]);
 		expect(summary).toMatchObject({ queueId: server.queueId, manual: 0 });
 	});
 
-	it('restores a kept queue as the active one, where it was left, dropping edits for the one it replaced', async () => {
+	it('restores a kept queue as the active one, where it was left, after the edits made on the one it replaces', async () => {
 		await hello();
 		const kept = '33333333-3333-4333-8333-333333333333';
 		const left = albumQueue();
@@ -778,10 +893,15 @@ describe('QueueStore', () => {
 		server.failures = [0];
 		store.edit(queueManual('m'));
 
-		const result = await store.restore(kept);
+		const restore = store.restore(kept);
+		await sender.flush();
+		const result = await restore;
 		expect(result).toEqual({ ok: true, position: { item: 'a.1', positionMs: 42_000 } });
 		expect(summary).toMatchObject({ queueId: kept, current: 'a.1', version: 7, held: 'a.1' });
-		expect(refusals).toMatchObject([{ code: 'superseded', edit: queueManual('m') }]);
+		// The edit reached the queue it was made on first, as it would have online.
+		const posts = server.requests.filter((r) => r.method === 'POST').map((r) => r.path);
+		expect(posts).toEqual(['/me/queue/edits', '/me/queue/edits', `/me/queues/${kept}/restore`]);
+		expect(refusals).toEqual([]);
 
 		// The server tells every device the queue is replaced, this one included; it already holds it.
 		store.message({ type: 'queueReplaced', queueId: kept });
@@ -890,8 +1010,6 @@ describe('QueueStore', () => {
 		expect(await store.restore(QUEUE)).toMatchObject({ ok: false, code: 'queue_active' });
 		const gone = '44444444-4444-4444-8444-444444444444';
 		expect(await store.restore(gone)).toMatchObject({ ok: false, code: 'not_found' });
-		server.failures = [0];
-		expect(await store.restore(gone)).toMatchObject({ ok: false, code: 'unreachable' });
 		await settle();
 		expect(summary).toMatchObject({ queueId: QUEUE, current: 'a.0' });
 	});
@@ -912,17 +1030,51 @@ describe('QueueStore', () => {
 		expect(server.requests.filter((r) => r.path.endsWith('/restore'))).toHaveLength(1);
 	});
 
-	it('fetches the queue again after a restore the server could not be reached for', async () => {
+	it('logs no restore while the app counts itself offline, and says it needs the server', async () => {
 		await hello();
-		const before = server.gets();
-		server.failures = [0];
-		expect(await store.restore('44444444-4444-4444-8444-444444444444')).toMatchObject({
-			ok: false,
-			code: 'unreachable'
-		});
+		const kept = '33333333-3333-4333-8333-333333333333';
+		server.kept.set(kept, { queue: albumQueue(), position: { item: 'a.0', positionMs: 0 } });
+		expect(await store.restore(kept, true)).toMatchObject({ ok: false, code: 'offline' });
+		// What is done meanwhile stays on the queue it was made on, and nothing replaces it later.
+		store.edit(next);
+		await sender.flush();
 		await settle();
 
-		expect(server.gets()).toBe(before + 1);
+		expect(server.requests.filter((r) => r.path.endsWith('/restore'))).toEqual([]);
+		expect(await sender.pending()).toBe(0);
+		expect(summary).toMatchObject({ queueId: QUEUE, current: 'a.1', version: 0 });
+		expect(refusals).toEqual([]);
+	});
+
+	it('takes back a restore that could not reach the server, says so, and lets the queue go on', async () => {
+		await hello();
+		const kept = '33333333-3333-4333-8333-333333333333';
+		server.kept.set(kept, { queue: albumQueue(), position: { item: 'a.0', positionMs: 0 } });
+		server.failures = [0];
+		expect(await store.restore(kept)).toMatchObject({ ok: false, code: 'unreachable' });
+		await sender.flush();
+		await settle();
+
+		expect(server.requests.filter((r) => r.path.endsWith('/restore'))).toHaveLength(1);
+		expect(await sender.pending()).toBe(0);
+		store.edit(next);
+		await settle();
+		expect(summary).toMatchObject({ queueId: QUEUE, current: 'a.1' });
+		expect(refusals).toEqual([]);
+		// Another restore may be asked for at once.
+		expect(await store.restore(kept)).toMatchObject({ ok: true });
+	});
+
+	it('fetches again a queue it could not fetch once the server answers a change', async () => {
+		await hello();
+		server.failures = [0];
+		await hello();
+		await wait(300);
+		expect(server.gets()).toBe(2);
+		// Nothing but the answer to an edit says the server is back.
+		store.edit(next);
+		await settle();
+		expect(server.gets()).toBe(3);
 	});
 
 	it('has no queue when the server has none', async () => {
@@ -983,9 +1135,9 @@ describe('QueueStore', () => {
 		store.message({ type: 'queueReplaced', queueId: server.queueId });
 		await settle();
 
+		// Told once, though the server, which it still reaches, refuses it too.
 		expect(refusals).toMatchObject([{ code: 'superseded', edit: queueManual('m') }]);
 		expect(summary).toMatchObject({ queueId: server.queueId, manual: 0 });
-		expect(server.requests.filter((r) => r.path === '/me/queue/edits')).toEqual([]);
 	});
 
 	it('does not call an edit lost while a gap in versions is still to be fetched', async () => {
@@ -1289,7 +1441,7 @@ describe('QueueStore lists and rows', () => {
 			api: API,
 			user: '7',
 			fetch: server.fetch as typeof fetch,
-			retryMs: 0,
+			log: pageLog(server.fetch as typeof fetch, () => store).log,
 			storage: undefined,
 			changed: (s) => (summary = s),
 			refused: (r) => refusals.push(r)
@@ -1720,6 +1872,8 @@ describe('QueueStore lists and rows', () => {
 			// The start names their list once it arrives, so these wait.
 			expect(now()).toEqual(['201', '202', 'unknown', 'unknown']);
 			await settle();
+			await sender.flush();
+			await settle();
 			// Sent again, and answered: the same start, not a second.
 			const posts = server.requests.filter((r) => r.method === 'POST');
 			expect(posts.length).toBe(2);
@@ -1751,10 +1905,9 @@ describe('QueueStore lists and rows', () => {
 			store.edit({ type: 'next' });
 			await settle();
 
-			expect(refusals).toMatchObject([
-				{ code: 'superseded', edit: { type: 'next' } },
-				{ code: 'failed', edit: null }
-			]);
+			// The edit made on it goes with it, unsent, and the one refusal is the start's.
+			expect(refusals).toMatchObject([{ code: 'failed', edit: null }]);
+			expect(server.requests.filter((r) => r.path === '/me/queue/edits')).toEqual([]);
 			expect(summary).toMatchObject({ queueId: QUEUE, current: 'a.0' });
 		});
 
@@ -1969,5 +2122,578 @@ describe('QueueStore hidden tracks', () => {
 		expect(answered.map((r) => r.headers?.['If-None-Match'])).toEqual([`"r1.${QUEUE}.0"`]);
 		expect(hiddenReads()).toHaveLength(2);
 		expect(upNext()).toEqual(['102', '104']);
+	});
+});
+
+describe('QueueStore kept for the next time the app opens, its changes in the log', () => {
+	const STARTED = '33333333-3333-4333-8333-333333333333';
+	const THIRD = '44444444-4444-4444-8444-444444444444';
+	/** A start of a track list, clicking its second. */
+	const tracksStart = (queueId = STARTED) => ({
+		queueId,
+		context: CONTEXT,
+		source: { key: `k-${queueId.slice(0, 4)}`, libraryId: 'lib', tracks: ['300', '301', '302'] },
+		start: 1
+	});
+
+	/** The database every page shares, as the tabs of one browser do. */
+	let env: Env;
+	/** Whether the server can be reached. */
+	let net: { up: boolean };
+	/** Every page made, to close what a test leaves. */
+	let made: { close: () => void }[];
+
+	beforeEach(() => {
+		env = memoryEnv();
+		net = { up: false };
+		made = [];
+	});
+	afterEach(() => made.forEach((one) => one.close()));
+
+	/**
+	 * One page for `user` over the shared database: its sender and its queue worker's store, which
+	 * the store's database may stand in for (`database`). Closing it stops what it sends, as closing
+	 * the page does, and frees its mutations for another page to adopt.
+	 */
+	function instance(user = '7', options: { database?: Env } = {}) {
+		let alive = true;
+		let latest!: Summary;
+		const refusals: Refusal[] = [];
+		const notices: string[] = [];
+		const fetcher = ((input: never, init?: RequestInit) =>
+			!alive
+				? new Promise(() => {})
+				: net.up
+					? server.fetch(input, init)
+					: Promise.reject(new TypeError('offline'))) as typeof fetch;
+		const page = pageLog(fetcher, () => (alive ? created : undefined), { env, user });
+		const created: QueueStore = new QueueStore({
+			api: API,
+			user,
+			fetch: fetcher,
+			log: page.log,
+			storage: caches as unknown as CacheStorage,
+			database: options.database ?? env,
+			changed: (summary) => (latest = summary),
+			refused: (refusal) => refusals.push(refusal),
+			told: (message) => notices.push(message)
+		});
+		const one = {
+			store: created,
+			sender: page.sender,
+			summary: () => latest,
+			refusals,
+			notices,
+			close: () => {
+				alive = false;
+				page.sender.stop();
+				created.close();
+			}
+		};
+		made.push(one);
+		return one;
+	}
+	type Page = ReturnType<typeof instance>;
+
+	/** The server can be reached and says hello to `one`, which wakes its sender as the page does. */
+	async function connect(one: Page) {
+		net.up = true;
+		one.store.message({ type: 'hello', deviceId: '1', serverTime: '' });
+		one.sender.wake();
+		await settle();
+		await one.sender.idle();
+		await settle();
+	}
+
+	/** A page that has loaded the server's queue, which then cannot be reached. */
+	async function loaded(user = '7') {
+		const one = instance(user);
+		await one.store.resume();
+		await connect(one);
+		net.up = false;
+		return one;
+	}
+
+	/** The records the database holds for user 7. */
+	const records = () => env.open('7').all<QueueRecord>('queue');
+	/** The edits the server has been sent, resends included. */
+	const sentEdits = () => server.requests.filter((r) => r.path === '/me/queue/edits');
+	/** The starts, edits and restores the server was sent, as `path queueId`, in order. */
+	const posts = () =>
+		server.requests
+			.filter((r) => r.method === 'POST')
+			.map((r) => `${r.path} ${r.body?.queueId ?? ''}`.trim());
+
+	it('shows the queue as left, with the edits made offline on top, when the app opens offline', async () => {
+		const first = await loaded();
+		first.store.edit(queueManual('m1'));
+		first.store.edit(next);
+		await settle();
+		first.close();
+
+		const second = instance();
+		await second.store.resume();
+
+		expect(second.summary()).toMatchObject({ queueId: QUEUE, current: 'm1.0', manual: 0 });
+		expect(
+			second.store.rows({ section: 'upNext', offset: 0, limit: 10 }).rows.map((row) => row.item)
+		).toEqual(['a.1', 'a.2', 'a.3', 'a.4']);
+		expect(
+			second.store.rows({ section: 'upNext', offset: 0, limit: 10 }).rows.map((row) => row.track)
+		).toEqual(['101', '102', '103', '104']);
+		expect(second.refusals).toEqual([]);
+	});
+
+	it('sends the edits of two closed pages once each, in the order they were made', async () => {
+		const first = await loaded();
+		const second = await loaded();
+		first.store.edit(queueManual('m1'));
+		await settle();
+		second.store.edit(queueManual('m2'));
+		await settle();
+		first.close();
+		second.close();
+
+		const third = instance();
+		await third.store.resume();
+		expect(third.summary().manual).toBe(2);
+		await connect(third);
+
+		expect(sentEdits().map((r) => r.body.edit.source.key)).toEqual(['m1', 'm2']);
+		expect(server.version).toBe(2);
+		expect(await unsent(env.open('7'))).toBe(0);
+		// Hearing hello again sends nothing twice.
+		await connect(third);
+		expect(sentEdits()).toHaveLength(2);
+	});
+
+	it('sends a start made offline, before the edits made on it, when the connection is back', async () => {
+		const first = await loaded();
+		expect(first.store.start({ ...tracksStart(), loaded: ['300'] })).toBe(true);
+		first.store.edit(queueManual('m1'));
+		await settle();
+		await first.store.save();
+		// What the server confirmed is all the record holds.
+		expect(await records()).toEqual([expect.objectContaining({ queueId: QUEUE })]);
+		first.close();
+
+		const second = instance();
+		await second.store.resume();
+		expect(second.summary()).toMatchObject({ queueId: STARTED, current: 'k-3333.1', manual: 1 });
+		expect(second.store.rows({ section: 'current', offset: 0, limit: 1 }).rows[0].track).toBe(
+			'301'
+		);
+		expect(server.queueId).toBe(QUEUE);
+		await connect(second);
+
+		expect(posts()).toEqual([`/me/queue ${STARTED}`, `/me/queue/edits ${STARTED}`]);
+		expect(server.queueId).toBe(STARTED);
+		expect(server.version).toBe(1);
+		expect(second.summary()).toMatchObject({ queueId: STARTED, version: 1, manual: 1 });
+		await second.store.save();
+		expect(await records()).toEqual([expect.objectContaining({ queueId: STARTED })]);
+	});
+
+	it('sends the edits made on a queue before the starts that replaced it offline, so the server keeps it with them', async () => {
+		const one = await loaded();
+		one.store.edit(next);
+		one.store.edit({ type: 'move', items: ids('a', 3), before: { type: 'before', item: 'a.2' } });
+		one.store.start(tracksStart());
+		one.store.edit({ type: 'remove', items: ['k-3333.2'] });
+		one.store.start(tracksStart(THIRD));
+		await settle();
+		expect(one.summary()).toMatchObject({ queueId: THIRD, current: 'k-4444.1' });
+		expect(server.requests.filter((r) => r.method === 'POST')).toEqual([]);
+
+		await connect(one);
+		expect(posts()).toEqual([
+			`/me/queue/edits ${QUEUE}`,
+			`/me/queue/edits ${QUEUE}`,
+			`/me/queue ${STARTED}`,
+			`/me/queue/edits ${STARTED}`,
+			`/me/queue ${THIRD}`
+		]);
+		// Both replaced queues were adjusted, so the server parked them as kept.
+		expect(server.parked).toEqual([QUEUE, STARTED]);
+		expect(server.queueId).toBe(THIRD);
+		expect(one.refusals).toEqual([]);
+		expect(one.summary()).toMatchObject({ queueId: THIRD, current: 'k-4444.1' });
+	});
+
+	it('leaves a queue that was not adjusted to be replaced, not kept, as the server does', async () => {
+		const one = await loaded();
+		one.store.edit(next);
+		one.store.start(tracksStart());
+		one.store.start(tracksStart(THIRD));
+		await settle();
+		await connect(one);
+
+		expect(posts()).toEqual([
+			`/me/queue/edits ${QUEUE}`,
+			`/me/queue ${STARTED}`,
+			`/me/queue ${THIRD}`
+		]);
+		// Skipping a song adjusts nothing, and nothing was done to the second.
+		expect(server.parked).toEqual([]);
+	});
+
+	it("sends a closed page's edit once however often hello comes, and leaves a live page's to it", async () => {
+		const closed = await loaded();
+		closed.store.edit(queueManual('m1'));
+		await settle();
+		closed.close();
+		const live = await loaded();
+		live.store.edit(queueManual('m2'));
+		await settle();
+
+		const third = instance();
+		await third.store.resume();
+		await connect(third);
+		await connect(third);
+		await connect(live);
+
+		expect(sentEdits().filter((r) => r.body.edit.source.key === 'm1')).toHaveLength(1);
+		expect(sentEdits().filter((r) => r.body.edit.source.key === 'm2')).toHaveLength(1);
+	});
+
+	it('shows an edit of another page once, when the server has it and it was shown from the log', async () => {
+		const live = await loaded();
+		live.store.edit(queueManual('m1'));
+		await settle();
+		const second = instance();
+		await second.store.resume();
+		expect(second.summary().manual).toBe(1);
+
+		await connect(live);
+		await connect(second);
+		expect(server.version).toBe(1);
+		expect(second.summary()).toMatchObject({ version: 1, manual: 1 });
+		expect(second.refusals).toEqual([]);
+	});
+
+	it('keeps showing a queue started offline, reopened and then reconnected, until the server has it', async () => {
+		const first = await loaded();
+		first.store.start(tracksStart());
+		first.store.edit(queueManual('m1'));
+		await settle();
+		first.close();
+		const second = instance();
+		const shown: (string | null)[] = [];
+		await second.store.resume();
+		expect(second.summary().queueId).toBe(STARTED);
+		const sample = setInterval(() => shown.push(second.summary().queueId), 1);
+
+		// The server says hello before the page's sender has sent the start, and tells of nothing.
+		net.up = true;
+		second.store.message({ type: 'hello', deviceId: '1', serverTime: '' });
+		await settle();
+		second.sender.wake();
+		await settle();
+		await second.sender.idle();
+		await settle();
+		clearInterval(sample);
+
+		expect(shown).not.toContain(QUEUE);
+		expect(server.queueId).toBe(STARTED);
+		expect(second.summary()).toMatchObject({ queueId: STARTED, version: 1, manual: 1 });
+		expect(second.refusals).toEqual([]);
+	});
+
+	it('fetches once the server has what it showed from the log, though told while it read the log', async () => {
+		const live = await loaded();
+		live.store.start(tracksStart());
+		await settle();
+		/** Once armed, the next read of the log answers what it held then, only once let go. */
+		let hold: Promise<void> | null = null;
+		const slow: Env = {
+			...env,
+			open: (user) => {
+				const port = env.open(user);
+				return {
+					...port,
+					all: async <T extends Stored>(store: StoreName) => {
+						const read = await port.all<T>(store);
+						const held = store === 'mutations' ? hold : null;
+						if (held) {
+							hold = null;
+							await held;
+						}
+						return read;
+					}
+				};
+			}
+		};
+		const second = instance('7', { database: slow });
+		await second.store.resume();
+		expect(second.summary()).toMatchObject({ queueId: STARTED, held: null });
+		const read = gate();
+		hold = read.wait;
+		net.up = true;
+		second.store.message({ type: 'hello', deviceId: '1', serverTime: '' });
+		await settle();
+
+		// The live page sends its start while the read is held, and the server tells every page.
+		await connect(live);
+		expect(server.queueId).toBe(STARTED);
+		second.store.message({ type: 'queueReplaced', queueId: STARTED });
+		read.open();
+		await settle();
+
+		// Fetched: the server's queue is held, with the item it has playing.
+		expect(second.summary()).toMatchObject({ queueId: STARTED, held: 'k-3333.1' });
+	});
+
+	it("sends an edit of a page that closed meanwhile before this one's later edit", async () => {
+		const first = await loaded();
+		const second = await loaded();
+		first.store.edit(queueManual('m1'));
+		await settle();
+		second.store.edit(queueManual('m2'));
+		first.close();
+		await settle();
+		await connect(second);
+
+		expect(sentEdits().map((r) => r.body.edit.source.key)).toEqual(['m1', 'm2']);
+	});
+
+	it("keeps each user's queue apart", async () => {
+		const first = await loaded('7');
+		first.store.edit(queueManual('m1'));
+		await first.store.save();
+		first.close();
+
+		const other = instance('8');
+		await other.store.resume();
+
+		expect(other.summary()).toBeUndefined();
+		expect(await env.open('8').all('queue')).toEqual([]);
+		expect(await records()).toHaveLength(1);
+	});
+
+	it('counts its starts and edits among the unsent, which the log holds', async () => {
+		const first = await loaded();
+		first.store.start(tracksStart());
+		first.store.edit(queueManual('m1'));
+		first.store.edit(next);
+		await settle();
+
+		expect(await unsent(env.open('7'))).toBe(3);
+	});
+
+	it('writes the record for what the server confirmed alone, and no more once the database is wiped', async () => {
+		const puts: string[] = [];
+		const counting: Env = {
+			...env,
+			open: (user) => {
+				const port = env.open(user);
+				return {
+					...port,
+					put: (store, record, strict) => (puts.push(store), port.put(store, record, strict))
+				};
+			}
+		};
+		const one = instance('7', { database: counting });
+		await one.store.resume();
+		await connect(one);
+		expect(puts).toEqual(['queue']);
+		net.up = false;
+		// Edits are the log's, and a change of rows is nobody's.
+		one.store.edit(queueManual('m1'));
+		one.store.hidden('lib', '101', true);
+		await settle();
+		expect(puts).toEqual(['queue']);
+		// What the server confirms is written.
+		one.store.message(server.apply(next));
+		await settle();
+		expect(puts).toEqual(['queue', 'queue']);
+
+		const wipe = new BroadcastChannel('jewelcase-outbox-7');
+		wipe.postMessage('wipe');
+		wipe.close();
+		await settle();
+		one.store.message(server.apply(next));
+		await one.store.save();
+		expect(puts).toEqual(['queue', 'queue']);
+	});
+
+	it('keeps an edit made offline just before the page closes', async () => {
+		const one = await loaded();
+		one.store.edit(queueManual('m1'));
+		// Closed with no wait for a timer: the log wrote it as it was made.
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		one.close();
+
+		const again = instance();
+		await again.store.resume();
+		expect(again.summary().manual).toBe(1);
+	});
+
+	it('shows and sends a queue started offline in a page, though another page saved later', async () => {
+		const starter = await loaded();
+		const idle = await loaded();
+		starter.store.start(tracksStart());
+		await settle();
+		await idle.store.save();
+		starter.close();
+		idle.close();
+
+		const again = instance();
+		await again.store.resume();
+		expect(again.summary().queueId).toBe(STARTED);
+		await connect(again);
+
+		expect(server.queueId).toBe(STARTED);
+	});
+
+	it("sends a closed page's start before the edits made on it, from a live page's log", async () => {
+		const starter = await loaded();
+		const live = await loaded();
+		starter.store.start(tracksStart());
+		starter.store.edit(queueManual('m1'));
+		await settle();
+		starter.close();
+		await connect(live);
+
+		expect(server.queueId).toBe(STARTED);
+		expect(posts()).toEqual([`/me/queue ${STARTED}`, `/me/queue/edits ${STARTED}`]);
+	});
+
+	it('sends the starts two pages made in the order they were made, the later active', async () => {
+		const first = await loaded();
+		const second = await loaded();
+		first.store.start(tracksStart());
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		second.store.start(tracksStart(THIRD));
+		await settle();
+		first.close();
+		second.close();
+
+		const again = instance();
+		await again.store.resume();
+		expect(again.summary().queueId).toBe(THIRD);
+		await connect(again);
+
+		expect(posts()).toEqual([`/me/queue ${STARTED}`, `/me/queue ${THIRD}`]);
+		expect(again.refusals).toEqual([]);
+		expect(again.notices).toEqual([]);
+	});
+
+	it('does not tell the page a failed write as a refused start, but once, plainly', async () => {
+		const broken: Env = {
+			...env,
+			open: (user) => ({ ...env.open(user), put: () => Promise.reject(new Error('quota')) })
+		};
+		const one = instance('7', { database: broken });
+		await one.store.resume();
+		await connect(one);
+		one.store.message(server.apply(next));
+		one.store.edit(queueManual('m1'));
+		await settle();
+
+		expect(one.refusals).toEqual([]);
+		expect(one.notices).toHaveLength(1);
+	});
+
+	it('asks with the version it kept and keeps that queue when the server says 304', async () => {
+		const first = await loaded();
+		await first.store.save();
+		first.close();
+		const again = instance();
+		await again.store.resume();
+		const before = server.gets();
+		await connect(again);
+
+		expect(
+			server
+				.queueGets()
+				.slice(before)
+				.map((r) => r.headers?.['If-None-Match'])
+		).toEqual([`"r1.${QUEUE}.0"`]);
+		expect(again.summary()).toMatchObject({ queueId: QUEUE, version: 0 });
+	});
+
+	it('reopens a recipe start with the rows its view had loaded', async () => {
+		const first = await loaded();
+		first.store.start({
+			queueId: STARTED,
+			context: CONTEXT,
+			source: {
+				key: 'rec',
+				libraryId: 'lib',
+				recipe: { type: 'album', albumId: '1', sort: 'album', order: 'asc' }
+			},
+			start: 1,
+			startTrackId: '201',
+			total: 5,
+			loaded: ['200', '201', '202']
+		});
+		await settle();
+		first.close();
+
+		const again = instance();
+		await again.store.resume();
+		const rows = again.store.rows({ section: 'upNext', offset: 0, limit: 10 }).rows;
+		expect(rows.map((row) => row.track ?? row.status)).toEqual(['202', 'unknown', 'unknown']);
+		expect(again.store.rows({ section: 'current', offset: 0, limit: 1 }).rows[0].track).toBe('201');
+	});
+
+	it('shows the queue as last confirmed, not as a page that heard less wrote it', async () => {
+		const behind = await loaded();
+		const ahead = await loaded();
+		ahead.store.message(server.apply(next));
+		await settle();
+		// The page that heard nothing is hidden later: its queue has not changed, so it is not written.
+		await behind.store.save();
+		behind.close();
+		ahead.close();
+
+		const again = instance();
+		await again.store.resume();
+		expect(again.summary()).toMatchObject({ version: 1, current: 'a.1' });
+	});
+
+	it('removes the records an earlier build kept for each instance', async () => {
+		await env.open('7').put('queue', {
+			key: 'instance',
+			rev: 'r',
+			owner: 'instance',
+			createdAt: 1,
+			tries: 0
+		});
+		const one = await loaded();
+		await one.store.save();
+		expect((await records()).map((record) => record.key)).toEqual(['queue']);
+	});
+
+	it('sends nothing of the ended account after the database is wiped, however it is woken', async () => {
+		const one = await loaded();
+		one.store.start(tracksStart());
+		one.store.edit(queueManual('m1'));
+		await settle();
+
+		const wipe = new BroadcastChannel('jewelcase-outbox-7');
+		wipe.postMessage('wipe');
+		wipe.close();
+		await settle();
+		await connect(one);
+		one.store.edit(next);
+		await settle();
+
+		expect(server.requests.filter((r) => r.method === 'POST')).toEqual([]);
+		expect(server.queueId).toBe(QUEUE);
+	});
+
+	it('settles a restore that is waiting when the database is wiped', async () => {
+		const one = await loaded();
+		net.up = true;
+		server.restoreGate = new Promise(() => {});
+		const asked = one.store.restore('kept');
+		await settle();
+		const wipe = new BroadcastChannel('jewelcase-outbox-7');
+		wipe.postMessage('wipe');
+		wipe.close();
+
+		const answer = await Promise.race([asked, settle().then(() => 'waiting')]);
+		expect(answer).toMatchObject({ ok: false, code: 'unreachable' });
 	});
 });

@@ -59,21 +59,21 @@ Rules:
 
 ### 3.1 The catalog queries
 
-**Planned (Stage 10); only the device schema's definitions exist so far.** The core stays small enough for the page thread, so it holds no SQL. The SQL that reads the catalog lives in `crates/catalog`, with the device's table definitions and a version:
+The core stays small enough for the page thread, so it holds no SQL. The SQL that reads the catalog lives in `crates/catalog`, with the device's table definitions and a version:
 
 - **One set of queries, two databases.** Listings with their filters, sorts and keyset paging, single gets, the search response and the rows its index is built from, playlist reads and queue recipes all take a database connection and a library, and never check access, which stays the server's gate ([§6](#6-public-api)). The server's handlers call them. On a device the catalog worker runs the same code, compiled to WebAssembly.
 - **The device schema is a subset of the server's.** The tables, columns and types are the server's, minus what never leaves it: file paths, roots, file stamps, scan and analysis state, plugin data and other users' data ([`requirements/general.md` §3.7](../requirements/general.md#37-payloads-carry-only-what-the-client-needs)). Counts the server keeps by trigger arrive as plain columns. A test checks that every device column exists in the server's schema with the same type.
 - **Parity is tested.** A test builds a server database, syncs a device database from its feeds, and checks that every shared query returns identical JSON from both. The worker's build checks the same results.
-- **The device holds only playable tracks in the indexes that recipes and tag counts read**, so a missing track stays visible in listings without slowing the reads that skip it.
+- **A device holds missing tracks too,** as the server does: a listing shows them and a recipe keeps them in place, so what a start queues is what its page shows ([`requirements/conventions.md` §6](../requirements/conventions.md#6-availability)). The sort indexes that serve a listing serve a recipe's order, and a counted tag total starts from its smallest tag group.
 - **A device copy is a cache.** It is deleted and downloaded again when its schema version changes, a query finds it corrupt, or the browser evicts it ([§7.1](#71-web)).
 
 ---
 
 ## 4. Sync and Mutations
 
-- **Change feeds.** Each library has an ordered feed of content changes; each account is to have one for its personal data, starting with playlists and their items ([`database.md` §5](database.md#5-change-feeds)). Clients sync from a cursor, coalesced to net effect, and an expired cursor falls back to a full resync. Once built, a device with no copy of a library starts from a snapshot file the server builds, then follows the feed from the snapshot's position. Plugins follow the same feeds with durable cursors ([`requirements/plugins.md` §8](../requirements/plugins.md#8-events)).
-- **Domain outboxes.** Until the account feed is designed, a hook that tells a plugin about one user's activity reads an outbox that activity's own domain keeps, written in the same transaction as the activity: `play_events` for `played` and `playing`, and `search_events` for `searched` ([`hooks.md` §1](hooks.md#1-built-hooks)). Each holds only what its hooks deliver, and new personal activity gets an outbox of its own rather than joining a shared log, so nothing commits to the account feed's shape before sync is designed.
-- **Commands.** Every user action applies locally, then goes to the server as an idempotent command with a client-generated ID, queued durably on the device. Offline is the same path with a longer wait ([`requirements/general.md` §3.4](../requirements/general.md#34-optimistic-by-default)). Until the durable queue is built, a command is retried only while the page is open, so an edit made offline is lost if the app closes before it reconnects.
+- **Change feeds.** Each library has an ordered feed of content changes, and each account has one for its personal data, so far playlists and their items ([`database.md` §5](database.md#5-change-feeds)). Clients sync from a cursor, coalesced to net effect, and an expired cursor falls back to a full resync. A device with no copy of a library starts from a snapshot file the server builds, then follows the feed from the snapshot's position. Plugins follow the same feeds with durable cursors ([`requirements/plugins.md` §8](../requirements/plugins.md#8-events)).
+- **Domain outboxes.** A hook that tells a plugin about one user's activity reads an outbox that activity's own domain keeps, written in the same transaction as the activity: `play_events` for `played` and `playing`, and `search_events` for `searched` ([`hooks.md` §1](hooks.md#1-built-hooks)). Each holds only what its hooks deliver, and new personal activity gets an outbox of its own rather than joining a shared log, so the account feed takes a new kind only when a device needs to sync it.
+- **Commands.** Every user action applies locally, then goes to the server as an idempotent command with a client-generated ID, queued durably on the device. Offline is the same path with a longer wait ([`requirements/general.md` §3.4](../requirements/general.md#34-optimistic-by-default)). Every write the app makes is a mutation in one per-account IndexedDB log, kept until the server confirms it, shown on the device at once and sent by one sender in order, with the server applying each once for its idempotency key ([`web.md`](web.md#the-sync-framework)).
 - **Plays** carry the time they happened, not the time they synced.
 - **Playlist edits** carry the version they were made against. A device's queued edits chain versions, so they never refuse each other ([`requirements/playlists.md` §5](../requirements/playlists.md#5-concurrent-edits)).
 - **Playback control** is last-command-wins, ordered at the server.
@@ -85,7 +85,7 @@ Rules:
 - **One WebSocket per client**, carrying feed notifications, playback state, and Shift commands.
 - **The server owns playback state** per account and decides which device is playing ([`requirements/realtime.md` §2](../requirements/realtime.md#2-one-player-at-a-time)).
 - **Heartbeats** detect lost connections. Reconnection resumes from cursors and receives current state, not a replay.
-- **Feed notifications are hints (planned).** Once built, the server tells each connected account that a library it reaches, or the account's own data, has moved, with the new position. A library's hints are throttled to one a second, the last of a burst always sent, so an import of ten thousand tracks is a handful of messages. A device pulls its feed on every hint and on every `hello`, so live updates and catching up after a disconnect are one path, and a lost hint costs nothing.
+- **Feed notifications are hints.** The server tells each connected account that a library it reaches (`libraryChanged`), or the account's own data (`accountChanged`), has moved, with the new position. A library's hints are throttled to one a second, the last of a burst always sent, so an import of ten thousand tracks is a handful of messages. A device pulls its feed on every hint and on every `hello`, so live updates and catching up after a disconnect are one path, and a lost hint costs nothing.
 
 ---
 
@@ -104,10 +104,10 @@ Rules:
 ### 7.1 Web
 - **Static files served by the server.** Unknown paths fall back to the SPA entry page.
 - **The base path is rewritten at startup.** The client is built with a placeholder base path. At startup the server writes a copy of the build into `cache/` with the placeholder replaced by the configured prefix, so one image works under any path ([`requirements/deployment.md` §6](../requirements/deployment.md#6-remote-access)). CI runs the client under a non-root prefix.
-- **Pages load from the worker, not the network (planned; pages read from the server until the device catalog is built).** A page's `load` awaits its first query to the worker, and live changes reach the page through Svelte stores fed by the change feeds. Where a page's answer comes from depends on the library's state: the server until the library has been synced once (offline, the page says the library is not on this device yet, never part of it), the device once it is current, the device first and then the server's answer when it is behind, and the device when offline.
-- **Three threads:** the UI thread handles rendering, input, and audio; a worker holds the core (WebAssembly), catalog, search, sync (the catalog, search over it and sync are planned) and, once built, the command queue; a service worker holds the app shell, cached imagery and, once built, downloaded audio. Once built, one tab at a time owns the catalog worker, since the browser's file handle for the database is exclusive; the others ask it ([`web.md`](web.md#catalog-worker)). A tab where the browser has no private file system reads from the server instead. One exception: a page that sorts a list it holds (an album, a playlist, a sorted search) loads the core on the UI thread too, so the sort stays synchronous as the page renders it ([§3](#3-shared-core)); only those pages import it, and they and the worker share one download of the WebAssembly file.
+- **Pages read the device's copy once a library is on it.** A page's `load` awaits its first query, and live changes reach the page when the worker applies them, which reloads it in place. Where a page's answer comes from depends on the library's state: the server until the library has been synced once (offline, the page says the library is not on this device yet, never part of it), and the device alone once it is there, even while it is catching up, since the catch-up replaces what is shown in place. Reads made for a write, such as a playlist's version, always go to the server.
+- **Threads:** the UI thread handles rendering, input, and audio; two workers hold the rest: the queue worker holds the core (WebAssembly) and the queue, and the catalog worker holds the catalog, the search index over it and sync; a service worker holds the app shell and cached imagery and, once built, downloaded audio. One tab at a time owns the catalog worker, since the browser's file handle for the database is exclusive; the others, and the queue worker, ask it ([`web.md`](web.md#catalog-worker)). A tab where the browser has no private file system reads from the server instead. One exception: a page that sorts a list it holds (an album, a playlist, a sorted search) loads the core on the UI thread too, so the sort stays synchronous as the page renders it ([§3](#3-shared-core)); only those pages import it, and they and the queue worker share one download of the WebAssembly file.
 - **The UI thread never does work proportional to library size.** Lists are virtualized.
-- **Search runs on the server when reachable**, on the device otherwise — the same core either way.
+- **Search runs on the server when reachable**, on the device otherwise or when the server is slow — the same core either way.
 
 ### 7.2 Android
 - **Native Kotlin**, calling the shared core through native bindings.
@@ -128,10 +128,10 @@ Plugin UI surfaces must render natively on both web and Android ([`requirements/
 ```
 jewelcase/
 ├── crates/
-│   ├── catalog/     # the device catalog's schema and the SQL the server and the device share
+│   ├── catalog/     # the device catalog's schema, the sync rows and snapshot, and the SQL the server and the device share (§3.1)
 │   ├── catalog-wasm/ # WebAssembly bindings for the catalog: SQLite on OPFS in the catalog worker (§7.1)
 │   ├── core/        # shared core (§3)
-│   ├── core-wasm/   # WebAssembly bindings for the web client (later, with the worker in §7.1)
+│   ├── core-wasm/   # WebAssembly bindings for the web client: sort, list hash and the queue
 │   ├── ffmpeg/      # ffmpeg subprocess wrapper — probe, decode, transcode (scanning.md §11)
 │   ├── plugins/     # plugin host — Wasmtime, the WIT contract, manifests (plugins.md)
 │   ├── scanner/     # ingestion pipeline (scanning.md)
@@ -162,7 +162,7 @@ jewelcase/
 ## 11. Open Decisions
 
 1. **Audio delivery** — gapless background playback in the browser, above all in an installed iOS web app, and the stream format that serves it.
-2. ~~**On-device catalog and index format**~~ Settled: SQLite with the catalog's SQL shared ([§3.1](#31-the-catalog-queries), [ADR 0008](../adr/0008-sqlite-device-catalog.md)). A 500,000-track copy is about 310 MB, within [`requirements/performance.md` §6](../requirements/performance.md#6-client-footprint).
+2. ~~**On-device catalog and index format**~~ Settled: SQLite with the catalog's SQL shared ([§3.1](#31-the-catalog-queries), [ADR 0008](../adr/0008-sqlite-device-catalog.md)). A 500,000-track copy is about 360 MB, within [`requirements/performance.md` §6](../requirements/performance.md#6-client-footprint).
 3. **Track identity** that survives retags and moves ([`requirements/scanning.md` §6](../requirements/scanning.md#6-track-identity)) without slowing cold scans ([`requirements/performance.md` §5](../requirements/performance.md#5-scanning--analysis)).
 4. **Plugin UI description** ([§8](#8-plugins)). The execution model is settled ([`plugins.md`](plugins.md)); its remaining questions are listed there.
 5. **Project license.**

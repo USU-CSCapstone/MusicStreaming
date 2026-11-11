@@ -1,26 +1,21 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import {
-		ApiError,
-		deleteKeptQueue,
-		getAlbum,
-		getArtist,
-		getPlaylist,
-		listKeptQueues
-	} from '$lib/api/client';
+	import { ApiError, getAlbum, getArtist, getPlaylist, listKeptQueues } from '$lib/api/client';
 	import type { KeptQueue, TrackSummary } from '$lib/api/types';
 	import { plural } from '$lib/format';
 	import { player } from '$lib/player.svelte';
 	import { ago, contextLabel, namedBy } from '$lib/queue/kept';
 	import { lookup, trackKey } from '$lib/queue/summaries';
 	import { realtime } from '$lib/realtime.svelte';
+	import { sender } from '$lib/sync/sender';
 	import Icon from './Icon.svelte';
 
 	// The account's kept queues, the ones a start or a restore replaced after they were adjusted
 	// (`requirements/queue.md` §6): each shows what it was playing, how much it holds and when it
 	// was last active. Restoring one makes it the active queue and plays it here where it was left;
-	// deleting is one press. The list is the server's, so it needs the connection: it is fetched
-	// again when the server says it changed (`queuesChanged`) and when the connection returns.
+	// deleting is one press, a change the log sends in its turn with the queue's others. The list is
+	// the server's, so it needs the connection: it is fetched again when the server says it changed
+	// (`queuesChanged`) and when the connection returns.
 
 	let { onrestored }: { onrestored?: () => void } = $props();
 
@@ -41,6 +36,9 @@
 	let loadingMore = $state(false);
 	/** Counts loads, so an answer to an earlier one is ignored. */
 	let loads = 0;
+	/** The queues deleted here that the server may not have heard of yet, left out of every load. */
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- not shown, only read by a load
+	const deleted = new Set<string>();
 
 	/** Why a request failed, in words: the connection, or the server's own message. */
 	const whyNot = (error: unknown) =>
@@ -64,7 +62,7 @@
 				cursor = next ?? undefined;
 			} while (next && got.length < wanted);
 			if (load !== loads) return;
-			items = got;
+			items = got.filter((entry) => !deleted.has(entry.queueId));
 			more = next;
 			status = 'ready';
 			void describe(got);
@@ -83,7 +81,7 @@
 		try {
 			const page = await listKeptQueues(fetch, more);
 			if (load !== loads) return;
-			items = [...items, ...page.items];
+			items = [...items, ...page.items.filter((entry) => !deleted.has(entry.queueId))];
 			more = page.nextCursor;
 			void describe(page.items);
 		} catch (error) {
@@ -144,28 +142,31 @@
 		else onrestored?.();
 	}
 
-	/** Deletes `entry`, or says why it was not: the active queue is replaced by a start, not deleted. */
-	async function remove(entry: KeptQueue) {
+	/**
+	 * Deletes `entry` here at once and gives the delete to the log, online or not; one the server
+	 * refuses, as the active queue, is told by the log and shows again.
+	 */
+	function remove(entry: KeptQueue) {
 		problem = '';
-		try {
-			await deleteKeptQueue(fetch, entry.queueId);
-			items = items.filter((other) => other.queueId !== entry.queueId);
-		} catch (error) {
-			if (error instanceof ApiError && error.code === 'queue_active') {
-				problem = 'That queue is the one playing now, so it cannot be deleted.';
-			} else if (error instanceof ApiError && error.status === 404) {
-				items = items.filter((other) => other.queueId !== entry.queueId);
-			} else {
-				problem = whyNot(error);
-			}
-		}
+		deleted.add(entry.queueId);
+		items = items.filter((other) => other.queueId !== entry.queueId);
+		sender.enqueue('deleteKeptQueue', { queueId: entry.queueId });
 	}
 
 	onMount(() => {
 		void load();
-		return realtime.on((message) => {
+		const unhear = realtime.on((message) => {
 			if (message.type === 'queuesChanged' || message.type === 'hello') void load();
 		});
+		const unsettle = sender.onSettled(({ name, args }, outcome) => {
+			if (name !== 'deleteKeptQueue') return;
+			deleted.delete((args as { queueId: string }).queueId);
+			if (outcome !== 'sent') void load();
+		});
+		return () => {
+			unhear();
+			unsettle();
+		};
 	});
 </script>
 

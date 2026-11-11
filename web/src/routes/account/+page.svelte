@@ -15,18 +15,21 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import SettingsDialog from '$lib/components/SettingsDialog.svelte';
 	import { catalog } from '$lib/catalog/client.svelte';
+	import { connectivity } from '$lib/connectivity.svelte';
 	import { imageCacheSize } from '$lib/image-cache';
 	import { setLogoutPending } from '$lib/last-known';
 	import { finishLogout } from '$lib/logout';
 	import { prefs } from '$lib/prefs.svelte';
+	import { queue } from '$lib/queue/client.svelte';
 	import { realtime } from '$lib/realtime.svelte';
+	import { sender } from '$lib/sync/sender';
 	import { tagTypeName } from '$lib/tags';
 
 	let { data } = $props();
 
 	const me = $derived(page.data.me);
 	// Svelte 5 lets a derived be overwritten locally; it resets when the page reloads its data.
-	let connectable = $derived(data.connectable);
+	let connectable = $derived(data.connectable ?? []);
 	let connecting = $state<PersonalPlugin | null>(null);
 	let connectionError = $state('');
 	const roles: Record<User['role'], string> = { owner: 'Owner', admin: 'Admin', user: 'User' };
@@ -52,24 +55,45 @@
 			() => {}
 		);
 	});
-
 	let busy = $state(false);
+	/**
+	 * How many plays and changes have not reached the server, once logging out found some: the user
+	 * is asked before they are deleted.
+	 */
+	let unsent = $state(0);
 
 	/** How long the server is waited for at log out; a server out of reach is told later. */
 	const LOGOUT_WAIT_MS = 3000;
+	/** How long the queue is waited for to write what it holds, which is counted among the unsent. */
+	const QUEUE_SAVE_WAIT_MS = 500;
 
 	/**
-	 * Logs out: the device is wiped first, with a marker left for the server, which is told now
-	 * if it answers in time and otherwise as soon as it can be reached (`$lib/logout`). Works
-	 * with no server in reach, which a session cookie only the server can end needs.
+	 * Logs out: what the log holds is sent if the server can be reached, and the user is asked
+	 * before what is left is deleted with everything else. The device is wiped first, with a marker
+	 * left for the server, which is told now if it answers in time and otherwise as soon as it can
+	 * be reached (`$lib/logout`). Works with no server in reach, which a session cookie only the
+	 * server can end needs.
 	 */
-	async function logOut() {
+	async function logOut(anyway = false) {
 		busy = true;
+		if (!anyway) {
+			await Promise.race([sender.flush(), new Promise((done) => setTimeout(done, LOGOUT_WAIT_MS))]);
+			// The queue's answer comes after every change its worker gave the log, so all are counted.
+			await Promise.race([
+				queue.save(),
+				new Promise((done) => setTimeout(done, QUEUE_SAVE_WAIT_MS))
+			]);
+			unsent = await sender.pending();
+			if (unsent > 0) {
+				busy = false;
+				return;
+			}
+		}
 		// Ending the session closes the socket; left running, the client would take that for a
 		// sign-out elsewhere and race this page to the login page.
 		realtime.stop();
 		setLogoutPending(true);
-		await catalog.signOut();
+		await catalog.signOut(true);
 		await Promise.race([
 			finishLogout(fetch),
 			new Promise((done) => setTimeout(done, LOGOUT_WAIT_MS))
@@ -121,9 +145,17 @@
 			The admins of this server can see your listening data: your playlists, queues, downloads,
 			history, and statistics. They can't sign in as you or change any of it.
 		</p>
-		<button type="button" onclick={logOut} disabled={busy}>
-			{busy ? 'Logging out…' : 'Log out'}
-		</button>
+		{#if unsent > 0}
+			<p role="alert">
+				{unsent} plays and changes haven't reached the server. Log out anyway?
+			</p>
+			<button type="button" onclick={() => logOut(true)} disabled={busy}>Log out anyway</button>
+			<button type="button" onclick={() => (unsent = 0)} disabled={busy}>Cancel</button>
+		{:else}
+			<button type="button" onclick={() => logOut()} disabled={busy}>
+				{busy ? 'Logging out…' : 'Log out'}
+			</button>
+		{/if}
 	</section>
 {/if}
 
@@ -152,6 +184,26 @@
 			it or take it over.
 		</p>
 		<DeviceList />
+	</section>
+{/if}
+
+{#if me}
+	<section aria-labelledby="offline">
+		<h2 id="offline">Offline</h2>
+		<p class="muted">
+			Browse what's on this device without using the network, to protect a metered connection.
+			Nothing is sent to or fetched from the server until you turn this off, and then this device
+			catches up. It applies to this device only.
+		</p>
+		<label class="column">
+			<input
+				type="checkbox"
+				role="switch"
+				checked={connectivity.workOffline}
+				onchange={(e) => connectivity.setWorkOffline(e.currentTarget.checked)}
+			/>
+			Work offline
+		</label>
 	</section>
 {/if}
 
@@ -229,7 +281,12 @@
 	</section>
 {/if}
 
-{#if connectable.length}
+{#if data.connectable === null}
+	<section aria-labelledby="connections">
+		<h2 id="connections">Connections</h2>
+		<p class="muted">Unavailable offline. This needs the server, which this device can't reach.</p>
+	</section>
+{:else if connectable.length}
 	<section aria-labelledby="connections">
 		<h2 id="connections">Connections</h2>
 		<!-- Told where the user shares, not after they clear (`requirements/users.md` §7). -->

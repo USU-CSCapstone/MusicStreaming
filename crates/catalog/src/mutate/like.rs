@@ -57,7 +57,8 @@ impl Writer<'_> {
     /// Puts `track` at the top of the user's Liked Songs, unless it is in it already, making the
     /// playlist, pinned, under `fresh_id` if they have none, and unhides it. A track the library
     /// does not have is [`Error::NotFound`]. With no Liked Songs and no `fresh_id` it is
-    /// [`Error::Invalid`].
+    /// [`Error::Invalid`], and with a `fresh_id` any playlist has already, whoever's, it is
+    /// [`Error::IdTaken`].
     pub fn like(&mut self, track: i64, fresh_id: Option<i64>) -> Result<Liked, Error> {
         let duration = duration(self.conn, self.library, track)?.ok_or(Error::NotFound)?;
         let unhidden = self.unhide(track)?;
@@ -67,6 +68,13 @@ impl Writer<'_> {
                 let id = fresh_id.ok_or_else(|| {
                     Error::Invalid("A like needs an ID for the Liked Songs it makes.".to_owned())
                 })?;
+                if self
+                    .conn
+                    .prepare_cached("SELECT 1 FROM playlists WHERE id = ?1")?
+                    .exists([id])?
+                {
+                    return Err(Error::IdTaken);
+                }
                 self.touch(Kind::Playlist, id, 0)?;
                 liked::create(self.conn, self.user, self.library, id, self.now)?;
                 // Their devices keep it, as any playlist of theirs.
