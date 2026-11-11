@@ -180,6 +180,48 @@ impl From<DbError> for Problem {
     }
 }
 
+impl From<jewelcase_catalog::Invalid> for Problem {
+    /// A `422 validation_failed` with the catalog's explanation.
+    fn from(invalid: jewelcase_catalog::Invalid) -> Problem {
+        Problem::invalid(invalid.0)
+    }
+}
+
+impl From<jewelcase_catalog::playlists::ItemsError> for Problem {
+    /// An invalid parameter is `422`, a playlist that is not the caller's `404`, and a cursor
+    /// from another version `410`. An item without its track breaks retention: `500`, logged.
+    fn from(error: jewelcase_catalog::playlists::ItemsError) -> Problem {
+        use jewelcase_catalog::playlists::ItemsError;
+        match error {
+            ItemsError::Invalid(invalid) => invalid.into(),
+            ItemsError::NotFound => Problem::not_found(),
+            ItemsError::Expired => Problem::new(Code::CursorExpired)
+                .detail("The playlist changed since the first page; start again."),
+            ItemsError::Incomplete => {
+                tracing::error!("a playlist item names a track that is gone");
+                Problem::new(Code::Internal)
+            }
+            ItemsError::Sql(error) => error.into(),
+        }
+    }
+}
+
+impl From<jewelcase_catalog::mutate::Error> for Problem {
+    /// A write the shared code refused, as the API answers it: a playlist or track that is not
+    /// there `404`, another version `409 version_conflict`, a taken ID `409 id_taken` and
+    /// arguments that are not acceptable `422`.
+    fn from(error: jewelcase_catalog::mutate::Error) -> Problem {
+        use jewelcase_catalog::mutate::Error;
+        match error {
+            Error::NotFound => Problem::not_found(),
+            Error::VersionConflict(current) => Problem::version_conflict(current),
+            Error::IdTaken => Problem::new(Code::IdTaken),
+            Error::Invalid(why) => Problem::invalid(why),
+            Error::Sql(error) => error.into(),
+        }
+    }
+}
+
 impl From<rusqlite::Error> for Problem {
     /// A database error, logged and answered as a `500 internal`, as a [`DbError`] is.
     fn from(error: rusqlite::Error) -> Problem {

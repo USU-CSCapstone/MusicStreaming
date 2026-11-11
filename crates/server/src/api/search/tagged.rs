@@ -5,11 +5,12 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
+use jewelcase_catalog::search;
 use jewelcase_core::{Kind, Recover};
 use rusqlite::Connection;
 
-use crate::api::tag_filter::{TagFilter, Tagged, Tags};
-use crate::api::{AnyId, albums, artists, tracks};
+use crate::api::AnyId;
+use crate::api::tag_filter::TagFilter;
 use crate::db::{Database, DbError};
 
 /// How many filters' rows are kept, the least recently used going first. One genre of a large
@@ -69,7 +70,7 @@ impl TaggedSets {
                 if let Some(sets) = used(&mut kept.lock().recover(), &key, head) {
                     return Ok(sets);
                 }
-                let sets: Sets = Arc::new(read(conn, library, &filter, &key.kinds)?);
+                let sets: Sets = Arc::new(search::tagged(conn, library, &filter, &key.kinds)?);
                 let mut kept = kept.lock().recover();
                 kept.retain(|(kept, ..)| *kept != key);
                 if kept.len() == KEPT {
@@ -96,27 +97,6 @@ fn used(kept: &mut Vec<(Key, i64, Sets)>, key: &Key, head: i64) -> Option<Sets> 
 fn head(conn: &Connection, library: i64) -> rusqlite::Result<i64> {
     conn.prepare_cached("SELECT ifnull(max(seq), 0) FROM library_changes WHERE library_id = ?1")?
         .query_row([library], |row| row.get(0))
-}
-
-/// Reads the rows of `library` of each of `kinds` that carry the tags `filter` names, as each
-/// list's own filter links them ([`Tags::ids`]).
-fn read(
-    conn: &Connection,
-    library: i64,
-    filter: &TagFilter,
-    kinds: &[Kind],
-) -> rusqlite::Result<[HashSet<i64>; 3]> {
-    let mut sets: [HashSet<i64>; 3] = Default::default();
-    for &kind in kinds {
-        let tagged: &Tagged = match kind {
-            Kind::Track => &tracks::TAGGED,
-            Kind::Album => &albums::TAGGED,
-            Kind::Artist => &artists::TAGGED,
-        };
-        let ids = Tags::read(conn, library, tagged, filter)?.ids(conn, tagged)?;
-        sets[kind as usize] = ids.unwrap_or_default();
-    }
-    Ok(sets)
 }
 
 #[cfg(test)]

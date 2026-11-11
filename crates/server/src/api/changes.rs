@@ -90,11 +90,10 @@ fn read(
     if after > head {
         return Err(Problem::new(Code::CursorExpired));
     }
-    // The device keeps no library row, so those changes are stepped over.
     let listed: Vec<(i64, String, i64, String)> = conn
         .prepare_cached(
             "SELECT seq, entity_type, entity_id, op FROM library_changes \
-             WHERE library_id = ?1 AND seq > ?2 AND entity_type <> 'library' \
+             WHERE library_id = ?1 AND seq > ?2 \
              ORDER BY seq LIMIT ?3",
         )?
         .query_map(params![library, after, limit], |row| {
@@ -105,6 +104,7 @@ fn read(
     let mut changes = Vec::with_capacity(listed.len());
     for (seq, entity, id, op) in listed {
         let kind = match entity.as_str() {
+            "library" => Kind::Library,
             "track" => Kind::Track,
             "album" => Kind::Album,
             "artist" => Kind::Artist,

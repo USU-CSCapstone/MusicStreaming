@@ -129,12 +129,12 @@ async fn the_snapshot_holds_exactly_the_device_rows_of_its_library_at_its_seq() 
             _ => tables.push((table.to_owned(), column.to_owned())),
         }
     }
-    assert_eq!(tables.len(), 16);
+    assert_eq!(tables.len(), 17);
     let read = |conn: &Connection, table: &str, cols: &str| -> Vec<Vec<rusqlite::types::Value>> {
-        let scope = if table == "tag_types" {
-            "key IN (SELECT type FROM tags WHERE library_id = 1)"
-        } else {
-            "library_id = 1"
+        let scope = match table {
+            "tag_types" => "key IN (SELECT type FROM tags WHERE library_id = 1)",
+            "libraries" => "id = 1",
+            _ => "library_id = 1",
         };
         let mut stmt = conn
             .prepare(&format!("SELECT {cols} FROM {table} WHERE {scope} ORDER BY 1, 2"))
@@ -187,8 +187,9 @@ async fn no_server_only_column_and_no_other_librarys_row_is_in_the_file() {
         .collect::<Result<_, _>>()
         .unwrap();
     for table in tables.iter().filter(|t| *t != "tag_types") {
+        let owner = if table == "libraries" { "id" } else { "library_id" };
         let others: i64 = snapshot
-            .query_row(&format!("SELECT count(*) FROM {table} WHERE library_id <> 1"), [], |r| {
+            .query_row(&format!("SELECT count(*) FROM {table} WHERE {owner} <> 1"), [], |r| {
                 r.get(0)
             })
             .unwrap();

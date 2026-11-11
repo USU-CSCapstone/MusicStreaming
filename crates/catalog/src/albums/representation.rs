@@ -8,13 +8,12 @@ use std::num::NonZeroI64;
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
-use crate::api::Id;
-use crate::api::hidden::Losses;
-use crate::api::refs::{
+use crate::hidden::Losses;
+use crate::refs::{
     Credit, ImageRef, TagsByType, artists_json, availability, placeholder, tags_json,
 };
-use crate::api::time::serialize_rfc3339;
-use crate::db::Json;
+use crate::time::serialize_rfc3339;
+use crate::{Id, Json};
 
 /// The spec's `AlbumSummary`, without `personal`.
 #[derive(Clone, Serialize)]

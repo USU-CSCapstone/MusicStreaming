@@ -124,6 +124,7 @@ mod tests {
     /// keep theirs as the longest increasing run has.
     #[test]
     fn the_kept_items_are_a_longest_increasing_run() {
+        /// Pushes onto `all` every order of `items[from..]`, with `items[..from]` held in place.
         fn permutations(items: &mut Vec<i64>, from: usize, all: &mut Vec<Vec<i64>>) {
             if from == items.len() {
                 all.push(items.clone());

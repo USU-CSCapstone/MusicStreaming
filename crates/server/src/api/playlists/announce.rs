@@ -7,34 +7,14 @@
 
 use serde::Serialize;
 
-use super::representation::Playlist;
 use crate::api::Id;
-use crate::api::time::serialize_rfc3339;
+use jewelcase_catalog::playlists::Playlist;
 
 /// The most the ops of one message may take as JSON. Messages are at most 64 KiB, so a bigger
 /// edit, such as a playlist of thousands of tracks added at once, is announced without them.
 const MAX_OPS_BYTES: usize = 32 * 1024;
 
-/// The spec's `PlaylistAppliedOp`: an op as the server applied it. An add holds the tracks its
-/// playables expanded to, less any purged meanwhile, and the time they were added.
-#[derive(Serialize)]
-#[serde(tag = "op", rename_all = "lowercase", rename_all_fields = "camelCase")]
-pub enum AppliedOp {
-    Add {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        at: Option<usize>,
-        track_ids: Vec<Id>,
-        #[serde(serialize_with = "serialize_rfc3339")]
-        added_at: i64,
-    },
-    Remove {
-        positions: Vec<usize>,
-    },
-    Move {
-        positions: Vec<usize>,
-        at: usize,
-    },
-}
+pub use jewelcase_catalog::mutate::AppliedOp;
 
 /// The payload of the spec's `playlist` message.
 #[derive(Serialize)]

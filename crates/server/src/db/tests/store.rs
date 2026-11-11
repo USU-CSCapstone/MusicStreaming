@@ -60,6 +60,7 @@ mod isolation;
 mod labels;
 mod lyrics;
 mod marks;
+mod owned_tracks;
 mod plugin_changes;
 mod primary;
 mod purge;
