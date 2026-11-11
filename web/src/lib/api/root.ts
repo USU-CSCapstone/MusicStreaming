@@ -3,12 +3,14 @@
 
 import { base, resolve } from '$app/paths';
 
+/** The API's base path. */
 export const API = `${base}/api/v1`;
 
 /** The login page, returning to where the browser is now once logged in. */
 export const loginUrl = () =>
 	`${resolve('/login')}?${new URLSearchParams({ next: location.pathname + location.search })}`;
 
+/** A refusal or failure from the API, with its HTTP status and machine-readable `code`. */
 export class ApiError extends Error {
 	constructor(
 		readonly status: number,

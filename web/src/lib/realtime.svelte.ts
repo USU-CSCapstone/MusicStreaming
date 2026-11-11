@@ -4,6 +4,7 @@
 // live (§6).
 
 import { API, loginUrl } from './api/root';
+import { connectivity } from './connectivity.svelte';
 import type { RealtimeClientMessage, RealtimeServerMessage } from './api/types';
 
 /**
@@ -15,8 +16,10 @@ const PING_EVERY_MS = 15_000;
 const ANSWER_WITHIN_MS = 5_000;
 /** How long a new connection has to say hello before the attempt is given up. */
 const CONNECT_WITHIN_MS = 10_000;
-/** How long a lost connection may take to come back before the app says it is offline. */
-const OFFLINE_AFTER_MS = 3_000;
+/**
+ * How long a lost connection may take to come back before the app counts the server unreachable.
+ */
+const UNREACHABLE_AFTER_MS = 3_000;
 /** Reconnecting waits twice as long after each failure, up to this. */
 const MAX_RETRY_MS = 30_000;
 
@@ -50,8 +53,6 @@ const defaultSignedIn = () =>
 export class Realtime {
 	/** Whether the connection is open and the server has said hello. */
 	connected = $state(false);
-	/** Whether a connection that was open has been lost for longer than a blip. */
-	offline = $state(false);
 	/** This browser's device, as the server knows it. */
 	deviceId = $state<string | null>(null);
 	/** Server time less this browser's, in milliseconds, to time what the server reports. */
@@ -70,14 +71,13 @@ export class Realtime {
 	#listeners = new Set<Listener>();
 	#socket: WebSocket | null = null;
 	#running = false;
-	#wasConnected = false;
 	#failures = 0;
 	/** When the server was last heard from, and when the latest ping went. */
 	#heardAt = 0;
 	#pingedAt = 0;
 	#retry: ReturnType<typeof setTimeout> | undefined;
 	#connectTimer: ReturnType<typeof setTimeout> | undefined;
-	#offlineTimer: ReturnType<typeof setTimeout> | undefined;
+	#unreachableTimer: ReturnType<typeof setTimeout> | undefined;
 	#pinging: ReturnType<typeof setInterval> | undefined;
 
 	constructor({
@@ -99,6 +99,7 @@ export class Realtime {
 		addEventListener('online', this.#reconnectNow);
 		document.addEventListener('visibilitychange', this.#reconnectNow);
 		this.#open();
+		this.#watch();
 	}
 
 	stop() {
@@ -107,10 +108,9 @@ export class Realtime {
 		document.removeEventListener('visibilitychange', this.#reconnectNow);
 		clearTimeout(this.#retry);
 		this.#drop();
-		clearTimeout(this.#offlineTimer);
-		this.#offlineTimer = undefined;
-		this.offline = false;
-		this.#wasConnected = false;
+		clearTimeout(this.#unreachableTimer);
+		this.#unreachableTimer = undefined;
+		connectivity.reach();
 		this.#failures = 0;
 	}
 
@@ -147,19 +147,23 @@ export class Realtime {
 		this.#connectTimer = setTimeout(() => this.#lost(), CONNECT_WITHIN_MS);
 	}
 
+	/**
+	 * Handles a server message: any message counts as the server answering, then it is routed by
+	 * type.
+	 */
 	#receive(message: RealtimeServerMessage) {
 		const now = Date.now();
 		this.#heardAt = now;
+		// Any message is the server answering, a pong included.
+		connectivity.reach();
 		if (message.type === 'hello') {
 			this.#setClock(Date.parse(message.serverTime) - now);
 			this.deviceId = message.deviceId;
 			this.connected = true;
-			this.#wasConnected = true;
 			this.#failures = 0;
 			clearTimeout(this.#connectTimer);
-			clearTimeout(this.#offlineTimer);
-			this.#offlineTimer = undefined;
-			this.offline = false;
+			clearTimeout(this.#unreachableTimer);
+			this.#unreachableTimer = undefined;
 			clearInterval(this.#pinging);
 			this.#pinging = setInterval(() => this.#check(), PING_EVERY_MS);
 		} else if (message.type === 'pong') {
@@ -196,17 +200,25 @@ export class Realtime {
 		this.send({ type: 'ping' });
 	}
 
+	/**
+	 * Tells connectivity the server is unreachable if no connection is open when the wait is over:
+	 * one lost, or one that never came.
+	 */
+	#watch() {
+		if (this.#unreachableTimer !== undefined) return;
+		this.#unreachableTimer = setTimeout(() => {
+			this.#unreachableTimer = undefined;
+			if (!this.connected) connectivity.lose();
+		}, UNREACHABLE_AFTER_MS);
+	}
+
 	/** The connection is gone: tries again, and says so if it stays gone. */
 	#lost() {
 		const refused = !this.connected;
 		this.#drop();
 		if (!this.#running) return;
-		if (this.#wasConnected && this.#offlineTimer === undefined) {
-			this.#offlineTimer = setTimeout(() => {
-				this.#offlineTimer = undefined;
-				if (!this.connected) this.offline = true;
-			}, OFFLINE_AFTER_MS);
-		}
+		// Once per failure streak, so a connection that never comes back does not flicker the state.
+		if (this.#failures === 0) this.#watch();
 		// A connection refused may be one whose session ended while this device could not hear
 		// it, asleep perhaps; the browser does not say why, so the API is asked.
 		if (refused) {

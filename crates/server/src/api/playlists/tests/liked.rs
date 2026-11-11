@@ -239,3 +239,35 @@ async fn a_like_that_makes_it_again_brings_it_to_the_other_devices() {
     assert_eq!((&made["kind"], &made["pinned"]), (&json!("liked"), &json!(true)));
     assert_eq!(message["ops"][0]["trackIds"], json!(["1"]));
 }
+
+#[tokio::test]
+async fn a_like_makes_liked_songs_again_under_the_id_the_client_chose() {
+    let (_temp, _db, app) = app_with_tracks().await;
+    let first = liked(&app).await["id"].as_str().unwrap().to_owned();
+    let other =
+        create(&app, json!({ "title": "Another" })).await["id"].as_str().unwrap().to_owned();
+    let uri =
+        |track: &str, id: &str| format!("/api/v1/libraries/1/tracks/{track}/like?likedId={id}");
+
+    // While Liked Songs is there, the ID is not used, nor checked.
+    let (status, _) = call(&app, TOKEN, "PUT", &uri("1", &other), None).await;
+    assert_eq!(
+        (status, liked(&app).await["id"].as_str().unwrap()),
+        (StatusCode::NO_CONTENT, &*first)
+    );
+
+    assert_eq!(
+        call(&app, TOKEN, "DELETE", &format!("{URI}/{first}"), None).await.0,
+        StatusCode::NO_CONTENT
+    );
+    let (status, body) = call(&app, TOKEN, "PUT", &uri("1", &other), None).await;
+    assert_eq!((status, &body["code"]), (StatusCode::CONFLICT, &json!("id_taken")), "{body}");
+    let (status, _) = call(&app, TOKEN, "PUT", &uri("1", "0"), None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(liked(&app).await, Value::Null, "a refused like makes nothing");
+
+    let (status, _) = call(&app, TOKEN, "PUT", &uri("2", "4611686018427387904"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(liked(&app).await["id"], "4611686018427387904");
+    assert_eq!(liked_tracks(&app).await, ["2"]);
+}

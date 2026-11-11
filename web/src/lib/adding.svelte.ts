@@ -8,15 +8,17 @@ import {
 	ApiError,
 	all,
 	checkPlaylistDuplicates,
-	editPlaylist,
-	getPlaylist,
 	listPlaylistItems,
 	listTracks
 } from './api/client';
 import type { Playable, Playlist, QueueRecipe, TrackSummary } from './api/types';
 import type { Card } from './cards';
+import { connectivity } from './connectivity.svelte';
 import { plural } from './format';
 import { albumRecipe, artistRecipe, playlistRecipe } from './queue';
+import { catalog } from './catalog/client.svelte';
+import { mintId } from './sync/mutations/marks';
+import { sender } from './sync/sender';
 import type { EditablePlaylist } from './playlist.svelte';
 import { toast } from './toast.svelte';
 
@@ -110,23 +112,98 @@ export function cardAdding(fetch: Fetch, libraryId: string, card: Card): Adding 
 export const artistTracks = (fetch: Fetch, libraryId: string, artistId: string) => () =>
 	all((cursor) => listTracks(fetch, libraryId, { artistId, sort: 'album', limit: 1000, cursor }));
 
-/** The IDs of the songs in `what` the playlist already has, once each. */
+/**
+ * The IDs of the songs in `what` the playlist already has, once each. Read from what is on screen
+ * for the playlist open, else from the device where it holds the library, so it works offline;
+ * else asked of the server, and none where it cannot be asked.
+ */
 export async function alreadyIn(fetch: Fetch, playlist: Playlist, what: Adding): Promise<string[]> {
 	const list = opened.list;
-	if (list?.playlist.id === playlist.id) {
+	const here = list?.playlist.id === playlist.id;
+	if (here || catalog.onDevice(playlist.libraryId)) {
 		// What shows here, pending edits and all, rather than what the server has so far.
-		const have = list.items.flatMap((i) => (i.track ? [i.track.id] : []));
+		const items = here
+			? list.items
+			: await all((cursor) =>
+					listPlaylistItems(fetch, playlist.libraryId, playlist.id, { cursor })
+				);
+		const have = items.flatMap((i) => (i.track ? [i.track.id] : []));
 		return (await what.tracks())
 			.map((t) => t.id)
 			.filter((id, k, ids) => have.includes(id) && ids.indexOf(id) === k);
 	}
-	const { trackIds } = await checkPlaylistDuplicates(
-		fetch,
-		playlist.libraryId,
-		playlist.id,
-		what.refs
+	try {
+		const { trackIds } = await checkPlaylistDuplicates(
+			fetch,
+			playlist.libraryId,
+			playlist.id,
+			what.refs
+		);
+		return trackIds;
+	} catch (e) {
+		// A server that cannot be asked gives no warning, which is only a nicety: the add is kept
+		// and goes when it can.
+		if (e instanceof TypeError || connectivity.blocked) return [];
+		throw e;
+	}
+}
+
+/** How long a new playlist waits for the server to have it, where the device cannot show it. */
+const SERVER_WAIT_MS = 3000;
+
+/**
+ * The IDs of the songs `read` gives where the device holds library `libraryId`, which shows them
+ * at once; none where it does not, or they cannot be read, as the server expands what it is sent.
+ */
+async function deviceTracks(libraryId: string, read: () => Promise<TrackSummary[]>) {
+	if (!catalog.onDevice(libraryId)) return undefined;
+	return read().then(
+		(found) => found.map((track) => track.id),
+		() => undefined
 	);
-	return trackIds;
+}
+
+/**
+ * Makes a playlist of its own ID, starting with `what` if given, as a mutation: the device has it
+ * at once, and the server when it can be reached. Settles once it can be opened: `open` is true
+ * where the device holds the library, or the server has made it; false, with the user told, where
+ * it is left for when the device is online or the server refused it. Throws where the log is not
+ * open.
+ */
+export async function newPlaylist(
+	libraryId: string,
+	{ title, description }: { title: string; description: string | null },
+	what?: Adding
+): Promise<{ id: string; open: boolean }> {
+	const id = mintId();
+	const refs = what?.refs ?? [];
+	const tracks = refs.length ? await deviceTracks(libraryId, () => what!.tracks()) : undefined;
+	const queued = sender.enqueue('createPlaylist', {
+		libraryId,
+		id,
+		title,
+		description: description ?? undefined,
+		items: refs,
+		tracks
+	});
+	if (!queued) throw new Error('Couldn’t keep the new playlist. Try signing in again.');
+	// Asked at once: the server may answer before the device has taken the change.
+	const settled = sender.settled(queued.key);
+	await queued.applied;
+	if (catalog.onDevice(libraryId)) return { id, open: true };
+	// Not on the device, so the server must have it: waited for a moment, if it can be reached.
+	/** Tells the user the playlist is left for later; it cannot be opened yet. */
+	const later = () => {
+		toast(`“${title}” will be created as soon as the server can be reached.`);
+		return { id, open: false };
+	};
+	if (connectivity.state !== 'online') return later();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const outcome = await Promise.race([
+		settled,
+		new Promise<'slow'>((resolve) => (timer = setTimeout(() => resolve('slow'), SERVER_WAIT_MS)))
+	]).finally(() => clearTimeout(timer));
+	return outcome === 'slow' ? later() : { id, open: outcome === 'sent' };
 }
 
 /**
@@ -150,20 +227,18 @@ export async function addTo(fetch: Fetch, playlist: Playlist, what: Adding, only
 			return;
 		}
 		const items = only ? playables(only) : what.refs;
-		// Appending names no positions, so a change made elsewhere meanwhile is no reason to
-		// refuse it: it is tried again against the newer version.
-		for (let attempt = 1; ; attempt++) {
-			try {
-				const { version } = await getPlaylist(fetch, libraryId, id, true);
-				await editPlaylist(fetch, libraryId, id, {
-					baseVersion: version,
-					ops: [{ op: 'add', items }]
-				});
-				return;
-			} catch (e) {
-				if (!(e instanceof ApiError && e.code === 'version_conflict' && attempt < 3)) throw e;
-			}
-		}
+		// One whose songs cannot be read is sent all the same, and shows once the server has it.
+		const tracks = await deviceTracks(libraryId, async () => only ?? what.tracks());
+		// Kept in the log, so it survives a closed app and goes once the server can be reached.
+		// Appending names no positions, so a change made elsewhere meanwhile is no reason to refuse
+		// it: it is sent again against the newer version.
+		sender.enqueue('appendToPlaylist', {
+			libraryId,
+			playlistId: id,
+			items,
+			tracks,
+			what: `add to “${title}”`
+		});
 	} catch (e) {
 		toast(`Couldn’t add to “${title}”. ${e instanceof ApiError ? e.message : ''}`.trim());
 	}

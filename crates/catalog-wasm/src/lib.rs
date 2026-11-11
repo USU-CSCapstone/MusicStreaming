@@ -120,6 +120,7 @@ impl Catalog {
             other => return Err(JsError::new(&format!("catalog schema version {other}"))),
         }
         catalog.conn.execute_batch(feed::FEED_STATE)?;
+        catalog.conn.execute_batch(mutate::UNDO_STATE)?;
         Ok(catalog)
     }
 }

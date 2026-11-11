@@ -25,7 +25,7 @@
 	aria-label="Like “{track.title}”"
 	aria-pressed={liked}
 	title={liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
-	onclick={() => marks.like(fetch, library, track, !liked)}
+	onclick={() => marks.like(library, track, !liked)}
 >
 	<Icon name={liked ? 'liked' : 'heart'} {size} />
 </button>

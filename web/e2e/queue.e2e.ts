@@ -40,11 +40,15 @@ function observe(page: Page) {
 /** The IDs of the tracks titled `titles`, in that order. */
 const ids = (server: Server, ...titles: string[]) => titles.map((t) => server.ids.tracks[t]);
 
-/** The track IDs of each list the active queue holds, in the order its sources were added. */
+/**
+ * The track IDs of each list the active queue holds, in the order its sources were added; none
+ * before a start reaches the server.
+ */
 async function lists(server: Server): Promise<string[][]> {
-	const { state } = await server.api('/me/queue');
+	const queue = await server.api('/me/queue').catch(() => null);
+	if (!queue) return [];
 	return Promise.all(
-		state.sources.map(
+		queue.state.sources.map(
 			async ({ list }: { list: string }) => (await server.api(`/me/queue/lists/${list}`)).tracks
 		)
 	);
@@ -757,7 +761,6 @@ test('deletes a kept queue with one press', async ({ page, server }) => {
 	const { player, panel } = await playAlbum(page, server);
 	await main(page).getByRole('button', { name: 'Actions for Signal Remix' }).click();
 	await page.getByRole('menuitem', { name: 'Queue last' }).click();
-	// A start drops the edits not yet sent, so the queue is adjusted, and kept, only once it is.
 	await expect.poll(() => sent.edits.at(-1)).toMatchObject({ type: 'add' });
 	await playButton(page).click();
 	await expect.poll(async () => (await kept(server)).length).toBe(1);
@@ -849,7 +852,9 @@ test('a start from a clicked row of a playlist names the row and its track', asy
 		startTrackId: server.ids.tracks['Signal Part 2']
 	});
 	// The server starts at that row, not the track's first place.
-	await expect.poll(async () => (await server.api('/me/queue')).state.current).toMatch(/\.4$/);
+	await expect
+		.poll(async () => (await server.api('/me/queue').catch(() => null))?.state.current)
+		.toMatch(/\.4$/);
 });
 
 test('a playlist with edits not yet saved starts from the rows shown, then by recipe', async ({

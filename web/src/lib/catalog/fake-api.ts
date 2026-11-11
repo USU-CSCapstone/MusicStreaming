@@ -4,7 +4,9 @@
 
 import { schemaVersion } from '$lib/catalog-wasm/jewelcase_catalog_wasm.js';
 
+/** One entry of a change feed. */
 type Change = { seq: number; op: string; kind: string; id: string; key?: number; rows?: object };
+/** A change feed: its entries in order and the position of the latest. */
 type Feed = { changes: Change[]; head: number };
 
 /** The time to wait for a held response, so a test that forgets to release one fails. */
@@ -17,6 +19,7 @@ const problem = (status: number, headers: Record<string, string> = {}) =>
 		headers: { 'content-type': 'application/problem+json', ...headers }
 	});
 
+/** The fake server; `fetch` is its only way in, and the setters shape what it holds. */
 export class FakeApi {
 	/** Every path asked, with its query, in order. */
 	requests: string[] = [];

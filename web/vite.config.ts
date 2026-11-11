@@ -20,6 +20,10 @@ export default defineConfig({
 			// SPA mode: static files served by the Rust server, unknown paths fall back to index.html
 			adapter: adapter({ fallback: 'index.html' }),
 
+			// The offline shell is one page served for every path, so its script URLs must not depend on
+			// the path it is asked at (the preview server writes them relative to it by default).
+			paths: { relative: false },
+
 			// Registered by `hooks.client.ts`, in production builds only: in development the
 			// worker would serve a stale app.
 			serviceWorker: { register: false }

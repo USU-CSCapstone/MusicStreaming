@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const catalog = vi.hoisted(() => ({ signOut: vi.fn(async () => {}) }));
 vi.mock('$lib/catalog/client.svelte', () => ({ catalog }));
-vi.mock('$lib/realtime.svelte', () => ({ realtime: { offline: false } }));
+vi.mock('$lib/connectivity.svelte', () => ({
+	connectivity: { state: 'online', blocked: false, lose: () => {}, reach: () => {} }
+}));
 vi.mock('$app/paths', () => ({ base: '', resolve: (path: string) => path }));
 
 // The module ends a session once per page, as the page reloads after it: each test loads it anew.

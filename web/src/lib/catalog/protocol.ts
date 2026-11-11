@@ -4,6 +4,7 @@
 // worker (`client.svelte.ts`); the others reach it through `router.ts`.
 
 import type { RealtimeServerMessage } from '$lib/api/types';
+import type { Call } from '$lib/sync/mutation';
 import type { Kind } from './kinds';
 
 /**
@@ -45,6 +46,8 @@ export type ToWorker =
 	| { type: 'start' }
 	/** A message from the realtime connection. */
 	| { type: 'message'; message: RealtimeServerMessage }
+	/** Whether the device is working offline, when the worker makes no request; off until said. */
+	| { type: 'offline'; value: boolean }
 	/** Closes the files and releases the pool to the next owner; answered with `paused`. */
 	| { type: 'pause' }
 	/** A request for the owner to answer, such as a query; answered with `answer` of `id`. */
@@ -91,5 +94,24 @@ export type Request =
 			offline?: boolean;
 			user?: string;
 	  }
+	/**
+	 * Makes a mutation's writes to the library's file that it does not hold, after any apply under
+	 * way (`$lib/sync`); answered empty, also where the library is not on the device. With
+	 * `answered`, the server has the mutation: none is made, and those the file holds are made again
+	 * through every rebase until the account feed brings them. `user` is as a query's: an owner
+	 * started for someone else makes nothing.
+	 */
+	| { type: 'mutate'; library: string; calls: Call[]; answered?: boolean; user?: string }
+	/**
+	 * Takes back the device's own writes to the library's file and makes those the log holds again;
+	 * answered empty once done. `user` is as a query's.
+	 */
+	| { type: 'rebase'; library: string; user?: string }
+	/**
+	 * The server answered a write to the playlist with it at `version`: the library is rebased if
+	 * the device made the write over the server's own rows of it; answered empty once done. `user`
+	 * is as a query's.
+	 */
+	| { type: 'confirmed'; library: string; playlistId: string; version: number; user?: string }
 	/** Deletes every file on the device. */
 	| { type: 'signOut' };

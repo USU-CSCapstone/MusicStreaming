@@ -65,6 +65,7 @@ fn columns(conn: &Connection) -> Vec<String> {
     .unwrap()
 }
 
+/// Records `changes` of library `library` on the feed, in order.
 async fn record(db: &Database, library: i64, changes: &[(Entity, i64, Op)]) {
     let changes = changes.to_vec();
     db.write(move |tx| {

@@ -8,6 +8,7 @@ import init, {
 	storeNames,
 	storeRemove
 } from '$lib/catalog-wasm/jewelcase_catalog_wasm.js';
+import type { Call } from '$lib/sync/mutation';
 import { CatalogSync, type Report } from './sync';
 import type { Kind } from './kinds';
 import type { LibraryState } from './protocol';
@@ -30,6 +31,10 @@ export class Harness {
 	 */
 	private slowCommit?: number;
 	private slowAfter = 0;
+	/** The writes of the mutations the fake log holds, by library, in order. */
+	private log = new Map<string, Call[]>();
+	/** How many calls each `applyCalls` since the last reset was given. */
+	applyBatches: number[] = [];
 	#sync: CatalogSync | undefined;
 
 	/** Closes any sync, deletes every file, and clears the fake server, with the snapshot to serve. */
@@ -47,6 +52,8 @@ export class Harness {
 		this.commitLimits = [];
 		this.slowCommit = undefined;
 		this.slowAfter = 0;
+		this.log = new Map();
+		this.applyBatches = [];
 	}
 
 	/** Starts a new sync for `user` as a restarted worker does, closing the old one. */
@@ -63,9 +70,65 @@ export class Harness {
 			},
 			state: (libraries) => this.told.push(libraries),
 			heavy: (heavy) => this.heavies.push(heavy),
-			lost: (library) => void this.gone.push(library)
+			lost: (library) => void this.gone.push(library),
+			pending: async (library) => this.log.get(library) ?? []
 		});
 		await this.#sync.start();
+	}
+
+	/** Sets the writes of the mutations the log holds for `library`, as the sender keeps them. */
+	setLog(library: string, calls: Call[]) {
+		this.log.set(library, calls);
+	}
+
+	/** Has the sync make `calls`, a mutation's writes to `library`, as the page asks it to. */
+	mutate(library: string, calls: Call[]) {
+		return this.#sync!.mutate(library, calls);
+	}
+
+	/** Tells the sync the server answered the mutation that made `calls`, writes to `library`. */
+	answered(library: string, calls: Call[]) {
+		return this.#sync!.mutate(library, calls, true);
+	}
+
+	/** How many calls each `applyCalls` was given, in order. */
+	batches() {
+		return this.applyBatches;
+	}
+
+	/** Has the sync take back its writes to `library` and make those of the log again. */
+	rebase(library: string) {
+		return this.#sync!.rebase(library);
+	}
+
+	/** Tells the sync the server answered a write to the playlist with it at `version`. */
+	confirmed(library: string, playlistId: string, version: number) {
+		return this.#sync!.confirmed(library, playlistId, version);
+	}
+
+	/**
+	 * Has the sync make `calls` once the library's file is part-way through an apply, and says
+	 * whether the file was still part-way through it once they were made.
+	 */
+	async mutateMidApply(library: string, calls: Call[]) {
+		await this.untilMidApply(library);
+		await this.#sync!.mutate(library, calls);
+		return this.#sync!.catalogs.get(library)!.applying('library') !== undefined;
+	}
+
+	/**
+	 * Tells the sync of an answer once the library's file is part-way through an apply, and says
+	 * whether the file was still part-way through it once the sync had dealt with the answer.
+	 */
+	async confirmedMidApply(library: string, playlistId: string, version: number) {
+		await this.untilMidApply(library);
+		await this.#sync!.confirmed(library, playlistId, version);
+		return this.#sync!.catalogs.get(library)!.applying('library') !== undefined;
+	}
+
+	/** How many writes the library's file holds that it can take back. */
+	applied(library: string) {
+		return this.#sync!.catalogs.get(library)!.applied();
 	}
 
 	/** What the sync has reported. */
@@ -366,4 +429,11 @@ onmessage = async ({ data: { id, path, args } }) => {
 	} catch (error) {
 		postMessage({ id, error: error instanceof Error ? error.message : String(error) });
 	}
+};
+
+// The harness notes how many of the device's own writes each transaction makes.
+const { applyCalls } = Catalog.prototype;
+Catalog.prototype.applyCalls = function (user, library, calls, answered) {
+	harness.applyBatches.push((JSON.parse(calls) as unknown[]).length);
+	return applyCalls.call(this, user, library, calls, answered);
 };

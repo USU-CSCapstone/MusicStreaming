@@ -1,15 +1,16 @@
 // Recording plays (`requirements/analytics.md` §1): every track that starts playing is one,
 // and its listen time is the audio heard. Pausing adds nothing, nor does skipping forward;
 // replaying part of it adds that part again. A play is reported when it starts, when it
-// pauses, and when it ends, each time in full under its own ID, so the server can take them
-// in any order and count it once.
+// pauses, when it ends, and as a checkpoint while it goes on, each time in full under its own
+// ID, so the server can take them in any order and count it once. The log keeps what is
+// reported until the server has it (`sync/sender.ts`).
 
 import type { PlayContext, PlayReport } from './api/types';
 
 export type End = NonNullable<PlayReport['end']>;
 
-/** Sends reports; `keepalive` when the page is closing and the request must outlive it. */
-export type Send = (plays: PlayReport[], keepalive: boolean) => Promise<void>;
+/** Takes reports; `keepalive` when the page is closing and the request must outlive it. */
+export type Send = (plays: PlayReport[], keepalive: boolean) => void;
 
 /** The most media time one `timeupdate` can add; more than that is a jump, not listening. */
 const MAX_STEP = 1;
@@ -75,6 +76,14 @@ export class PlayRecorder {
 		if (this.#play) this.#report(false);
 	}
 
+	/**
+	 * Reports the play under way as it stands, so a page closed without warning loses none of the
+	 * time heard.
+	 */
+	checkpoint() {
+		if (this.#play) this.#report(false);
+	}
+
 	/** The play is over, `end` saying how. Nothing happens if none is under way. */
 	end(end: End, keepalive = false) {
 		if (!this.#play) return;
@@ -85,7 +94,6 @@ export class PlayRecorder {
 
 	#report(keepalive: boolean) {
 		const play = { ...this.#play!, listenTimeMs: Math.round(this.#heard * 1000) };
-		// A lost report is resent with the next one for the same play, or lost with the page.
-		this.#send([play], keepalive).catch(() => {});
+		this.#send([play], keepalive);
 	}
 }

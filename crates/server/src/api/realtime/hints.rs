@@ -1,5 +1,6 @@
-//! `libraryChanged`: tells every connected account that reaches a library that its change feed
-//! moved, so a device pulls what it missed (`requirements/realtime.md` §4).
+//! `libraryChanged` and `accountChanged`: tell every connected account that reaches a library
+//! that its change feed moved, and an account that its own feed moved, so a device pulls what it
+//! missed (`requirements/realtime.md` §4).
 //!
 //! The database says when a feed has moved, after the write that moved it has committed. A
 //! library, and an account, is hinted at most once each [`WINDOW`]; a change inside one is hinted
@@ -18,7 +19,7 @@ use super::{Hub, ServerMessage};
 use crate::api::Id;
 use crate::db::{Database, reaches};
 
-/// The shortest time between two hints for one library.
+/// The shortest time between two hints for one library or account.
 pub(super) const WINDOW: Duration = Duration::from_secs(1);
 
 /// Spawns the task that sends `libraryChanged` and `accountChanged` for every change committed
@@ -138,6 +139,7 @@ async fn send(db: &Database, hub: &Hub, library: i64, seq: i64) {
 #[derive(Default)]
 pub(super) struct Throttle(HashMap<i64, Window>);
 
+/// One library's, or account's, place in a [`Throttle`].
 struct Window {
     /// When the library was hinted last.
     opened: Instant,
