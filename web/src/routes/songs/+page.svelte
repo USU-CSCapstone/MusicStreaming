@@ -9,13 +9,20 @@
 	import { isFiltered, showFiltered } from '$lib/filters';
 	import { plural } from '$lib/format';
 	import { Paged } from '$lib/paged.svelte';
+	import { DEPENDS } from '$lib/live.svelte';
 	import { libraryRecipe, type PlayFrom } from '$lib/queue';
 	import { showSorted } from '$lib/sort-url';
 
 	let { data } = $props();
 
 	const tracks = $derived(
-		new Paged(data.tracks, (cursor) => listTracks(fetch, data.lib, { ...data.query, cursor }))
+		new Paged(
+			data.tracks,
+			(cursor, limit) => listTracks(fetch, data.lib, { ...data.query, cursor, limit }),
+			data.lib,
+			DEPENDS.tracks,
+			data.since
+		)
 	);
 	const filtered = $derived(isFiltered(data.filter));
 

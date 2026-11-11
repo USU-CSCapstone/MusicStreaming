@@ -3,7 +3,7 @@
 // quietly: only a connection lost for longer than a blip is shown, so nothing stale passes for
 // live (§6).
 
-import { API, loginUrl } from './api/client';
+import { API, loginUrl } from './api/root';
 import type { RealtimeClientMessage, RealtimeServerMessage } from './api/types';
 
 /**

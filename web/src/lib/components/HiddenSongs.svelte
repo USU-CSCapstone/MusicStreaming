@@ -9,15 +9,22 @@
 	import { albumTitle, plural } from '$lib/format';
 	import { marks } from '$lib/marks.svelte';
 	import { Paged } from '$lib/paged.svelte';
+	import { DEPENDS } from '$lib/live.svelte';
 	import { toast } from '$lib/toast.svelte';
 	import ArtistLinks from './ArtistLinks.svelte';
 	import Artwork from './Artwork.svelte';
 	import DetailHeader from './DetailHeader.svelte';
 
-	let { library, first }: { library: string; first: TrackPage } = $props();
+	let { library, first, since }: { library: string; first: TrackPage; since: number } = $props();
 
 	const hidden = $derived(
-		new Paged(first, (cursor) => listHiddenTracks(fetch, library, { cursor }))
+		new Paged(
+			first,
+			(cursor, limit) => listHiddenTracks(fetch, library, { cursor, limit }),
+			library,
+			DEPENDS.tracks,
+			since
+		)
 	);
 	// A song unhidden here, or liked anywhere, since the list loaded is no longer hidden.
 	const shown = $derived(hidden.items.filter((track) => marks.hidden(library, track.id, true)));
