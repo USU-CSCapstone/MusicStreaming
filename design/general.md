@@ -13,14 +13,14 @@ The core stack and system architecture. Subsystem designs build on this file and
 | Shared core | Rust — native on the server and Android, WebAssembly in the web client |
 | Web client | Svelte 5 + TypeScript on SvelteKit in SPA mode — static output, no Node server |
 | Android | Native Kotlin app, built after the web client |
-| Database | SQLite |
+| Database | SQLite, on the server and, for the device's copy of the catalog, in the browser |
 | Distribution | One container image, `linux/amd64` and `linux/arm64` |
 
 - **Rust.** Offline parity ([`requirements/general.md` §3.5](../requirements/general.md#35-offline-parity)) requires search, sort, and shuffle to be a single implementation on every platform, and Rust compiles one to the server, the browser, and Android. It also fits low-power hardware's memory limits and keeps tail latency free of GC pauses ([`requirements/performance.md` §1](../requirements/performance.md#1-target-hardware), [§3](../requirements/performance.md#3-interactions)). Cost: compile times and iteration speed.
 - **Svelte 5.** Fine-grained updates suit the one-frame input budget.
 - **SvelteKit, SPA mode only.** It provides routing, nested layouts, per-route code splitting, and navigation that waits for a page's data, so views arrive complete ([`requirements/conventions.md` §3](../requirements/conventions.md#3-rendering)). These are maintained upstream and familiar to contributors. The static adapter emits plain files the Rust server serves. There is no Node server in production, which would break the single container and cost Pi memory, and no server routes, which would bypass the public API ([§6](#6-public-api)). Cost: SvelteKit fixes the base path at build time ([§7.1](#71-web)).
 - **Native Android.** Background audio, media-session and car integration, and durable downloads ([`requirements/playback.md` §7](../requirements/playback.md#7-system-integration), [`requirements/offline.md` §11](../requirements/offline.md#11-platform-parity)) are first-class on the platform rather than bridged. iOS remains the installed web app ([`requirements/general.md` §4](../requirements/general.md#4-target-platforms)).
-- **SQLite.** A database server would break single-directory backups and tag-only upgrades ([`requirements/deployment.md` §4](../requirements/deployment.md#4-backup--restore)–[§5](../requirements/deployment.md#5-upgrades)). The workload is read-heavy and fits comfortably.
+- **SQLite.** A database server would break single-directory backups and tag-only upgrades ([`requirements/deployment.md` §4](../requirements/deployment.md#4-backup--restore)–[§5](../requirements/deployment.md#5-upgrades)). The workload is read-heavy and fits comfortably. A device keeps its catalog in SQLite too, so the queries that browse it are the server's own ([§3.1](#31-the-catalog-queries), [ADR 0008](../adr/0008-sqlite-device-catalog.md)).
 
 ---
 
@@ -46,7 +46,7 @@ One crate holds every rule that must behave identically on the server and a devi
 
 - Domain model and identifiers
 - Normalization and sort keys ([`requirements/conventions.md` §4](../requirements/conventions.md#4-sorting--browsing))
-- What search covers, its matching and ranking, and the on-device index format
+- What search covers, its matching and ranking, and the search index's format (built from the catalog's rows, in memory)
 - Queue operations and shuffle ([`requirements/queue.md`](../requirements/queue.md))
 - Similarity scoring for offline endless play ([`requirements/recommendations.md` §10](../requirements/recommendations.md#10-offline))
 
@@ -57,13 +57,23 @@ Rules:
 - **Sort keys are computed by the core at scan time** and synced. No database collation or client locale ever decides an order.
 - **Clients never reimplement a core rule.** Any client code that orders, matches, or selects tracks calls the core.
 
+### 3.1 The catalog queries
+
+**Planned (Stage 10); only the device schema's definitions exist so far.** The core stays small enough for the page thread, so it holds no SQL. The SQL that reads the catalog lives in `crates/catalog`, with the device's table definitions and a version:
+
+- **One set of queries, two databases.** Listings with their filters, sorts and keyset paging, single gets, the search response and the rows its index is built from, playlist reads and queue recipes all take a database connection and a library, and never check access, which stays the server's gate ([§6](#6-public-api)). The server's handlers call them. On a device the catalog worker runs the same code, compiled to WebAssembly.
+- **The device schema is a subset of the server's.** The tables, columns and types are the server's, minus what never leaves it: file paths, roots, file stamps, scan and analysis state, plugin data and other users' data ([`requirements/general.md` §3.7](../requirements/general.md#37-payloads-carry-only-what-the-client-needs)). Counts the server keeps by trigger arrive as plain columns. A test checks that every device column exists in the server's schema with the same type.
+- **Parity is tested.** A test builds a server database, syncs a device database from its feeds, and checks that every shared query returns identical JSON from both. The worker's build checks the same results.
+- **The device holds only playable tracks in the indexes that recipes and tag counts read**, so a missing track stays visible in listings without slowing the reads that skip it.
+- **A device copy is a cache.** It is deleted and downloaded again when its schema version changes, a query finds it corrupt, or the browser evicts it ([§7.1](#71-web)).
+
 ---
 
 ## 4. Sync and Mutations
 
-- **Change feeds.** Each library has an ordered feed of content changes; each account is to have one for its personal data. Clients sync from a cursor, coalesced to net effect, and an expired cursor falls back to a full resync. Plugins follow the same feeds with durable cursors ([`requirements/plugins.md` §8](../requirements/plugins.md#8-events)).
+- **Change feeds.** Each library has an ordered feed of content changes; each account is to have one for its personal data, starting with playlists and their items ([`database.md` §5](database.md#5-change-feeds)). Clients sync from a cursor, coalesced to net effect, and an expired cursor falls back to a full resync. Once built, a device with no copy of a library starts from a snapshot file the server builds, then follows the feed from the snapshot's position. Plugins follow the same feeds with durable cursors ([`requirements/plugins.md` §8](../requirements/plugins.md#8-events)).
 - **Domain outboxes.** Until the account feed is designed, a hook that tells a plugin about one user's activity reads an outbox that activity's own domain keeps, written in the same transaction as the activity: `play_events` for `played` and `playing`, and `search_events` for `searched` ([`hooks.md` §1](hooks.md#1-built-hooks)). Each holds only what its hooks deliver, and new personal activity gets an outbox of its own rather than joining a shared log, so nothing commits to the account feed's shape before sync is designed.
-- **Commands.** Every user action applies locally, then goes to the server as an idempotent command with a client-generated ID, queued durably on the device. Offline is the same path with a longer wait ([`requirements/general.md` §3.4](../requirements/general.md#34-optimistic-by-default)).
+- **Commands.** Every user action applies locally, then goes to the server as an idempotent command with a client-generated ID, queued durably on the device. Offline is the same path with a longer wait ([`requirements/general.md` §3.4](../requirements/general.md#34-optimistic-by-default)). Until the durable queue is built, a command is retried only while the page is open, so an edit made offline is lost if the app closes before it reconnects.
 - **Plays** carry the time they happened, not the time they synced.
 - **Playlist edits** carry the version they were made against. A device's queued edits chain versions, so they never refuse each other ([`requirements/playlists.md` §5](../requirements/playlists.md#5-concurrent-edits)).
 - **Playback control** is last-command-wins, ordered at the server.
@@ -75,6 +85,7 @@ Rules:
 - **One WebSocket per client**, carrying feed notifications, playback state, and Shift commands.
 - **The server owns playback state** per account and decides which device is playing ([`requirements/realtime.md` §2](../requirements/realtime.md#2-one-player-at-a-time)).
 - **Heartbeats** detect lost connections. Reconnection resumes from cursors and receives current state, not a replay.
+- **Feed notifications are hints (planned).** Once built, the server tells each connected account that a library it reaches, or the account's own data, has moved, with the new position. A library's hints are throttled to one a second, the last of a burst always sent, so an import of ten thousand tracks is a handful of messages. A device pulls its feed on every hint and on every `hello`, so live updates and catching up after a disconnect are one path, and a lost hint costs nothing.
 
 ---
 
@@ -93,8 +104,8 @@ Rules:
 ### 7.1 Web
 - **Static files served by the server.** Unknown paths fall back to the SPA entry page.
 - **The base path is rewritten at startup.** The client is built with a placeholder base path. At startup the server writes a copy of the build into `cache/` with the placeholder replaced by the configured prefix, so one image works under any path ([`requirements/deployment.md` §6](../requirements/deployment.md#6-remote-access)). CI runs the client under a non-root prefix.
-- **Pages load from the worker, not the network.** A page's `load` awaits its first query to the worker, and live changes reach the page through Svelte stores fed by the change feeds.
-- **Three threads:** the UI thread handles rendering, input, and audio; a worker holds the core (WebAssembly), catalog, search, sync, and command queue; a service worker holds the app shell and downloaded audio and imagery. One exception: a page that sorts a list it holds (an album, a playlist, a sorted search) loads the core on the UI thread too, so the sort stays synchronous as the page renders it ([§3](#3-shared-core)); only those pages import it, and they and the worker share one download of the WebAssembly file.
+- **Pages load from the worker, not the network (planned; pages read from the server until the device catalog is built).** A page's `load` awaits its first query to the worker, and live changes reach the page through Svelte stores fed by the change feeds. Where a page's answer comes from depends on the library's state: the server until the library has been synced once (offline, the page says the library is not on this device yet, never part of it), the device once it is current, the device first and then the server's answer when it is behind, and the device when offline.
+- **Three threads:** the UI thread handles rendering, input, and audio; a worker holds the core (WebAssembly), catalog, search, sync (the catalog, search over it and sync are planned) and, once built, the command queue; a service worker holds the app shell, cached imagery and, once built, downloaded audio. Once built, one tab at a time owns the catalog worker, since the browser's file handle for the database is exclusive; the others ask it ([`web.md`](web.md#catalog-worker)). A tab where the browser has no private file system reads from the server instead. One exception: a page that sorts a list it holds (an album, a playlist, a sorted search) loads the core on the UI thread too, so the sort stays synchronous as the page renders it ([§3](#3-shared-core)); only those pages import it, and they and the worker share one download of the WebAssembly file.
 - **The UI thread never does work proportional to library size.** Lists are virtualized.
 - **Search runs on the server when reachable**, on the device otherwise — the same core either way.
 
@@ -117,6 +128,8 @@ Plugin UI surfaces must render natively on both web and Android ([`requirements/
 ```
 jewelcase/
 ├── crates/
+│   ├── catalog/     # the device catalog's schema and the SQL the server and the device share
+│   ├── catalog-wasm/ # WebAssembly bindings for the catalog: SQLite on OPFS in the catalog worker (§7.1)
 │   ├── core/        # shared core (§3)
 │   ├── core-wasm/   # WebAssembly bindings for the web client (later, with the worker in §7.1)
 │   ├── ffmpeg/      # ffmpeg subprocess wrapper — probe, decode, transcode (scanning.md §11)
@@ -149,7 +162,7 @@ jewelcase/
 ## 11. Open Decisions
 
 1. **Audio delivery** — gapless background playback in the browser, above all in an installed iOS web app, and the stream format that serves it.
-2. **On-device catalog and index format**, within [`requirements/performance.md` §6](../requirements/performance.md#6-client-footprint).
+2. ~~**On-device catalog and index format**~~ Settled: SQLite with the catalog's SQL shared ([§3.1](#31-the-catalog-queries), [ADR 0008](../adr/0008-sqlite-device-catalog.md)). A 500,000-track copy is about 310 MB, within [`requirements/performance.md` §6](../requirements/performance.md#6-client-footprint).
 3. **Track identity** that survives retags and moves ([`requirements/scanning.md` §6](../requirements/scanning.md#6-track-identity)) without slowing cold scans ([`requirements/performance.md` §5](../requirements/performance.md#5-scanning--analysis)).
 4. **Plugin UI description** ([§8](#8-plugins)). The execution model is settled ([`plugins.md`](plugins.md)); its remaining questions are listed there.
 5. **Project license.**

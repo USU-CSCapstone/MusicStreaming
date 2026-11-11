@@ -1,0 +1,24 @@
+[package]
+name = "jewelcase-catalog-wasm"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+# Everything is for the browser: natively the crate is empty, so workspace builds skip SQLite's C.
+[target.'cfg(target_family = "wasm")'.dependencies]
+jewelcase-catalog = { path = "../catalog" }
+rusqlite = "0.41.1"
+# The version rusqlite builds on, which names the VFS callbacks the sahpool VFS needs; its
+# `wasm-bindgen` feature provides the clock, sleep and entropy SQLite asks the host for.
+sqlite-wasm-rs = { version = "0.6", default-features = false, features = ["wasm-bindgen"] }
+# The sahpool VFS (SQLite on OPFS), without the IndexedDB and tokio-backed default VFSes.
+sqlite-wasm-vfs = { version = "0.3", default-features = false, features = ["sahpool"] }
+# `web/scripts/wasm.sh` and the Dockerfile name this version for the matching CLI.
+wasm-bindgen = "=0.2.129"
+# What `#[wasm_bindgen]` expands `async fn` to.
+wasm-bindgen-futures = "0.4.79"
+
+[lints]
+workspace = true

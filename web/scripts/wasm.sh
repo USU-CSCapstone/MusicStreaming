@@ -1,7 +1,8 @@
 #!/bin/sh
-# Builds crates/core-wasm and binds it for the web app into src/lib/core-wasm (gitignored).
+# Builds crates/core-wasm and crates/catalog-wasm and binds them for the web app into
+# src/lib/core-wasm and src/lib/catalog-wasm (gitignored).
 # `pnpm dev`, `build`, `check` and `test:unit` run it first. Needs the `wasm-bindgen` CLI at
-# exactly the version in crates/core-wasm/Cargo.toml (also named in the Dockerfile):
+# exactly the version in the crates' Cargo.toml (also named in the Dockerfile):
 #   cargo install wasm-bindgen-cli --version 0.2.129 --locked
 set -eu
 
@@ -17,7 +18,9 @@ target=${CARGO_TARGET_DIR:-$root/target}
 
 cd "$root"
 # Builds into the directory bound below, whatever target-dir Cargo is configured with.
-cargo build --quiet --release --target wasm32-unknown-unknown --package jewelcase-core-wasm \
-	--target-dir "$target"
-wasm-bindgen --target web --out-dir web/src/lib/core-wasm \
-	"$target/wasm32-unknown-unknown/release/jewelcase_core_wasm.wasm"
+cargo build --quiet --release --target wasm32-unknown-unknown \
+	--package jewelcase-core-wasm --package jewelcase-catalog-wasm --target-dir "$target"
+for module in core catalog; do
+	wasm-bindgen --target web --out-dir "web/src/lib/$module-wasm" \
+		"$target/wasm32-unknown-unknown/release/jewelcase_${module}_wasm.wasm"
+done

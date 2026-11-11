@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { expect, test } from 'vitest';
-import { Queue, sortRows } from '$lib/core-wasm/jewelcase_core_wasm.js';
+import { Queue, listHash, sortRows } from '$lib/core-wasm/jewelcase_core_wasm.js';
 
 /**
  * The cases the native core's `permutation_golden_vectors` and `parity_edit_sequence` tests
@@ -18,6 +18,7 @@ const parity = JSON.parse(
 	initial: unknown;
 	edits: unknown[];
 	final: unknown;
+	listHash: { tracks: string[]; hash: string }[];
 	sort: { rows: unknown[]; cases: { field: string; order: string; positions: number[] }[] };
 };
 
@@ -55,6 +56,13 @@ test('permutation matches native vectors', () => {
 		expect(row.position - 1, `seed ${seed} m ${m} x ${x}`).toBe(y);
 		expect(queue.upNextLen()).toBe(m);
 	}
+});
+
+test('listHash matches parity.json', () => {
+	for (const { tracks, hash } of parity.listHash) {
+		expect(listHash(JSON.stringify({ tracks }))).toBe(hash);
+	}
+	expect(() => listHash('{"tracks":["x"]}')).toThrow();
 });
 
 test('sorting rows matches native', () => {

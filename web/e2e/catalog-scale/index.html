@@ -1,0 +1,24 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Catalog scale gate</title>
+<style>
+	body {
+		font: 14px system-ui;
+		margin: 16px;
+	}
+	pre {
+		white-space: pre-wrap;
+		font:
+			12px ui-monospace,
+			monospace;
+	}
+</style>
+<h1>Catalog scale gate</h1>
+<p>
+	Streams a 500,000-track device database onto OPFS, applies the same rows from JSON, and times the
+	catalog's queries.
+</p>
+<button id="start">Run</button>
+<pre id="out"></pre>
+<script type="module" src="/bench.js"></script>
