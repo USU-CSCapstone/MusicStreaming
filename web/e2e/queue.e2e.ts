@@ -637,6 +637,8 @@ test('deletes a kept queue with one press', async ({ page }) => {
 	const { player, panel } = await playAlbum(page);
 	await page.locator('main').getByRole('button', { name: 'Actions for Signal Remix' }).click();
 	await page.getByRole('menuitem', { name: 'Queue last' }).click();
+	// A start drops the edits not yet sent, so the queue is adjusted, and kept, only once it is.
+	await expect.poll(() => queue.edits.at(-1)).toMatchObject({ type: 'add' });
 	await page.locator('main').getByRole('button', { name: 'Play', exact: true }).click();
 	await expect.poll(() => queue.kept.size).toBe(1);
 
