@@ -115,6 +115,11 @@ export type Options = {
 	heavy?: (heavy: boolean) => void;
 	/** Told what each library on the device stands at, whenever that changes. */
 	state?: (libraries: Record<string, LibraryState>) => void;
+	/**
+	 * Told of each library the account no longer reaches, once its file is deleted, to drop what else
+	 * is kept for it.
+	 */
+	lost?: (libraryId: string) => Promise<void> | void;
 };
 
 /** A rebuild of a search index waits this many times as long as the last build took. */
@@ -186,6 +191,7 @@ export class CatalogSync {
 	#report: (report: Report) => void;
 	#online: () => boolean;
 	#changed: (libraryId: string, kinds: readonly Kind[]) => void;
+	#lost: (libraryId: string) => Promise<void> | void;
 	#state: (libraries: Record<string, LibraryState>) => void;
 	#heavy: (heavy: boolean) => void;
 	/** The long calls under way, which `#heavy` hears of as one. */
@@ -223,7 +229,8 @@ export class CatalogSync {
 		online = () => navigator.onLine,
 		changed = () => {},
 		state = () => {},
-		heavy = () => {}
+		heavy = () => {},
+		lost = () => {}
 	}: Options) {
 		this.#api = api;
 		this.#user = user;
@@ -233,6 +240,7 @@ export class CatalogSync {
 		this.#changed = changed;
 		this.#state = state;
 		this.#heavy = heavy;
+		this.#lost = lost;
 	}
 
 	/**
@@ -264,12 +272,12 @@ export class CatalogSync {
 				let kept: string | undefined;
 				for (const { file } of files.sort((a, b) => b.generation - a.generation)) {
 					if (kept) break;
-					const catalog = await this.#adopt(file);
+					const catalog = await this.#adopt(file, id);
 					if (catalog) {
 						this.catalogs.set(id, catalog);
 						this.#publish();
-						kept = file;
 					}
+					if (catalog || this.#outdated.has(id)) kept = file;
 				}
 				await this.#removeFiles(id, kept);
 				// A worker closed mid-apply left the file part-way: it is finished before it answers.
@@ -531,7 +539,7 @@ export class CatalogSync {
 		const listed = new Set(
 			(await this.#json<{ items: { id: string }[] }>('/libraries')).items.map(({ id }) => id)
 		);
-		for (const id of [...this.catalogs.keys()]) if (!listed.has(id)) await this.#discard(id);
+		for (const id of [...this.catalogs.keys()]) if (!listed.has(id)) await this.#lose(id);
 		for (const id of listed) {
 			if (!this.catalogs.has(id) && !this.#failed.has(id)) void this.#pullLibrary(id);
 		}
@@ -615,6 +623,10 @@ export class CatalogSync {
 			if (!damaged(error)) throw error;
 			outcome = 'damaged';
 		}
+		// A session that is another account's pulls nothing of it, and deletes nothing on its 404s. The
+		// file is read next, never while a pool operation is under way, as one may be after the wait.
+		await this.#mine();
+		await this.#queue;
 		for (;;) {
 			let catalog = this.catalogs.get(id);
 			if (!catalog || outcome !== 'current') {
@@ -669,7 +681,7 @@ export class CatalogSync {
 			if (stale()) return 'current';
 			if (response.status === 410) return 'expired';
 			if (response.status === 404) {
-				await this.#discard(id);
+				await this.#lose(id);
 				return 'current';
 			}
 			const page = await this.#page(response);
@@ -775,6 +787,15 @@ export class CatalogSync {
 		await this.#removeFiles(id);
 	}
 
+	/**
+	 * Deletes a library the account no longer reaches, and tells `lost` so what else is kept for it
+	 * goes too.
+	 */
+	async #lose(id: string) {
+		await this.#discard(id);
+		await this.#lost(id);
+	}
+
 	/** Deletes the files of library `id`, journals included, except `keep` and its journal. */
 	async #removeFiles(id: string, keep?: string) {
 		for (const name of await this.#names()) {
@@ -784,14 +805,22 @@ export class CatalogSync {
 		}
 	}
 
-	/** Opens a file found on the device, or deletes it if it cannot be trusted. */
-	async #adopt(file: string) {
+	/**
+	 * Opens library `id`'s file found on the device, or deletes it if it cannot be trusted. A file
+	 * of a newer schema version is a newer build's, open in another tab: it is kept, and the
+	 * library is outdated here, so this worker neither downloads nor deletes it.
+	 */
+	async #adopt(file: string, id: string) {
 		let catalog: Catalog | undefined;
 		try {
 			catalog = await this.#open(file);
 			if (catalog.cursor(OWNER) === BigInt(this.#user)) return catalog;
-		} catch {
-			// A file that will not open, or is of another schema version, is rebuilt.
+		} catch (error) {
+			if (error instanceof Error && error.message.startsWith('newer')) {
+				this.#outdated.add(id);
+				return undefined;
+			}
+			// A file that will not open, or is of an older schema version, is rebuilt.
 		}
 		catalog?.free();
 		await this.#remove(file);
@@ -835,7 +864,7 @@ export class CatalogSync {
 		for (let mismatches = 0, older = 0; ;) {
 			const response = await this.#snapshot(id);
 			if (!response) {
-				await this.#discard(id);
+				await this.#lose(id);
 				return undefined;
 			}
 			seq = Number(response.headers.get('x-jewelcase-seq'));

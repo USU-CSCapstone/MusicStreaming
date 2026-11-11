@@ -1,9 +1,36 @@
-// The queue's lists on this device: a store of them by hash, and the download of one
-// (`design/queue.md` §8, `design/web.md`, Queue worker). A list never changes under its hash,
-// so what is stored is never stale, only unreferenced.
+// The queue's lists on this device: a store of them by hash, one for each account, and the
+// download of one (`design/queue.md` §8, `design/web.md`, Queue worker). A list never changes
+// under its hash, so what is stored is never stale, only unreferenced.
 
-/** The Cache Storage cache the lists live in. */
-const CACHE_NAME = 'jewelcase-queue-lists';
+/** The start of every account's cache's name. */
+const PREFIX = 'queue-lists-';
+
+/** The Cache Storage cache `user`'s lists live in. */
+const cacheName = (user: string) => `${PREFIX}${user}`;
+
+/**
+ * Deletes every account's kept lists: the next person to sign in must not see the last one's queue.
+ */
+export async function clearQueueLists() {
+	try {
+		for (const name of await caches.keys()) if (name.startsWith(PREFIX)) await caches.delete(name);
+	} catch (error) {
+		console.error(error);
+	}
+}
+
+/** Deletes the lists of `library` kept for `user`, which the account no longer reaches. */
+export async function dropLibraryLists(user: string, library: string) {
+	try {
+		const cache = await caches.open(cacheName(user));
+		for (const request of await cache.keys()) {
+			const list = await (await cache.match(request))?.json().catch(() => null);
+			if (String(list?.libraryId) === library) await cache.delete(request);
+		}
+	} catch (error) {
+		console.error(error);
+	}
+}
 
 /** What a download came to: the list's JSON, `gone` for a `404`, or `failed` for anything else. */
 export type Download = { body: string } | 'gone' | 'failed';
@@ -19,14 +46,19 @@ export class ListCache {
 	/** Lists being written, and all of them where Cache Storage cannot be used. */
 	#memory = new Map<string, string>();
 	#storage: CacheStorage | undefined;
+	#name: string;
 	#prefix: string;
 	#timeoutMs: number;
 	#cache: Promise<Cache> | null = null;
 	#stuck = false;
 
-	/** Makes a store in `storage`, keying each list by the URL it is downloaded from, under `api`. */
-	constructor(storage: CacheStorage | undefined, api: string, timeoutMs = 2000) {
+	/**
+	 * Makes `user`'s store in `storage`, keying each list by the URL it is downloaded from, under
+	 * `api`.
+	 */
+	constructor(storage: CacheStorage | undefined, api: string, user: string, timeoutMs = 2000) {
 		this.#storage = storage;
+		this.#name = cacheName(user);
 		this.#prefix = `${api}/me/queue/lists/`;
 		this.#timeoutMs = timeoutMs;
 	}
@@ -43,7 +75,7 @@ export class ListCache {
 			timer = setTimeout(() => resolve('timeout'), this.#timeoutMs);
 		});
 		try {
-			this.#cache ??= storage.open(CACHE_NAME);
+			this.#cache ??= storage.open(this.#name);
 			const done = this.#cache.then(use);
 			done.catch(() => {});
 			const result = await Promise.race([done, timeout]);

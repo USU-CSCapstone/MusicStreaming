@@ -18,7 +18,11 @@ export default defineConfig({
 			},
 
 			// SPA mode: static files served by the Rust server, unknown paths fall back to index.html
-			adapter: adapter({ fallback: 'index.html' })
+			adapter: adapter({ fallback: 'index.html' }),
+
+			// Registered by `hooks.client.ts`, in production builds only: in development the
+			// worker would serve a stale app.
+			serviceWorker: { register: false }
 		})
 	],
 	test: {

@@ -142,13 +142,13 @@ describe('Realtime', () => {
 		expect(first.sent).toEqual([{ type: 'ping' }]);
 	});
 
-	it('stops once the server signs this device out', () => {
+	it('stops once the server signs this device out', async () => {
 		const heard: string[] = [];
 		realtime.on((message) => heard.push(message.type));
 		realtime.start();
 		latest().hello();
 		latest().receive({ type: 'sessionRevoked', reason: 'logged_out' });
-		expect(revoked).toHaveBeenCalledOnce();
+		await vi.waitFor(() => expect(revoked).toHaveBeenCalledOnce());
 		expect(heard).toEqual(['hello']);
 
 		vi.advanceTimersByTime(60_000);
@@ -175,6 +175,39 @@ describe('Realtime', () => {
 		await vi.waitFor(() => expect(revoked).toHaveBeenCalledOnce());
 		vi.advanceTimersByTime(60_000);
 		expect(sockets).toHaveLength(2);
+	});
+
+	it('wipes the device, whatever the reason, before it goes to the login page', async () => {
+		const order: string[] = [];
+		realtime.onSessionEnd = async () => void order.push('wiped');
+		revoked.mockImplementation(() => void order.push('login'));
+		realtime.start();
+		latest().hello();
+		latest().receive({ type: 'sessionRevoked', reason: 'credentials_changed' });
+		await vi.waitFor(() => expect(revoked).toHaveBeenCalledOnce());
+		expect(order).toEqual(['wiped', 'login']);
+	});
+
+	it('goes to the login page even if the wipe fails', async () => {
+		realtime.onSessionEnd = () => Promise.reject(new Error('no pool'));
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		realtime.start();
+		latest().hello();
+		latest().receive({ type: 'sessionRevoked', reason: 'logged_out' });
+		await vi.waitFor(() => expect(revoked).toHaveBeenCalledOnce());
+	});
+
+	it('does not wipe the device when the server cannot be reached', async () => {
+		const wiped = vi.fn();
+		realtime.onSessionEnd = wiped;
+		realtime.start();
+		latest().hello();
+		latest().onclose?.();
+		vi.advanceTimersByTime(1000);
+		latest().onclose?.(); // Refused, and the API cannot say the session ended.
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(wiped).not.toHaveBeenCalled();
+		expect(revoked).not.toHaveBeenCalled();
 	});
 
 	it('reconnects at once when the browser is back online', () => {
