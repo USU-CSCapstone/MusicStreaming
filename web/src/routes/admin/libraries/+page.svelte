@@ -5,6 +5,7 @@
 		TRIGGER_LABELS,
 		findings,
 		folder,
+		inOrder,
 		progress,
 		summarize,
 		underWay,
@@ -101,11 +102,6 @@
 			return `The last scan stopped short, ${at}${found ? `: ${found}` : ''}`;
 		}
 		return `Last scanned ${at}: ${found || 'nothing changed'}`;
-	}
-
-	/** The scans waiting to start, in order: "Manual scan, then Scan of changed files". */
-	function inOrder(queued: Scan[]): string {
-		return queued.map((s) => TRIGGER_LABELS[s.trigger]).join(', then ');
 	}
 </script>
 

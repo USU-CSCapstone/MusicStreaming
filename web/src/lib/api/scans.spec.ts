@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { findings, folder, progress, summarize, underWay, waiting, withPressed } from './scans';
+import {
+	findings,
+	folder,
+	inOrder,
+	progress,
+	summarize,
+	underWay,
+	waiting,
+	withPressed
+} from './scans';
 import type { Scan } from './types';
 
 function scan(id: string, state: Scan['state'], finishedAt: string | null = null): Scan {
@@ -140,5 +149,34 @@ describe('folder', () => {
 			folder({ ...running, currentFolder: '' }),
 			folder(running)
 		]).toEqual(['Artist/Album', 'the top folder', null]);
+	});
+});
+
+describe('inOrder', () => {
+	const queued = (id: string, trigger: Scan['trigger']) => ({ ...scan(id, 'queued'), trigger });
+
+	it('names each scan waiting, the next first', () => {
+		expect(inOrder([queued('3', 'manual'), queued('4', 'watch')])).toBe(
+			'Manual scan, then Scan of changed files'
+		);
+	});
+
+	it('counts a run of the same kind rather than listing each', () => {
+		const changed = Array.from({ length: 12 }, (_, i) => queued(String(10 + i), 'watch'));
+		expect(inOrder([queued('3', 'manual'), ...changed])).toBe(
+			'Manual scan, then 12 scans of changed files'
+		);
+	});
+
+	it('keeps the order, so a kind met again later is counted again', () => {
+		const order = [
+			queued('3', 'watch'),
+			queued('4', 'watch'),
+			queued('5', 'manual'),
+			queued('6', 'watch')
+		];
+		expect(inOrder(order)).toBe(
+			'2 scans of changed files, then Manual scan, then Scan of changed files'
+		);
 	});
 });
