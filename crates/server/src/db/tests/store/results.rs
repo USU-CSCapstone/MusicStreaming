@@ -9,28 +9,51 @@ use jewelcase_scanner::*;
 use super::recompute::check;
 use super::{count, make, scalar, tagged};
 use crate::db::store::SqliteStore;
+use crate::db::testing::Image;
 use crate::db::waveform;
 
+/// A placeholder is a change of the album showing its image, which brings it to every device,
+/// and of a track only when the track's own image is not its album's.
 #[test]
-fn a_placeholder_is_an_album_change() {
+fn a_placeholder_is_an_album_change_and_a_track_change_only_for_its_own_art() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
-    testing::make_album(&root, "A", "X", 1);
+    testing::make_album(&root, "A", "X", 2);
     std::fs::write(root.join("A/X/cover.png"), testing::PNG).unwrap();
     let store = make(&root);
     let lib = testing::library(&root);
     testing::scan_library(&store, &lib);
-    let album_seq = |store: &SqliteStore| {
-        scalar::<i64>(store, "SELECT seq FROM library_changes WHERE entity_type = 'album'").unwrap()
-    };
-    let (hash, _) = store.next_without_placeholder(lib.id, 1).unwrap().remove(0);
+    // The second track shows art of its own.
+    store
+        .db()
+        .write_blocking(move |tx| {
+            Image::new(99, lib.id, "A/X/02.png").insert(tx)?;
+            tx.execute(
+                "UPDATE tracks SET image_id = 99 WHERE id = (SELECT max(id) FROM tracks)",
+                [],
+            )
+            .map(drop)
+        })
+        .unwrap();
+    let seq = |store: &SqliteStore, sql: &'static str| scalar::<i64>(store, sql).unwrap_or(0);
+    let album = "SELECT max(seq) FROM library_changes WHERE entity_type = 'album'";
+    let shared = "SELECT seq FROM library_changes WHERE entity_type = 'track' \
+                  AND entity_id = (SELECT min(id) FROM tracks)";
+    let own = "SELECT seq FROM library_changes WHERE entity_type = 'track' \
+               AND entity_id = (SELECT max(id) FROM tracks)";
+    let cover: Vec<u8> =
+        scalar(&store, "SELECT hash FROM images WHERE id = (SELECT image_id FROM albums)").unwrap();
 
     // One that could not be made changes nothing clients see.
-    let before = album_seq(&store);
-    store.store_placeholder(lib.id, &hash, Vec::new()).unwrap();
-    assert_eq!(album_seq(&store), before);
-    store.store_placeholder(lib.id, &hash, vec![1, 2, 3]).unwrap();
-    assert!(album_seq(&store) > before);
+    let before = (seq(&store, album), seq(&store, shared), seq(&store, own));
+    store.store_placeholder(lib.id, &cover, Vec::new()).unwrap();
+    assert_eq!((seq(&store, album), seq(&store, shared), seq(&store, own)), before);
+    store.store_placeholder(lib.id, &cover, vec![1, 2, 3]).unwrap();
+    assert!(seq(&store, album) > before.0);
+    assert_eq!(seq(&store, shared), before.1, "the album's change carries its tracks' image");
+
+    store.store_placeholder(lib.id, &99_i64.to_be_bytes(), vec![4, 5, 6]).unwrap();
+    assert!(seq(&store, own) > before.2, "a track's rows carry its own image's placeholder");
 }
 
 #[test]

@@ -36,16 +36,30 @@ info:
     its path names (`requirements/users.md` §10). Identifiers in a request select within the
     caller's scope and never widen it.
 
+    **Whose.** Every response to a signed-in caller carries `X-Jewelcase-User`, the caller's
+    account ID as `getMe` shows it: a `404` for a library the caller cannot reach and a `403`
+    under `/admin` included, a `401` not. A client that keeps data per account checks it on
+    what it fetches, and never takes another account's answer for the caller's.
+
     **Personal data.** `/me` is the caller's own account. Content schemas keep the caller's
     own listening in a `personal` object, which is planned.
 
-    **Optimistic writes.** Writes clients apply locally before confirmation — player
-    commands and plays — carry a client-generated ID in the body (`commandId`, `playId`).
-    The server applies each ID once however often it arrives (for player commands, see
-    `CommandResult`), so a device and the server agree without a round trip. Playlists need
-    neither: the server assigns a playlist's ID, and edits name its tracks by position at a
-    version; creating and editing one take an `Idempotency-Key`, so a retry is not applied
-    twice.
+    **Optimistic writes.** A client may apply any write locally before the server confirms it,
+    and name what it makes with IDs it chose, so a device and the server agree without a round
+    trip: a player command's `commandId` and a play's `playId`, which the server applies once
+    however often they arrive (for player commands, see `CommandResult`); a playlist's `id`
+    (`PlaylistCreate.id`), whose edits name its tracks by position at a version; a queue's
+    `queueId`; and a queue edit's `editId`.
+
+    **Idempotency.** Any `POST`, `PUT`, `PATCH` or `DELETE` a signed-in caller makes may carry
+    an `Idempotency-Key` header: client-generated, 1 to 128 characters of plain text (anything
+    else is `422`). The server carries the write out once for that caller and key. The answer
+    of one that applied (a `2xx`) is stored, and the same key sent again, however late within 8
+    days, returns that status and body and changes nothing, whatever else the request says.
+    Keys are the caller's own: another account's identical key is another key. A write that was
+    refused or failed is not stored, so it may be sent again with the same key. Requests with
+    one key that overlap are handled one after the other. `editQueue` takes its `editId` as
+    the key when it carries no header.
 
     **Pagination.** The lists that can grow without bound — tracks, albums, artists,
     playlists, a playlist's items, and kept queues — are cursor-paged: pass the previous page's
@@ -251,6 +265,51 @@ paths:
               schema: { $ref: '#/components/schemas/User' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /me/changes:
+    get:
+      tags: [Account]
+      summary: List the caller's changes
+      description: |
+        The caller's own playlists, Liked Songs included, and the tracks they hid, as a feed of
+        changes, for a device that keeps a copy of them (`requirements/offline.md`). It is read
+        like `listLibraryChanges`: each playlist, each playlist item and each hidden track
+        appears at most once, as its latest change, in order, so `after=0` is all of them now and
+        a later `after` is only what changed since; a catch-up after one item edit is that item.
+        An upsert carries the current rows (`playlists`, `playlist_items` or `hidden_tracks` of
+        the device schema, `crates/catalog/src/schema.sql`) and a delete is a tombstone. A
+        deleted playlist is one tombstone: the device drops its items with it. An item's change
+        names its playlist in `id` and the item in `key`; an unhidden track is its hide's
+        tombstone. Nothing of another account is ever listed.
+
+        Only what is in libraries the caller reaches is listed. A library the caller lost
+        access to is left out, so its playlists neither arrive nor are deleted here: a device
+        that finds a library gone from `listLibraries` removes that library and its playlists.
+        A library's catalog file (`getLibraryCatalog`) holds no playlists, and changes made
+        while the caller could not reach a library are left out, so a device that installs a
+        library's catalog file, the first time or again, pulls this feed again from `after=0`.
+
+        Pass `next` as `after` until it equals `head`, when the client is current. `head` is the
+        position of the caller's latest change, comparable with `accountChanged`'s `seq`.
+      operationId: listAccountChanges
+      parameters:
+        - name: after
+          in: query
+          description: The `next` of the last page applied, or 0 for everything.
+          schema: { type: integer, format: int64, minimum: 0, default: 0 }
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountChanges' }
+        '410':
+          description: '`cursor_expired` — `after` is past the caller''s latest change; start again from `after=0`.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
   /me/plugins:
     get:
       tags: [Account]
@@ -407,6 +466,114 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Library' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /libraries/{libraryId}/changes:
+    parameters:
+      - $ref: '#/components/parameters/LibraryId'
+    get:
+      tags: [Libraries]
+      summary: List the library's changes
+      description: |
+        The library's catalog as a feed of changes, for a device that keeps a copy of it
+        (`requirements/offline.md`). Each track, album, artist, and tag appears at most once, as
+        its latest change, in the order the changes were made, so `after=0` is the whole catalog
+        and a later `after` is only what changed since. An upsert carries the entity's current
+        rows, keyed by table, each row an object keyed by column name; a delete is a tombstone
+        with no rows. The tables and columns are those of the device schema
+        (`crates/catalog/src/schema.sql`, `design/general.md` §3); a `sort_key` column is opaque
+        bytes to compare, not to show. IDs are strings and blobs are base64. A client ignores a
+        column it does not know, as the server may add columns.
+
+        An image or tag type is not a change of its own: its row is in the rows of every track,
+        album, artist, or tag that shows it, and a change to the image or the type puts them all
+        on the feed again.
+
+        Pass `next` as `after` until it equals `head`, when the client is current. A client that
+        has applied a page has applied every change up to its `next`, and may stop and resume
+        from there.
+      operationId: listLibraryChanges
+      parameters:
+        - name: after
+          in: query
+          description: The `next` of the last page applied, or 0 for the whole catalog.
+          schema: { type: integer, format: int64, minimum: 0, default: 0 }
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LibraryChanges' }
+        '410':
+          description: |
+            `cursor_expired` — the server cannot continue from `after`, because it is past the
+            library's latest change or older than the feed reaches back; start again from
+            `after=0`.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /libraries/{libraryId}/catalog:
+    parameters:
+      - $ref: '#/components/parameters/LibraryId'
+    get:
+      tags: [Libraries]
+      summary: Download the library's catalog
+      description: |
+        The library's catalog as one SQLite database in the device schema
+        (`crates/catalog/src/schema.sql`), for a device that has none of it yet. It holds the
+        rows `listLibraryChanges` carries, as of `X-Jewelcase-Seq`: the device then pulls the
+        feed with `after` set to that value. The file is built once and shared by everyone who
+        reaches the library. It is rebuilt in the background once the library's feed holds more
+        changes since the file than a tenth of its tracks, albums and artists, and the old file is
+        served meanwhile. It is gzipped for a client that accepts it.
+
+        `ETag` is the SHA-256 of the database itself, as a quoted lowercase hex string,
+        whether or not the response is compressed: a client checks it against the file it ends
+        up with. A file is served only after SQLite's `quick_check` passed on it.
+        `X-Jewelcase-Schema` is the device schema's version, which the database also carries as
+        its `user_version`: a client that doesn't know that version doesn't import the file. The
+        response is `no-store`, so no HTTP cache keeps a copy of the catalog.
+
+        Until the first build has finished there is no file, and the answer is `503`. The client
+        reads the catalog from the other endpoints in the meantime and asks again after
+        `Retry-After`.
+      operationId: getLibraryCatalog
+      responses:
+        '200':
+          description: OK
+          headers:
+            ETag:
+              description: The SHA-256 of the uncompressed database, in quotes.
+              schema: { type: string }
+            X-Jewelcase-Seq:
+              description: The feed position the file is current to, for `listLibraryChanges`'s `after`.
+              schema: { type: integer, format: int64 }
+            X-Jewelcase-Schema:
+              description: The device schema version of the file (`PRAGMA user_version`).
+              schema: { type: integer, format: int32 }
+            Cache-Control:
+              description: '`no-store`.'
+              schema: { type: string }
+            Content-Encoding:
+              description: '`gzip` when the client accepts it.'
+              schema: { type: string }
+          content:
+            application/vnd.sqlite3:
+              schema: { type: string, format: binary }
+        '206': { description: 'Partial content (`Range`). A range applies to the encoding sent, so an interrupted download can resume.' }
+        '304': { description: Not modified (`If-Modified-Since`). }
+        '416': { description: Range not satisfiable. }
+        '503':
+          description: '`catalog_building` — the first build has not finished; try again after `Retry-After`.'
+          headers:
+            Retry-After:
+              schema: { type: integer }
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
   # ───────────────────────────── Browse ─────────────────────────────
@@ -1089,6 +1256,11 @@ paths:
         Send an `Idempotency-Key`, so a retry does not create a second playlist: a key the
         caller already used for a request that created one returns that `201` and body again.
 
+        A client may choose the playlist's `id`, as a device that creates offline does so the
+        playlist keeps one address from the start. One already used by any playlist is
+        `409 id_taken`, without saying whose, and nothing is created; one that is not a positive
+        63-bit integer in decimal is `422`.
+
         Planned: `fromMix` and `external` items answer `422`. Every other item must be in this
         library, or the caller's own playlist in it, or the answer is `422` and nothing is
         created.
@@ -1106,6 +1278,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Playlist' }
+        '409':
+          description: '`id_taken` — a playlist already has the `id` the request chose. Nothing was created.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
   /libraries/{libraryId}/playlists/{playlistId}:
@@ -2196,7 +2373,8 @@ components:
         repeated key returns the original result without applying twice: the same status and
         body, whatever else the request says. Keys are the caller's own, so another user's
         identical key is another key. Only a request that applied is remembered, so one that was
-        refused (`409`, `422`) can be sent again with the same key. Kept for 24 hours.
+        refused (`409`, `422`) can be sent again with the same key. Kept for 8 days. Every write
+        takes it (**Idempotency** in the conventions); it is listed where a retry matters most.
       schema: { type: string, minLength: 1, maxLength: 128 }
 
   responses:
@@ -2283,8 +2461,10 @@ components:
             - play_gone
             - duplicate_key
             - version_conflict
+            - id_taken
             - cursor_expired
             - setup_required
+            - catalog_building
             - unsupported_media
             - device_unavailable
             - plugin_settings_invalid
@@ -2299,6 +2479,78 @@ components:
         currentVersion:
           type: integer
           description: With `version_conflict`.
+
+    LibraryChanges:
+      type: object
+      required: [changes, next, head]
+      properties:
+        changes:
+          type: array
+          items: { $ref: '#/components/schemas/LibraryChange' }
+        next:
+          type: integer
+          format: int64
+          description: The `after` of the next page. It is `head` when this page was the last.
+        head:
+          type: integer
+          format: int64
+          description: The position of the library's latest change when the page was read.
+
+    LibraryChange:
+      type: object
+      required: [seq, op, kind, id]
+      properties:
+        seq: { type: integer, format: int64 }
+        op: { type: string, enum: [upsert, delete] }
+        kind: { type: string, enum: [track, album, artist, tag] }
+        id: { $ref: '#/components/schemas/Id' }
+        rows:
+          type: object
+          description: |
+            With an upsert: the entity's rows by table name (`tracks`, `track_artists`, `images`
+            and so on). A table the entity has no rows in is left out.
+          additionalProperties:
+            type: array
+            items: { type: object, additionalProperties: true }
+
+    AccountChanges:
+      type: object
+      required: [changes, next, head]
+      properties:
+        changes:
+          type: array
+          items: { $ref: '#/components/schemas/AccountChange' }
+        next:
+          type: integer
+          format: int64
+          description: The `after` of the next page. It is `head` when this page was the last.
+        head:
+          type: integer
+          format: int64
+          description: The position of the caller's latest change when the page was read.
+
+    AccountChange:
+      type: object
+      required: [seq, op, kind, id]
+      properties:
+        seq: { type: integer, format: int64 }
+        op: { type: string, enum: [upsert, delete] }
+        kind: { type: string, enum: [playlist, playlistItem, hiddenTrack] }
+        id:
+          $ref: '#/components/schemas/Id'
+          description: The playlist, for a `playlist` or `playlistItem`, or the track a `hiddenTrack` hid.
+        key:
+          type: integer
+          format: int64
+          description: The item's key in its playlist, which `id` names, for a `playlistItem`.
+        rows:
+          type: object
+          description: |
+            The rows by table name, `playlists`, `playlist_items` or `hidden_tracks`, with an
+            upsert. Liked Songs is a playlist like any other here.
+          additionalProperties:
+            type: array
+            items: { type: object, additionalProperties: true }
 
     PageInfo:
       type: object
@@ -3229,6 +3481,12 @@ components:
       type: object
       required: [title]
       properties:
+        id:
+          type: string
+          description: |
+            The playlist's ID, chosen by the client: a positive 63-bit integer in decimal, as
+            IDs are shown. Omitted, the server chooses. See `createPlaylist`.
+          example: '4611686018427387904'
         title: { type: string, minLength: 1 }
         description: { type: string }
         items:
@@ -3709,7 +3967,9 @@ components:
         editId:
           type: string
           format: uuid
-          description: Client-generated. Names the edit, so one sent again is applied once.
+          description: |
+            Client-generated. Names the edit, so one sent again is applied once: it is the
+            `Idempotency-Key` when the request sends none.
         queueId:
           type: string
           format: uuid
@@ -4765,6 +5025,34 @@ components:
             libraryId: { $ref: '#/components/schemas/Id' }
             trackId: { $ref: '#/components/schemas/Id' }
             hidden: { type: boolean }
+        - type: object
+          required: [type, libraryId, seq]
+          description: |
+            A library's change feed moved, so a device holding the library fetches what it
+            missed (`listLibraryChanges`, with `after` set to the position it holds). Sent to every
+            connection of every account that reaches the library, once the change is committed,
+            and never to an account that does not. It carries no data: `seq` is the feed's
+            position, comparable with `head` there, and a device already at or past it does
+            nothing. At most one is sent for a library each second, carrying the latest `seq`,
+            and a change inside that second is announced when it ends, so a burst such as a scan
+            sends a few. A device also fetches on `hello`, so a reconnect and a hint are one path.
+          properties:
+            type: { const: libraryChanged }
+            libraryId: { $ref: '#/components/schemas/Id' }
+            seq: { type: integer, format: int64 }
+        - type: object
+          required: [type, seq]
+          description: |
+            The account's own change feed moved (`listAccountChanges`, with `after` set to the
+            position the device holds), so a device keeping its playlists fetches what it
+            missed. Sent to every connection of the account, once the change is committed, and
+            to no other account. It carries no data: `seq` is the feed's position, comparable
+            with `head` there. At most one is sent each second, carrying the latest `seq`, and a
+            change inside that second is announced when it ends. A device also fetches on
+            `hello`.
+          properties:
+            type: { const: accountChanged }
+            seq: { type: integer, format: int64 }
         - type: object
           required: [type, queueId]
           description: |

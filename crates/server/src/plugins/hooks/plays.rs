@@ -4,10 +4,11 @@
 use jewelcase_plugins::{Play, PlayEnd};
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::super::library::{TRACK_COLUMNS, track};
+use super::super::library::track;
 use super::BATCH;
 use crate::db::Text;
 use crate::db::plays::End;
+use crate::db::plugin_view::TRACK;
 
 /// The next batch of plays `user` ended in `library` after `position`, since they connected
 /// `plugin`: the position after it, and the plays. One of a track since removed from the
@@ -40,9 +41,8 @@ pub fn plays(
             "SELECT {}, p.started_at, p.listen_time_ms, p.ended FROM play_events e \
              JOIN plays p ON p.user_id = e.user_id AND p.id = e.play_id \
              JOIN tracks t ON t.id = p.track_id AND t.library_id = e.library_id \
-             JOIN albums al ON al.id = t.album_id \
              WHERE {after} AND e.seq <= ?5 ORDER BY e.seq",
-            TRACK_COLUMNS.join(", ")
+            TRACK.columns.join(", ")
         ))?
         .query_map(params![library, user, position, connected_at, next], |row| {
             let Text(end) = row.get::<_, Text<End>>(15)?;

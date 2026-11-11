@@ -1,9 +1,12 @@
 //! The public API (`api/openapi.yaml`), served under `{basePath}/api/v1`.
 
+mod account_changes;
 mod albums;
 mod artists;
 mod audio;
 mod authenticate;
+mod catalog_snapshot;
+mod changes;
 mod connections;
 mod credit;
 mod cursor;
@@ -12,6 +15,7 @@ mod extract;
 mod health;
 mod hidden;
 mod id;
+mod idempotency;
 mod images;
 mod libraries;
 mod login;
@@ -55,11 +59,13 @@ use axum::routing::{MethodRouter, any, get, post};
 use jewelcase_scanner::Scanner;
 use tower_http::timeout::RequestBodyDeadlineLayer;
 
+pub use catalog_snapshot::Snapshots;
 pub use id::{AnyId, Id, Uuid};
+pub use idempotency::Idempotency;
 pub use images::Images;
 pub use player::Players;
 pub use problem::{Code, Problem};
-pub use realtime::Hub;
+pub use realtime::{Hub, hint_feed_changes};
 pub use scope::Caller;
 pub use search::Indexes;
 use setup::Setup;
@@ -81,6 +87,8 @@ const SIGNED_OUT_BODY_DEADLINE: Duration = Duration::from_secs(30);
 pub struct AppState {
     pub db: Arc<Database>,
     pub images: Arc<Images>,
+    /// The catalog files devices download.
+    pub snapshots: Arc<Snapshots>,
     pub indexes: Arc<Indexes>,
     /// Whether setup is seen done; a default one has not seen it yet.
     pub setup: Arc<Setup>,
@@ -93,6 +101,8 @@ pub struct AppState {
     pub players: Arc<Players>,
     /// Each account's queues.
     pub queues: Arc<crate::queue::Queues>,
+    /// The writes under an `Idempotency-Key` being handled.
+    pub idempotency: Arc<Idempotency>,
     /// Where the API is mounted, as [`prefix`] gives it.
     pub prefix: Arc<str>,
     /// The proxies whose forwarded headers are believed ([`origin::Origin`]).
@@ -113,9 +123,11 @@ pub fn router(state: AppState) -> Router {
         .route("/realtime", get(realtime::open))
         .merge(routes::me::router())
         .merge(routes::libraries::router())
+        .route_layer(middleware::from_fn_with_state(state.clone(), idempotency::layer))
         .route_layer(middleware::from_fn_with_state(state.clone(), authenticate::require));
     // These answer as signed-in routes do, and `403` to anyone but an admin or the owner.
     let admin = routes::admin::router()
+        .route_layer(middleware::from_fn_with_state(state.clone(), idempotency::layer))
         .route_layer(middleware::from_fn_with_state(state.clone(), authenticate::require_admin));
     // Until setup is done, these answer `503 setup_required`.
     let after_setup = Router::new()

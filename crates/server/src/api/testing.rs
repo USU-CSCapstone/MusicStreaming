@@ -13,7 +13,7 @@ use serde_json::Value;
 use tower::ServiceExt;
 
 use super::session::token_hash;
-use super::{AppState, Images, prefix, router};
+use super::{AppState, Images, Snapshots, prefix, router};
 use crate::db::Database;
 use crate::db::testing::{Album, Device, Track, User, library};
 use crate::plugins::testing::plugins;
@@ -29,12 +29,17 @@ pub const TOKEN: &str = "owner-token";
 /// user 1, is logged in on device 1 with [`TOKEN`].
 pub fn app(base_path: &str) -> (tempfile::TempDir, Arc<Database>, Router) {
     let (temp, db, app) = app_before_setup(base_path);
-    let conn = conn(&temp);
+    add_owner(&temp);
+    (temp, db, app)
+}
+
+/// Adds the owner of [`app`], user 1, logged in on device 1 with [`TOKEN`].
+pub fn add_owner(temp: &tempfile::TempDir) {
+    let conn = conn(temp);
     let owner =
         User { username: "owner".into(), display_name: "Owner".into(), ..User::new(1, "owner") };
     owner.insert(&conn).unwrap();
     add_device(&conn, 1, 1, TOKEN);
-    (temp, db, app)
 }
 
 /// A connection of its own to the database in `temp`, for a test to set data up with inside the
@@ -85,6 +90,10 @@ pub fn router_over(state: AppState) -> Router {
 pub(crate) fn state(temp: &tempfile::TempDir, db: Arc<Database>) -> AppState {
     AppState {
         images: Arc::new(Images::new(temp.path().join("cache"), Config::default())),
+        snapshots: Arc::new(Snapshots::new(
+            temp.path().join("cache/catalog"),
+            temp.path().join("jewelcase.db"),
+        )),
         indexes: Arc::default(),
         setup: Arc::default(),
         plugins: plugins(temp, &db),
@@ -92,6 +101,7 @@ pub(crate) fn state(temp: &tempfile::TempDir, db: Arc<Database>) -> AppState {
         hub: Arc::default(),
         players: Arc::default(),
         queues: Arc::default(),
+        idempotency: Arc::default(),
         prefix: prefix(""),
         trusted_proxies: Arc::default(),
         db,
@@ -219,4 +229,15 @@ pub async fn eventually<T>(what: &str, mut check: impl AsyncFnMut() -> Option<T>
     tokio::time::timeout(Duration::from_secs(30), polled)
         .await
         .unwrap_or_else(|_| panic!("{what}: timed out after 30 s"))
+}
+
+/// Takes away every Liked Songs, which a library's creation gives each admin in it, with the
+/// account feed's rows of them, so a test of saved playlists finds only those it makes. Liked
+/// Songs is tested on its own.
+pub fn saved_only(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "DELETE FROM account_changes \
+         WHERE entity_id IN (SELECT id FROM playlists WHERE kind = 'liked'); \
+         DELETE FROM playlists WHERE kind = 'liked';",
+    )
 }

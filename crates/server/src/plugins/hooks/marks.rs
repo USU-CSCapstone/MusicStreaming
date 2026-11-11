@@ -10,8 +10,9 @@ use jewelcase_plugins::{Mark, MarkKind};
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ValueRef};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-use super::super::library::{TRACK_COLUMNS, track};
+use super::super::library::track;
 use super::{BATCH, Due, Next};
+use crate::db::plugin_view::TRACK;
 
 /// What `due`'s plugin is next to be told of `user`'s marks in its library: where it is once
 /// that is handled, and the marks. While their likes and hides as they stand go out
@@ -85,7 +86,7 @@ pub(super) fn standing_query() -> String {
          CROSS JOIN tracks t ON t.id = m.track_id AND t.library_id = ?1 \
          JOIN albums al ON al.id = t.album_id \
          ORDER BY m.track_id",
-        TRACK_COLUMNS.join(", ")
+        TRACK.columns.join(", ")
     )
 }
 
@@ -112,14 +113,14 @@ fn feed(
              JOIN tracks t ON t.id = e.track_id AND t.library_id = e.library_id \
              JOIN albums al ON al.id = t.album_id \
              WHERE {after} AND e.seq <= ?4 ORDER BY e.seq",
-            TRACK_COLUMNS.join(", ")
+            TRACK.columns.join(", ")
         ))?
         .query_map(params![library, user, position, next], mark)?
         .collect::<rusqlite::Result<_>>()?;
     Ok((next.into(), marks))
 }
 
-/// A mark from a row of [`TRACK_COLUMNS`], then its kind and when.
+/// A mark from a row of [`TRACK`]'s columns, then its kind and when.
 fn mark(row: &Row) -> rusqlite::Result<Mark> {
     let Kind(kind) = row.get(13)?;
     Ok(Mark { track: track(row)?, kind, at_ms: row.get(14)? })

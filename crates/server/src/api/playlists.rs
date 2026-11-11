@@ -11,7 +11,6 @@
 mod announce;
 mod artwork;
 mod edit;
-mod idempotency;
 mod items;
 mod keys;
 mod liked;
@@ -22,7 +21,7 @@ use std::sync::Arc;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use jewelcase_core::playlist::Op;
 use jewelcase_core::{sort_key, words};
 use rusqlite::types::Value;
@@ -32,7 +31,6 @@ use serde::Deserialize;
 pub use announce::Change;
 pub use artwork::{all_mosaics, held as holds_artwork, mosaics_of};
 pub use edit::edit;
-use idempotency::{Answer, Key};
 pub use items::{all_items, duplicates, list_items};
 pub use liked::{announce as announce_liked, like, take_out as unlike_in, unlike};
 pub use representation::Playlist;
@@ -44,6 +42,7 @@ use super::playables::{self, Playable};
 use super::realtime::{Hub, ServerMessage};
 use super::scope::Scope;
 use super::{Code, Id, Images, Problem};
+use crate::db::feed::{self, Kind, Op as FeedOp};
 use crate::db::{Database, catalog, new_id, now_ms};
 
 /// How far apart the keys of a playlist's items start, so an item put between two takes the
@@ -152,18 +151,19 @@ pub struct Create {
     description: Option<String>,
     items: Option<Vec<Playable>>,
     from_mix: Option<String>,
+    /// The ID the client chose, which a device that creates offline uses until the create syncs.
+    id: Option<Id>,
 }
 
 /// Creates a playlist for the caller in `library` at version 1, holding the tracks `items`
 /// expand to in order, and returns it as `201`. A blank title, an item that is not the caller's
-/// to add, and `fromMix` are `422`. With an `Idempotency-Key` the caller already used for a
-/// request that applied, returns that answer and creates nothing. A playlist that was created is
-/// announced to the caller's devices once it is committed.
+/// to add, `fromMix`, and an `id` that is not a positive 63-bit integer are `422`; an `id`
+/// already used by any playlist is `409 id_taken`, whoever's it is. A playlist that was created
+/// is announced to the caller's devices once it is committed.
 pub async fn create(
     State(db): State<Arc<Database>>,
     State(hub): State<Arc<Hub>>,
     Scope { user, library }: Scope,
-    Key(key): Key,
     extract::Json(body): extract::Json<Create>,
 ) -> Result<Response, Problem> {
     let title = body.title.trim().to_owned();
@@ -173,29 +173,31 @@ pub async fn create(
     if body.from_mix.is_some() {
         return Err(Problem::invalid("Saving a mix as a playlist is not supported yet."));
     }
+    let chosen = match body.id {
+        Some(Id(0)) => return Err(Problem::invalid("id must be a positive 63-bit integer.")),
+        chosen => chosen.map(|Id(id)| id),
+    };
     let items = body.items.unwrap_or_default();
     // The expansion is the slow part, so it is read before the writer is taken. A track purged
-    // between the two is left out by the write. A retry that was answered before is found here,
-    // and again in the write, where a concurrent first attempt would be.
-    let asked = key.clone();
-    let tracks = db
-        .try_read(move |conn| match Answer::find(conn, user, asked.as_deref())? {
-            Some(answer) => Ok::<_, Problem>(Err(answer)),
-            None => Ok(Ok(playables::expand(conn, user, library, &items)?)),
-        })
-        .await?;
-    let tracks = match tracks {
-        Ok(tracks) => tracks,
-        Err(answer) => return Ok(answer.into_response()),
-    };
+    // between the two is left out by the write.
+    let tracks = db.try_read(move |conn| playables::expand(conn, user, library, &items)).await?;
     let description = body.description;
-    let answer = settle(async move {
-        let (answer, change) = db
+    let created = settle(async move {
+        let (body, change) = db
             .try_write(move |tx| {
-                if let Some(answer) = Answer::find(tx, user, key.as_deref())? {
-                    return Ok::<_, Problem>((answer, None));
-                }
-                let (id, now) = (new_id()?, now_ms());
+                let now = now_ms();
+                let id = match chosen {
+                    Some(id) => {
+                        let taken = tx
+                            .prepare_cached("SELECT 1 FROM playlists WHERE id = ?1")?
+                            .exists([id])?;
+                        if taken {
+                            return Err(Problem::new(Code::IdTaken));
+                        }
+                        id
+                    }
+                    None => new_id()?,
+                };
                 tx.execute(
                     "INSERT INTO playlists (id, library_id, user_id, title, folded, sort_key, \
                  description, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
@@ -221,21 +223,19 @@ pub async fn create(
                     params![id, count, duration],
                 )?;
                 catalog::playlist_artwork(tx, id)?;
+                feed::record_account(tx, user, library, Kind::Playlist, id, 0, FeedOp::Upsert)?;
                 // The row was just inserted in this transaction.
                 let created =
                     representation::get(tx, user, library, id)?.ok_or_else(Problem::not_found)?;
-                let answer = Answer::new(StatusCode::CREATED, &created)?;
-                if let Some(key) = &key {
-                    answer.store(tx, user, key, now)?;
-                }
-                Ok((answer, Some(Change::of(created, Vec::new()))))
+                let body = serde_json::to_value(&created)?;
+                Ok((body, Change::of(created, Vec::new())))
             })
             .await?;
-        announce(&hub, user, change);
-        Ok(answer)
+        announce(&hub, user, Some(change));
+        Ok(body)
     })
     .await?;
-    Ok(answer.into_response())
+    Ok((StatusCode::CREATED, Json(created)).into_response())
 }
 
 /// Runs `work`, a write with what follows its commit (the announcement, the pruning), in a task
@@ -302,6 +302,9 @@ pub async fn delete(
                         Ok((row.get::<_, i64>(0)?, row.get::<_, bool>(1)?))
                     })
                     .optional()?;
+                if deleted.is_some() {
+                    feed::record_playlist_deleted(tx, user, library, id)?;
+                }
                 // A Liked Songs deleted, which unliked everything in it, is not made again until
                 // the next like (`requirements/playlists.md` §11).
                 if let Some((_, true)) = deleted {
