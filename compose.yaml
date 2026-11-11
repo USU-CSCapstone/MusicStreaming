@@ -76,13 +76,18 @@ services:
             - .svelte-kit/
             - build/
             - src/lib/core-wasm/
+            - src/lib/catalog-wasm/
             - test-results/
             - package.json
             - pnpm-lock.yaml
-        # The wasm module is built into the image from the core's source.
+        # The wasm modules are built into the image from the core's and the catalog's source.
         - path: ./crates/core
           action: rebuild
         - path: ./crates/core-wasm
+          action: rebuild
+        - path: ./crates/catalog
+          action: rebuild
+        - path: ./crates/catalog-wasm
           action: rebuild
         - path: ./web/package.json
           action: rebuild

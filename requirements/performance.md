@@ -65,7 +65,7 @@ Under saturation, these hold for listeners who are already playing. New listener
 
 The client carries the whole catalog ([`offline.md` §1](offline.md#1-the-catalog-is-always-there)), so its cost is a requirement rather than an implementation detail.
 
-- **The whole catalog, with its search index, costs less than a handful of songs.** That is a price no user would notice, for a library they can search offline in full.
+- **The whole catalog, with its search index, costs well under 0.1% of the music it describes.** It scales with the library, and the price is one no user would notice for a library they can search offline in full: at 500,000 tracks, about 300 MB against roughly 15 TB of music.
 - **Image stand-ins for the whole library cost about as much as one photograph.**
 - **The full-resolution image cache is bounded, and visible to the user.**
 - **The app starts quickly and stays light in memory**, on phones as well as desktops.

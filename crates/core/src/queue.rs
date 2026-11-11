@@ -4,6 +4,7 @@
 
 mod cleanup;
 mod edit;
+mod hash;
 mod history;
 mod holding;
 mod permutation;
@@ -17,6 +18,7 @@ mod state;
 mod tests;
 
 pub use edit::{Anchor, Edit, PlayRef};
+pub use hash::list_hash;
 pub use history::{HISTORY_RUNS, PlayRow};
 pub use holding::{Reading, positions_holding};
 pub use read::Row;
