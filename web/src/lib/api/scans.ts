@@ -30,10 +30,12 @@ export function underWay(scans: Scan[]): boolean {
 
 /**
  * The queued scan of the whole library, if there is one: what a press of Scan now answers with,
- * queuing nothing more. A scan of changed files covers only their folders, so it is not one.
+ * queuing nothing more. The server says which scans cover it, as the trigger does not: a scan of
+ * changed files covers only their folders, and a retry keeps its trigger but covers only the
+ * roots that did not answer.
  */
 export function waiting(scans: Scan[]): Scan | null {
-	return scans.find((s) => s.state === 'queued' && s.trigger !== 'watch') ?? null;
+	return scans.find((s) => s.state === 'queued' && s.wholeLibrary) ?? null;
 }
 
 /**
@@ -55,6 +57,7 @@ export function withPressed(scans: Scan[]): Scan[] {
 		updated: 0,
 		missing: 0,
 		problems: 0,
+		wholeLibrary: true,
 		currentFolder: null
 	};
 	return [pressed, ...scans];

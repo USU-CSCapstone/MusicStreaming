@@ -15,6 +15,7 @@ function scan(id: string, state: Scan['state'], finishedAt: string | null = null
 		updated: 0,
 		missing: 0,
 		problems: 0,
+		wholeLibrary: true,
 		currentFolder: null
 	};
 }
@@ -49,13 +50,18 @@ describe('summarize', () => {
 
 describe('waiting', () => {
 	it('is a queued scan of the whole library, not one of changed files', () => {
-		const changed = { ...scan('3', 'queued'), trigger: 'watch' as const };
+		const changed = { ...scan('3', 'queued'), trigger: 'watch' as const, wholeLibrary: false };
 		const scheduled = { ...scan('4', 'queued'), trigger: 'scheduled' as const };
 		expect([waiting([changed]), waiting([scheduled, changed]), waiting([finished])]).toEqual([
 			null,
 			scheduled,
 			null
 		]);
+	});
+
+	it('is not a retry of the roots that did not answer, though it keeps its trigger', () => {
+		const retry = { ...scan('3', 'queued'), trigger: 'scheduled' as const, wholeLibrary: false };
+		expect(waiting([retry])).toBeNull();
 	});
 });
 
@@ -88,8 +94,13 @@ describe('withPressed', () => {
 	});
 
 	it('queues one behind a scan of changed files, which covers only their folders', () => {
-		const changed = { ...scan('3', 'queued'), trigger: 'watch' as const };
+		const changed = { ...scan('3', 'queued'), trigger: 'watch' as const, wholeLibrary: false };
 		expect(withPressed([changed])).toHaveLength(2);
+	});
+
+	it('queues one behind a retry of one root', () => {
+		const retry = { ...scan('3', 'queued'), trigger: 'scheduled' as const, wholeLibrary: false };
+		expect(withPressed([retry])).toHaveLength(2);
 	});
 });
 

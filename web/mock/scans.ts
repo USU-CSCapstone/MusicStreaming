@@ -88,7 +88,9 @@ export class ScanSimulator {
 	start(lib: string): Scan | null {
 		const files = this.source.files(lib);
 		if (files === null) return null;
-		const waiting = this.#advance(lib).find((e) => e.scan.state === 'queued');
+		const waiting = this.#advance(lib).find(
+			(e) => e.scan.state === 'queued' && e.scan.wholeLibrary
+		);
 		if (waiting) return { ...waiting.scan };
 		const entry: Entry = {
 			scan: {
@@ -103,6 +105,7 @@ export class ScanSimulator {
 				updated: 0,
 				missing: 0,
 				problems: 0,
+				wholeLibrary: true,
 				currentFolder: null
 			},
 			queuedAt: this.#now(),
