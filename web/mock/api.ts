@@ -520,8 +520,16 @@ async function reply(
 
 /** The library's last scan that ran in the scanner's database, if it has one. */
 function lastScan(db: Db, lib: bigint) {
+	// Whether it covers the whole library, as the server works it out: every current root, whole.
 	return db.get(
-		`SELECT * FROM scans WHERE library_id = ? AND state IN ('completed', 'suspended')
+		`SELECT *, NOT EXISTS (SELECT 1 FROM library_roots r
+		                       WHERE r.library_id = scans.library_id AND r.removed_at IS NULL
+		                       AND NOT EXISTS (SELECT 1 FROM json_each(scans.scopes) s
+		                                       WHERE json_extract(s.value, '$.root') = r.id
+		                                       AND json_extract(s.value, '$.path') = ''
+		                                       AND json_extract(s.value, '$.depth') = 'subtree'))
+		          AS whole_library
+		 FROM scans WHERE library_id = ? AND state IN ('completed', 'suspended')
 		 ORDER BY created_at DESC, id DESC LIMIT 1`,
 		lib
 	);
@@ -540,6 +548,7 @@ function scanFromRow(r: Record<string, unknown>): Scan {
 		updated: num(r.updated),
 		missing: num(r.missing),
 		problems: num(r.problems),
+		wholeLibrary: num(r.whole_library) === 1,
 		currentFolder: str(r.current_path)
 	};
 }
