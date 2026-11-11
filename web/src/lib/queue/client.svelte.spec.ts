@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { RealtimeServerMessage } from '$lib/api/types';
 import { QueueClient } from './client.svelte';
 import type { FromWorker, StartRequest, ToWorker } from './protocol';
@@ -30,12 +30,15 @@ function setup() {
 	const worker = new FakeWorker();
 	const client = new QueueClient(() => worker as unknown as Worker);
 	let hear: (message: RealtimeServerMessage) => void = () => {};
-	client.connect({
-		on: (listener) => {
-			hear = listener;
-			return () => {};
-		}
-	});
+	client.connect(
+		{
+			on: (listener) => {
+				hear = listener;
+				return () => {};
+			}
+		},
+		'7'
+	);
 	return { worker, client, hear: (message: object) => hear(message as RealtimeServerMessage) };
 }
 
@@ -45,15 +48,12 @@ describe('QueueClient', () => {
 		const client = new QueueClient(() => worker as unknown as Worker);
 		let tell: (library: string, track: string, hidden: boolean) => void = () => {};
 		let stopped = false;
-		client.connect(
-			{ on: () => () => {} },
-			{
-				onHidden: (listener) => {
-					tell = listener;
-					return () => (stopped = true);
-				}
+		client.connect({ on: () => () => {} }, '7', {
+			onHidden: (listener) => {
+				tell = listener;
+				return () => (stopped = true);
 			}
-		);
+		});
 		tell('1', '5', true);
 		expect(worker.sent.at(-1)).toEqual({
 			type: 'hidden',
@@ -65,7 +65,7 @@ describe('QueueClient', () => {
 		expect(stopped).toBe(true);
 	});
 
-	it('tells the worker where the API is, and passes on only the queue messages and edits', () => {
+	it('tells the worker where the API is and whose queue it is, and passes on only the queue messages and edits', () => {
 		const { worker, client, hear } = setup();
 		hear({ type: 'hello', deviceId: '1', serverTime: '' });
 		hear({ type: 'devices', devices: [] });
@@ -73,6 +73,7 @@ describe('QueueClient', () => {
 		client.edit({ type: 'next' });
 
 		expect(worker.sent.map((m) => m.type)).toEqual(['init', 'message', 'message', 'edit']);
+		expect(worker.sent[0]).toMatchObject({ type: 'init', user: '7' });
 	});
 
 	it('shows what the worker says the queue is, and the edit that did not stay', () => {
@@ -144,6 +145,22 @@ describe('QueueClient', () => {
 		expect(one).toMatchObject({ type: 'start', request });
 		expect(await taken).toBe(true);
 		expect(await refused).toBe(false);
+	});
+
+	it('tells the worker whether the app counts itself offline with each edit and start', () => {
+		const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+		onTestFinished(() => onLine.mockRestore());
+		const { worker, client } = setup();
+		client.edit({ type: 'next' });
+		client.start({
+			queueId: 'q',
+			context: { type: 'library' } as StartRequest['context'],
+			source: { key: 'k', libraryId: '1', tracks: ['5'] },
+			start: 0
+		});
+		const [edit, start] = worker.sent.slice(1) as Extract<ToWorker, { type: 'edit' | 'start' }>[];
+		expect(edit).toMatchObject({ type: 'edit', offline: true });
+		expect(start).toMatchObject({ type: 'start', request: { offline: true } });
 	});
 
 	it('settles each restore with the worker answer to it', async () => {

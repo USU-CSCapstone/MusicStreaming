@@ -21,6 +21,7 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 				new QueueStore({
 					api: data.api,
 					catalog: new CatalogRouter(),
+					user: data.user,
 					changed: (summary) => post({ type: 'state', summary }),
 					refused: (refusal) => post({ type: 'refused', refusal })
 				})
@@ -28,7 +29,7 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 	} else {
 		store?.then((ready) => {
 			if (data.type === 'message') ready.message(data.message);
-			else if (data.type === 'edit') ready.edit(data.edit, data.length);
+			else if (data.type === 'edit') ready.edit(data.edit, data.length, data.offline);
 			else if (data.type === 'start')
 				post({ type: 'started', id: data.id, ok: ready.start(data.request) });
 			else if (data.type === 'hidden') ready.hidden(data.libraryId, data.trackId, data.hidden);
