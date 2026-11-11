@@ -11,9 +11,11 @@
 	import Toast from '$lib/components/Toast.svelte';
 	import { catalog } from '$lib/catalog/client.svelte';
 	import { controls } from '$lib/controls.svelte';
+	import { tellServiceWorker } from '$lib/image-cache';
 	import { marks } from '$lib/marks.svelte';
 	import { player } from '$lib/player.svelte';
 	import { queue } from '$lib/queue/client.svelte';
+	import { checkForUpdate } from '$lib/app-update';
 	import { realtime } from '$lib/realtime.svelte';
 
 	let { data, children } = $props();
@@ -26,16 +28,21 @@
 	});
 
 	// Live updates, the account's queue and the device's copy of its libraries, for someone signed
-	// in; setup and login have nothing to update, and nobody to keep a copy for.
+	// in; setup and login have nothing to update. They leave the catalog's election but keep its
+	// files, which stay the last account's until the server ends its session or another signs in.
 	$effect(() => {
 		if (bare || !data.me) {
-			catalog.signOut();
+			catalog.disconnect();
 			return;
 		}
+		void tellServiceWorker(data.me.id);
 		realtime.start();
+		// A restarted server may be a new version: its connection saying hello is the cue to look.
+		const unsubscribe = realtime.on((message) => message.type === 'hello' && checkForUpdate());
 		queue.connect(realtime, data.me.id, marks);
 		catalog.connect(realtime, data.me.id);
 		return () => {
+			unsubscribe();
 			catalog.disconnect();
 			queue.disconnect();
 			realtime.stop();

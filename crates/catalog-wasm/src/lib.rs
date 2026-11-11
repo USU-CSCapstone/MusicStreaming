@@ -106,13 +106,17 @@ impl Catalog {
     }
 
     /// Tunes the connection (see `tune`), creates the schema in a new database, and checks the
-    /// version of an existing one. Either way the feed state tables exist afterwards.
+    /// version of an existing one. Either way the feed state tables exist afterwards. A newer
+    /// version's error says "newer", so the sync keeps that file for the build that wrote it.
     fn ready(conn: Connection) -> Result<Catalog, JsError> {
         Self::tune(&conn)?;
         let catalog = Catalog { conn, index: None, totals: Totals::default() };
         match catalog.schema_version()? {
             0 => create_schema(&catalog.conn)?,
             SCHEMA_VERSION => {}
+            other if other > SCHEMA_VERSION => {
+                return Err(JsError::new(&format!("newer catalog schema version {other}")));
+            }
             other => return Err(JsError::new(&format!("catalog schema version {other}"))),
         }
         catalog.conn.execute_batch(feed::FEED_STATE)?;

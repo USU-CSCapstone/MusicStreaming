@@ -196,7 +196,7 @@ export class QueueStore {
 		this.#retryMs = retryMs;
 		this.#changed = changed;
 		this.#refused = refused;
-		this.#lists = new ListCache(storage, api);
+		this.#lists = new ListCache(storage, api, user);
 		this.#pages = new RowPages(
 			(path) => this.#get(path),
 			() => this.#emit()

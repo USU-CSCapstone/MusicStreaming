@@ -2,7 +2,8 @@
 //!
 //! A path that is not a file gets `index.html`, and the app routes it in the browser. Files
 //! under `_app/immutable` have content hashes in their names, so they cache forever; anything
-//! else, `index.html` above all, is checked on every load so a new version shows at once.
+//! else, `index.html` above all, is checked on every load. The installed app's service worker
+//! looks for a new version in the background and serves it from the next load.
 
 use std::path::Path;
 

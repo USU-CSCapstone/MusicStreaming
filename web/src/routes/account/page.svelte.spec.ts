@@ -1,10 +1,9 @@
 import { page } from 'vitest/browser';
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 
 const fake = vi.hoisted(() => ({
 	calls: [] as string[],
-	logout: vi.fn<() => Promise<void>>(),
 	role: 'owner' as 'owner' | 'admin' | 'user'
 }));
 
@@ -17,11 +16,18 @@ vi.mock('$lib/realtime.svelte', () => ({
 		stop: () => fake.calls.push('stop')
 	}
 }));
-vi.mock('$lib/api/client', async (original) => ({
+vi.mock('$lib/catalog/client.svelte', () => ({
+	catalog: { signOut: async () => void fake.calls.push('wipe') }
+}));
+vi.mock('$lib/last-known', async (original) => ({
 	...(await original<object>()),
-	logout: () => {
-		fake.calls.push('logout');
-		return fake.logout();
+	setLogoutPending: (on: boolean) => fake.calls.push(`marker ${on}`)
+}));
+// The server is never heard from, so the page stays where it is for the test to look at.
+vi.mock('$lib/logout', () => ({
+	finishLogout: () => {
+		fake.calls.push('told');
+		return new Promise(() => {});
 	}
 }));
 vi.mock('$app/state', () => ({
@@ -38,21 +44,29 @@ const { default: Account } = await import('./+page.svelte');
 beforeEach(() => {
 	fake.calls.length = 0;
 	fake.role = 'owner';
+	// The wait for the server is never over, so the page does not go to the login page.
+	vi.useFakeTimers({ toFake: ['setTimeout'] });
+});
+afterEach(() => {
+	vi.useRealTimers();
+	vi.restoreAllMocks();
 });
 
-it('stops the realtime connection before logging out, so its sign-out cannot race the login redirect', async () => {
-	fake.logout.mockReturnValue(new Promise(() => {}));
+it('wipes the device before it tells the server, so a server out of reach cannot keep the session on it', async () => {
 	render(Account, { data: { connectable: [] } } as never);
 	await page.getByRole('button', { name: 'Log out' }).click();
-	expect(fake.calls).toEqual(['stop', 'logout']);
+	// Realtime stops first, so its sign-out cannot race the login redirect; the marker is down
+	// before the wipe, in case the page closes part-way.
+	await vi.waitFor(() => expect(fake.calls).toEqual(['stop', 'marker true', 'wipe', 'told']));
 });
 
-it('restarts the realtime connection when logging out fails', async () => {
-	fake.logout.mockRejectedValue(new Error('Server down'));
+it.each([
+	[true, 'The browser has agreed to keep it.'],
+	[false, 'The browser has not agreed to keep it, and may clear it.']
+])('says whether the browser granted persistent storage (%s)', async (granted, text) => {
+	vi.spyOn(navigator.storage, 'persisted').mockResolvedValue(granted);
 	render(Account, { data: { connectable: [] } } as never);
-	await page.getByRole('button', { name: 'Log out' }).click();
-	await expect.element(page.getByRole('alert')).toHaveTextContent('Server down');
-	expect(fake.calls).toEqual(['stop', 'logout', 'start']);
+	await expect.element(page.getByText(text)).toBeVisible();
 });
 
 it('offers administration to an admin, and not to a user', async () => {
