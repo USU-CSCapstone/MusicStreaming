@@ -43,3 +43,4 @@ What it costs and what it commits us to.
 | [0005](0005-data-directory.md) | One data directory split into `state/` and `cache/` | 2026-09-25 | Accepted |
 | [0006](0006-wasm-plugins-in-wasmtime.md) | Plugins as WebAssembly components in Wasmtime | 2026-09-30 | Proposed |
 | [0007](0007-wasm-bindgen-for-core-wasm.md) | wasm-bindgen for the core's WebAssembly bindings | 2026-11-01 | Proposed |
+| [0008](0008-sqlite-device-catalog.md) | The device catalog is SQLite, with its SQL shared through `crates/catalog` | 2026-11-06 | Proposed |

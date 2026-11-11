@@ -2488,9 +2488,22 @@ fn shuffle_at_the_end_shuffles_the_next_lap() {
 }
 
 /// The cases the web build's `core-wasm.spec.ts` replays in WebAssembly, so native and wasm are
-/// held to the same π vectors and the same edit sequence.
+/// held to the same π vectors, the same edit sequence and the same list hashes.
 fn parity() -> serde_json::Value {
     serde_json::from_str(include_str!("parity.json")).unwrap()
+}
+
+#[test]
+fn list_hash_golden_vectors() {
+    for case in parity()["listHash"].as_array().unwrap() {
+        let tracks: Vec<u64> = case["tracks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|id| id.as_str().unwrap().parse().unwrap())
+            .collect();
+        assert_eq!(list_hash(&tracks), case["hash"].as_str().unwrap(), "{case}");
+    }
 }
 
 #[test]
