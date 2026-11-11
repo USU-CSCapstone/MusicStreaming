@@ -521,13 +521,15 @@ async function reply(
 /** The library's last scan that ran in the scanner's database, if it has one. */
 function lastScan(db: Db, lib: bigint) {
 	// Whether it covers the whole library, as the server works it out: every current root, whole.
+	// Each scope's fields are read by their path in `scopes`, as a scope that is a string would
+	// fail the whole statement as malformed JSON.
 	return db.get(
 		`SELECT *, NOT EXISTS (SELECT 1 FROM library_roots r
 		                       WHERE r.library_id = scans.library_id AND r.removed_at IS NULL
 		                       AND NOT EXISTS (SELECT 1 FROM json_each(scans.scopes) s
-		                                       WHERE json_extract(s.value, '$.root') = r.id
-		                                       AND json_extract(s.value, '$.path') = ''
-		                                       AND json_extract(s.value, '$.depth') = 'subtree'))
+		                                       WHERE json_extract(scans.scopes, s.fullkey || '.root') = r.id
+		                                       AND json_extract(scans.scopes, s.fullkey || '.path') = ''
+		                                       AND json_extract(scans.scopes, s.fullkey || '.depth') = 'subtree'))
 		          AS whole_library
 		 FROM scans WHERE library_id = ? AND state IN ('completed', 'suspended')
 		 ORDER BY created_at DESC, id DESC LIMIT 1`,
