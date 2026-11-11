@@ -4,7 +4,11 @@ import type { Library, User } from '$lib/api/types';
 
 declare global {
 	namespace App {
-		// interface Error {}
+		interface Error {
+			message: string;
+			/** Why the device cannot show the page, for the states the error page explains. */
+			code?: string;
+		}
 		// interface Locals {}
 		interface PageData {
 			/** The library being browsed; null when the account can reach none yet. */

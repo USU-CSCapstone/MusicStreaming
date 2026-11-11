@@ -23,8 +23,8 @@ test('catalog-wasm opens an in-memory database and creates the schema', () => {
 
 test('the staging table is a rowid table', () => {
 	const catalog = Catalog.openInMemory();
-	expect(() => catalog.sql('SELECT rowid FROM staged_changes', [])).not.toThrow();
-	expect(() => catalog.sql('SELECT rowid FROM feed_cursors', [])).toThrow();
+	expect(() => catalog.sql('SELECT rowid FROM staged_changes')).not.toThrow();
+	expect(() => catalog.sql('SELECT rowid FROM feed_cursors')).toThrow();
 	catalog.free();
 });
 
@@ -58,7 +58,7 @@ function device(): Catalog {
 			rows: tables
 		}));
 		catalog.stage(feed, JSON.stringify(changes));
-		catalog.commit(feed, BigInt(changes.length));
+		catalog.commit(feed, BigInt(changes.length), changes.length);
 	}
 	catalog.buildIndex('1');
 	return catalog;
@@ -151,7 +151,7 @@ test('catalog-wasm applies staged changes only at commit, with the feed position
 		4n
 	]);
 
-	catalog.commit('library:1', 4n);
+	catalog.commit('library:1', 4n, 100);
 	expect([name(), catalog.cursor('library:1'), catalog.pulled('library:1')]).toEqual([
 		'Rock and roll',
 		4n,
@@ -163,11 +163,33 @@ test('catalog-wasm applies staged changes only at commit, with the feed position
 		JSON.stringify([{ seq: 5, op: 'delete', kind: 'tag', id: '9', rows: null }])
 	);
 	expect(name()).toBe('Rock and roll');
-	catalog.commit('library:1', 5n);
+	catalog.commit('library:1', 5n, 100);
 	expect([name(), catalog.cursor('library:1'), catalog.cursor('account')]).toEqual([
 		undefined,
 		5n,
 		0n
+	]);
+	catalog.free();
+});
+
+test('catalog-wasm applies staged changes a chunk at a time, marked until the last', () => {
+	const catalog = Catalog.openInMemory();
+	const tags = () => JSON.parse(catalog.query('1', '1', 'listTags', '{"limit":1}')).total;
+	catalog.stage(
+		'library:1',
+		JSON.stringify([upsert(3, 'Rock', '10'), upsert(4, 'Jazz', '11'), upsert(5, 'Soul', '12')])
+	);
+
+	expect(catalog.commit('library:1', 6n, 2)).toBe(false);
+	expect([tags(), catalog.applying('library:1'), catalog.cursor('library:1')]).toEqual([2, 6n, 0n]);
+	// Only what is left is applied: the first chunk's changes were deleted with it.
+	expect(catalog.pulled('library:1')).toBe(5n);
+
+	expect(catalog.commit('library:1', 6n, 2)).toBe(true);
+	expect([tags(), catalog.applying('library:1'), catalog.cursor('library:1')]).toEqual([
+		3,
+		undefined,
+		6n
 	]);
 	catalog.free();
 });
@@ -234,7 +256,7 @@ test('catalog-wasm shows a counted total anew after a commit', () => {
 		])
 	);
 	expect(page().total).toBe(1);
-	catalog.commit('library:1', BigInt(position + 1));
+	catalog.commit('library:1', BigInt(position + 1), 100);
 	expect(page().total).toBe(0);
 	catalog.free();
 });
@@ -247,13 +269,13 @@ test('catalog-wasm commits nothing when a staged change fails, and only the feed
 	// A NULL name breaks the table's constraint, after the first change was applied.
 	broken.rows.tags[0].name = null as unknown as string;
 	catalog.stage('library:1', JSON.stringify([upsert(3, 'Rock'), broken]));
-	expect(() => catalog.commit('library:1', 4n)).toThrow();
+	expect(() => catalog.commit('library:1', 4n, 100)).toThrow();
 	expect(name('9')).toBeUndefined();
 	expect([catalog.cursor('library:1'), catalog.pulled('library:1')]).toEqual([0n, 4n]);
 
 	catalog.stage('library:1', JSON.stringify([upsert(4, 'Jazz', '10')]));
 	catalog.stage('account', JSON.stringify([upsert(1, 'Blues', '11')]));
-	catalog.commit('library:1', 7n);
+	catalog.commit('library:1', 7n, 100);
 	expect([name('9'), name('10'), name('11')]).toEqual(['Rock', 'Jazz', undefined]);
 	expect([catalog.cursor('library:1'), catalog.pulled('library:1')]).toEqual([7n, 7n]);
 	expect([catalog.cursor('account'), catalog.pulled('account')]).toEqual([0n, 1n]);

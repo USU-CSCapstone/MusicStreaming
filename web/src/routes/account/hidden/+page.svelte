@@ -6,4 +6,4 @@
 
 <svelte:head><title>Hidden Songs · Jewelcase</title></svelte:head>
 
-<HiddenSongs library={data.lib} first={data.hidden} />
+<HiddenSongs library={data.lib} first={data.hidden} since={data.since} />

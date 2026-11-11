@@ -6,6 +6,7 @@
 // rows (`design/queue.md` §3). Plain TypeScript so it runs in a worker and in tests; `worker.ts`
 // is its shell.
 
+import type { CatalogRouter } from '$lib/catalog/router';
 import { Queue } from '$lib/core-wasm/jewelcase_core_wasm.js';
 import type {
 	PlayContext,
@@ -38,6 +39,8 @@ export type Options = {
 	retryMs?: number;
 	/** Where lists are kept; the browser's Cache Storage if left out. Without any, memory. */
 	storage?: CacheStorage;
+	/** The way to the device's catalog, whichever tab owns it, for the queue to resolve lists with. */
+	catalog?: CatalogRouter;
 	/** Called after every change, with what the page shows. */
 	changed: (summary: Summary) => void;
 	/** Called when an edit could not be kept. */
@@ -141,6 +144,8 @@ export class QueueStore {
 	/** What the view's state says of each source, by key. */
 	#sources = new Map<string, SourceInfo>();
 	#loading = false;
+	/** The way to the device's catalog, for resolving lists from its files. */
+	readonly catalog?: CatalogRouter;
 
 	/**
 	 * The tracks the user hid, by library (`requirements/conventions.md` §8). Their rows stay in
@@ -171,9 +176,11 @@ export class QueueStore {
 		fetch: fetcher = (...args) => fetch(...args),
 		retryMs = 2000,
 		storage = globalThis.caches,
+		catalog,
 		changed,
 		refused
 	}: Options) {
+		this.catalog = catalog;
 		this.#api = api;
 		this.#fetch = fetcher;
 		this.#retryMs = retryMs;

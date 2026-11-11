@@ -154,7 +154,7 @@ export async function addTo(fetch: Fetch, playlist: Playlist, what: Adding, only
 		// refuse it: it is tried again against the newer version.
 		for (let attempt = 1; ; attempt++) {
 			try {
-				const { version } = await getPlaylist(fetch, libraryId, id);
+				const { version } = await getPlaylist(fetch, libraryId, id, true);
 				await editPlaylist(fetch, libraryId, id, {
 					baseVersion: version,
 					ops: [{ op: 'add', items }]

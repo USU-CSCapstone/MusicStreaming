@@ -1,8 +1,11 @@
 import { listAlbums } from '$lib/api/client';
+import { catalog } from '$lib/catalog/client.svelte';
 import { requireLibrary } from '$lib/library';
 import type { PageLoad } from './$types';
 
 export const load: PageLoad = async ({ fetch, parent }) => {
 	const lib = await requireLibrary(parent);
-	return { lib, albums: await listAlbums(fetch, lib, { sort: 'name' }) };
+	// Taken before reading, so the page can tell a change announced while it loads.
+	const since = catalog.changes;
+	return { lib, since, albums: await listAlbums(fetch, lib, { sort: 'name' }) };
 };

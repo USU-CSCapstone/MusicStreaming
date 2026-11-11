@@ -5,11 +5,18 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import { plural } from '$lib/format';
 	import { Paged } from '$lib/paged.svelte';
+	import { DEPENDS } from '$lib/live.svelte';
 
 	let { data } = $props();
 
 	const artists = $derived(
-		new Paged(data.artists, (cursor) => listArtists(fetch, data.lib, { sort: 'name', cursor }))
+		new Paged(
+			data.artists,
+			(cursor, limit) => listArtists(fetch, data.lib, { sort: 'name', cursor, limit }),
+			data.lib,
+			DEPENDS.artists,
+			data.since
+		)
 	);
 </script>
 

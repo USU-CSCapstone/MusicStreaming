@@ -11,18 +11,25 @@ use sqlite_wasm_rs::WasmOsCallback;
 use sqlite_wasm_vfs::sahpool::{OpfsSAHPoolCfg, install};
 use wasm_bindgen::prelude::*;
 
-mod bench;
 mod feed;
 mod mutate;
 mod query;
+mod store;
 
 /// The sahpool VFS's registered name, which `open` names when opening the file.
 const VFS: &str = "opfs-sahpool";
 
+/// The device schema version this build reads and writes, which a snapshot must be of.
+#[wasm_bindgen(js_name = schemaVersion)]
+pub fn schema_version() -> i32 {
+    SCHEMA_VERSION
+}
+
 /// The device database, held in WebAssembly memory and (for `open`) on OPFS, with the search
 /// index built from it once `buildIndex` has run, and the counted totals of lists it has answered,
 /// which every write to the file lets go of. A file holds one library. Call `free()` when done
-/// with one.
+/// with one. A snapshot is imported under another file name and opened as a new `Catalog`, so an
+/// import needs no clearing.
 #[wasm_bindgen]
 pub struct Catalog {
     conn: Connection,
@@ -61,6 +68,13 @@ impl Catalog {
             .conn
             .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")?;
         Ok(statement.query_map([], |row| row.get(0))?.collect::<Result<_, _>>()?)
+    }
+
+    /// Runs `statements` as they are. Only the sync's tests call it, to damage a file as a failing
+    /// disk would; the app never does.
+    pub fn sql(&self, statements: &str) -> Result<(), JsError> {
+        self.totals.clear();
+        Ok(self.conn.execute_batch(statements)?)
     }
 
     /// The value of the connection setting `name` (a PRAGMA), as text. Only the tests call it, to
