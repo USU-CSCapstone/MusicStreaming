@@ -57,6 +57,7 @@ async fn an_admin_starts_a_scan_and_sees_it_finish() {
     let (status, started) = call(&app, TOKEN, "POST", SCANS, None).await;
     assert_eq!(status, StatusCode::ACCEPTED);
     assert_eq!(started["trigger"], "manual");
+    assert_eq!(started["wholeLibrary"], true, "a manual scan is of every root");
     assert!(["queued", "running"].contains(&started["state"].as_str().unwrap()), "{started}");
 
     let finished = eventually("the scan finishes", async || {
@@ -156,4 +157,59 @@ async fn the_list_is_what_is_under_way_and_the_last_finished_scan() {
     assert_eq!(items[1]["filesSeen"], 7);
     assert_eq!(items[1]["startedAt"], "1970-01-01T00:00:00.004Z");
     assert_eq!(items[0]["startedAt"], Value::Null, "a queued scan has not started");
+}
+
+/// A scan covers the whole library only when it scans every current root from the top down. A
+/// retry that covers only the roots that did not answer keeps its trigger, so only this tells it
+/// from a scan of the library (`design/scanning.md` §9).
+#[tokio::test]
+async fn a_scan_says_whether_it_covers_the_whole_library() {
+    let (temp, _db, app) = app("");
+    let conn = conn(&temp);
+    libraries::create(&conn, Some(1), "Music", &["/a".as_ref(), "/b".as_ref()], &[]).unwrap();
+    // A root removed since is not one the library still has to cover.
+    conn.execute(
+        "INSERT INTO library_roots (library_id, path, created_at, removed_at) VALUES (1, '/c', 0, 1)",
+        [],
+    )
+    .unwrap();
+    let root = |path: &str| -> i64 {
+        conn.query_row("SELECT id FROM library_roots WHERE path = ?1", [path], |r| r.get(0))
+            .unwrap()
+    };
+    let (a, b, c) = (root("/a"), root("/b"), root("/c"));
+    let scope =
+        |root: i64, path: &str, depth: &str| json!({ "root": root, "path": path, "depth": depth });
+    let scans = [
+        (21, json!([scope(a, "", "subtree"), scope(b, "", "subtree")]), true),
+        (22, json!([scope(b, "", "subtree")]), false),
+        (23, json!([scope(a, "", "subtree"), scope(b, "Album", "subtree")]), false),
+        (24, json!([scope(a, "", "subtree"), scope(b, "", "directory")]), false),
+        (
+            25,
+            json!([scope(a, "", "subtree"), scope(b, "", "subtree"), scope(c, "", "subtree")]),
+            true,
+        ),
+    ];
+    for (id, scopes, _) in &scans {
+        conn.execute(
+            "INSERT INTO scans (id, library_id, trigger, state, scopes, created_at) \
+             VALUES (?1, 1, 'scheduled', 'queued', ?2, ?1)",
+            params![id, scopes.to_string()],
+        )
+        .unwrap();
+    }
+
+    let (_, list) = json(&app, SCANS).await;
+    let whole: HashMap<String, bool> = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|scan| {
+            (scan["id"].as_str().unwrap().to_owned(), scan["wholeLibrary"].as_bool().unwrap())
+        })
+        .collect();
+    for (id, _, expected) in scans {
+        assert_eq!(whole[&id.to_string()], expected, "scan {id}");
+    }
 }

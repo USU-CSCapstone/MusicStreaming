@@ -35,6 +35,9 @@ pub struct Scan {
     updated: i64,
     missing: i64,
     problems: i64,
+    /// Whether it covers every root of the library, whole: what a press of Scan now answers with
+    /// while it waits, where a retry of the roots that did not answer covers only those.
+    whole_library: bool,
     /// The folder being scanned, relative to whichever of the library's roots holds it: never a
     /// path on the server (`requirements/general.md` §3.7). Which root is not said, since roots
     /// are not served.
@@ -47,9 +50,17 @@ pub struct Scans {
     items: Vec<Scan>,
 }
 
-/// The columns [`scan`] reads.
+/// The columns [`scan`] reads. A scan covers the whole library when each of its roots is a scope
+/// of the scan, from the root down, as [`Scanner::scan_library`] queues it.
 const SELECT: &str = "SELECT id, trigger, state, started_at, finished_at, files_seen, \
-     files_processed, added, updated, missing, problems, current_path FROM scans";
+     files_processed, added, updated, missing, problems, current_path, \
+     NOT EXISTS (SELECT 1 FROM library_roots r \
+                 WHERE r.library_id = scans.library_id AND r.removed_at IS NULL \
+                 AND NOT EXISTS (SELECT 1 FROM json_each(scans.scopes) s \
+                                 WHERE json_extract(s.value, '$.root') = r.id \
+                                 AND json_extract(s.value, '$.path') = '' \
+                                 AND json_extract(s.value, '$.depth') = 'subtree')) \
+     FROM scans";
 
 /// `adminStartScan`: queues a scan of every root of the library, and answers the scan that will
 /// do it. A scan already queued that covers the library is that scan, so pressing again while one
@@ -134,5 +145,6 @@ fn scan(row: &Row) -> rusqlite::Result<Scan> {
         missing: row.get(9)?,
         problems: row.get(10)?,
         current_folder: row.get(11)?,
+        whole_library: row.get(12)?,
     })
 }
