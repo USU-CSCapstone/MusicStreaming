@@ -7,7 +7,8 @@ const catalog = vi.hoisted(() => ({
 	signOut: vi.fn(),
 	connect: vi.fn(),
 	disconnect: vi.fn(),
-	setWorkingOffline: vi.fn()
+	setWorkingOffline: vi.fn(),
+	prepareIndex: vi.fn()
 }));
 const queue = vi.hoisted(() => ({
 	connect: vi.fn(),
@@ -96,6 +97,7 @@ describe('the app layout', () => {
 		} finally {
 			queue.connect.mockReset();
 			connectivity.setWorkOffline(false);
+			catalog.prepareIndex.mockClear();
 		}
 	});
 
@@ -116,5 +118,69 @@ describe('the app layout', () => {
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		expect(catalog.disconnect).not.toHaveBeenCalled();
 		expect(catalog.connect).not.toHaveBeenCalled();
+	});
+
+	it('has the search index of the library on screen built once the app is offline, and not before', async () => {
+		route.id = '/';
+		await render(Layout, {
+			data: { me: { id: '1' }, library: { id: '7' }, tagTypes: [] },
+			children
+		} as never);
+		await vi.waitFor(() => expect(catalog.connect).toHaveBeenCalled());
+		expect(catalog.prepareIndex).not.toHaveBeenCalled();
+
+		connectivity.setWorkOffline(true);
+		await vi.waitFor(() => expect(catalog.prepareIndex).toHaveBeenCalledWith('7'));
+		connectivity.setWorkOffline(false);
+	});
+
+	it('has it built only once a lost connection stays lost, not for a moment’s drop such as a server restart', async () => {
+		route.id = '/';
+		await render(Layout, {
+			data: { me: { id: '1' }, library: { id: '7' }, tagTypes: [] },
+			children
+		} as never);
+		catalog.prepareIndex.mockClear();
+		vi.useFakeTimers();
+		try {
+			connectivity.lose();
+			await vi.advanceTimersByTimeAsync(10_000);
+			connectivity.reach();
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(catalog.prepareIndex).not.toHaveBeenCalled();
+
+			connectivity.lose();
+			await vi.advanceTimersByTimeAsync(29_000);
+			expect(catalog.prepareIndex).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(catalog.prepareIndex).toHaveBeenCalledWith('7');
+		} finally {
+			vi.useRealTimers();
+			connectivity.reach();
+		}
+	});
+
+	it('has it built at once when the browser loses its network, though the connection was already lost', async () => {
+		route.id = '/';
+		await render(Layout, {
+			data: { me: { id: '1' }, library: { id: '7' }, tagTypes: [] },
+			children
+		} as never);
+		catalog.prepareIndex.mockClear();
+		const network = vi.spyOn(navigator, 'onLine', 'get');
+		vi.useFakeTimers();
+		try {
+			connectivity.lose();
+			await vi.advanceTimersByTimeAsync(10_000);
+			network.mockReturnValue(false);
+			window.dispatchEvent(new Event('offline'));
+			await vi.advanceTimersByTimeAsync(0);
+			expect(catalog.prepareIndex).toHaveBeenCalledWith('7');
+		} finally {
+			vi.useRealTimers();
+			network.mockRestore();
+			window.dispatchEvent(new Event('online'));
+			connectivity.reach();
+		}
 	});
 });

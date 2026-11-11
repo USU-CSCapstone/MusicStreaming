@@ -12,7 +12,6 @@ use axum::Router;
 
 use jewelcase_catalog::sync::{Kind, Rows, apply, export, export_for};
 use jewelcase_catalog::{create_schema, mutate, query, search};
-use jewelcase_core::Index;
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
@@ -28,7 +27,7 @@ const USER: i64 = 1;
 /// where it is refused. The server and a device each build their search index from their own
 /// documents.
 fn answer(conn: &Connection, name: &str, params: &Value) -> Value {
-    let index = Index::build(search::documents(conn, LIBRARY).unwrap());
+    let index = search::index(conn, LIBRARY).unwrap();
     match query::answer(conn, USER, LIBRARY, name, &params.to_string(), Some(&index), None) {
         Ok(text) => serde_json::from_str(&text).expect("an answer is JSON"),
         Err(error) => json!({ "error": error.to_string() }),
@@ -553,17 +552,22 @@ async fn every_list_sort_and_filter_and_every_get_give_identical_json_on_the_ser
     }
     // The documents the search index is built from, and what searches find in it.
     let documents = |conn: &Connection| {
-        let mut documents: Vec<String> = search::documents(conn, LIBRARY)
-            .unwrap()
-            .iter()
-            .map(|document| format!("{document:?}"))
-            .collect();
+        let mut documents = Vec::new();
+        search::documents(conn, LIBRARY, |document| documents.push(format!("{document:?}")))
+            .unwrap();
         documents.sort();
         documents
     };
     let on_server = db.read(move |conn| Ok(documents(conn))).await.unwrap();
     assert_eq!(documents(&device), on_server, "the documents of the library");
     assert_eq!(on_server.len(), 6 + 3 + 3, "the library's tracks, its named albums and artists");
+    for limit in [1, 4, 100] {
+        let (mut batched, mut reading) = (Vec::new(), search::Reading::default());
+        let mut add = |document| batched.push(format!("{document:?}"));
+        while !search::documents_from(&device, LIBRARY, &mut reading, limit, &mut add).unwrap() {}
+        batched.sort();
+        assert_eq!(batched, on_server, "the documents read {limit} at a time");
+    }
     for params in searches() {
         let answer = ask(&db, &device, "search", params.clone()).await;
         cases.push(case("search", params, answer));

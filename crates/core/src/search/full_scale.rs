@@ -42,19 +42,21 @@ fn benchmark_full_scale() {
     let index = Index::build(documents);
     println!(
         "built {} documents, {} words, in {:?}",
-        index.documents.len(),
-        index.vocabulary.len(),
+        index.ids.len(),
+        index.vocabulary_len(),
         started.elapsed()
     );
 
-    let common = index
-        .vocabulary
-        .iter()
-        .max_by_key(|w| index.postings[index.prefixed(w).start].len())
-        .unwrap()
-        .clone();
+    let common = (0..index.vocabulary_len())
+        .max_by_key(|&w| index.posting(w).len())
+        .map(|w| index.word(w).to_owned())
+        .unwrap();
     let mut queries = vec!["a".to_owned(), "s".to_owned(), "ab".to_owned(), common.clone()];
-    let long = index.vocabulary.iter().find(|w| w.len() >= 8).unwrap().clone();
+    let long = (0..index.vocabulary_len())
+        .map(|w| index.word(w))
+        .find(|w| w.len() >= 8)
+        .unwrap()
+        .to_owned();
     let mut typo = long.clone();
     typo.replace_range(3..4, "z");
     queries.extend([typo, format!("{common} {long}"), format!("{} {}", &long[..3], &common[..2])]);

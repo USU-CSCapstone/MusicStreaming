@@ -14,7 +14,7 @@ const state = (serving = true): CatalogState => ({
 	user: '7',
 	serving,
 	heavy: false,
-	libraries: { '1': { onDevice: true, applying: false } }
+	libraries: { '1': { onDevice: true, applying: false, indexed: false } }
 });
 
 /**
@@ -70,9 +70,9 @@ it('answers only the tab that asked: on its reply channel, never on the shared o
 	const shared = new BroadcastChannel(name);
 	shared.onmessage = ({ data }) => data.type === 'answer' && heardAnswer();
 	owner.serve(async () => 'json');
-	void bystander.ask({ type: 'query', library: '1', name: 'x', params: {} }).catch(() => {});
+	void bystander.ask({ type: 'prepareIndex', library: '1' }).catch(() => {});
 
-	expect(await asker.ask({ type: 'query', library: '1', name: 'x', params: {} })).toBe('json');
+	expect(await asker.ask({ type: 'prepareIndex', library: '1' })).toBe('json');
 	const answers = posted.filter((p) => p.type === 'answer');
 	expect(answers.length).toBeGreaterThanOrEqual(1);
 	for (const answer of answers) expect(answer.channel).toMatch(/-reply-/);
@@ -103,9 +103,9 @@ it('keeps a reply channel open for the next answer and closes it once idle', asy
 	owner.serve(async () => 'json');
 	const base = opened.length;
 
-	await asker.ask({ type: 'query', library: '1', name: 'x', params: {} });
-	await asker.ask({ type: 'query', library: '1', name: 'x', params: {} });
-	await asker.ask({ type: 'query', library: '1', name: 'x', params: {} });
+	await asker.ask({ type: 'prepareIndex', library: '1' });
+	await asker.ask({ type: 'prepareIndex', library: '1' });
+	await asker.ask({ type: 'prepareIndex', library: '1' });
 	// One channel to the asker serves every answer, and stays open meanwhile.
 	expect(opened.slice(base)).toHaveLength(1);
 	expect(opened[base]).toMatch(/-reply-/);
@@ -113,7 +113,7 @@ it('keeps a reply channel open for the next answer and closes it once idle', asy
 
 	await clock.advance(REPLY_IDLE_MS);
 	expect(closed).toEqual([opened[base]]);
-	expect(await asker.ask({ type: 'query', library: '1', name: 'x', params: {} })).toBe('json');
+	expect(await asker.ask({ type: 'prepareIndex', library: '1' })).toBe('json');
 	expect(opened.slice(base)).toHaveLength(2);
 });
 
@@ -121,7 +121,7 @@ it('a request nobody answers fails with Unanswered after its own timeout, on the
 	const clock = new FakeClock();
 	const router = new CatalogRouter(channel(), 5000, undefined, clock);
 	const settled = vi.fn();
-	const asked = router.ask({ type: 'query', library: '1', name: 'x', params: {} }, 100);
+	const asked = router.ask({ type: 'prepareIndex', library: '1' }, 100);
 	asked.catch(settled);
 	await clock.advance(99);
 	expect(settled).not.toHaveBeenCalled();
@@ -163,7 +163,7 @@ it('a message of another protocol is no owner’s word: it settles nothing, tell
 	const old = new BroadcastChannel(name);
 	// A version 1 owner answers on the shared channel with the ID of the request it heard.
 	const request = hear(name, (data) => data.type === 'request');
-	const outcome = asker.ask({ type: 'query', library: '1', name: 'x', params: {} }, 50).then(
+	const outcome = asker.ask({ type: 'prepareIndex', library: '1' }, 50).then(
 		() => 'answered',
 		(error) => error
 	);
@@ -186,15 +186,11 @@ it('an owner ignores a request of another protocol, as from a tab of an older bu
 	const handled = vi.fn(async () => 'json');
 	owner.serve(handled);
 	const old = new BroadcastChannel(name);
-	old.postMessage({
-		type: 'request',
-		id: 'old',
-		request: { type: 'query', library: '1', name: 'x', params: {} }
-	});
+	old.postMessage({ type: 'request', id: 'old', request: { type: 'prepareIndex', library: '1' } });
 	// Heard in order, so once this one is answered the old one has been dealt with.
-	expect(await asker.ask({ type: 'query', library: '2', name: 'x', params: {} })).toBe('json');
+	expect(await asker.ask({ type: 'prepareIndex', library: '2' })).toBe('json');
 	expect(handled).toHaveBeenCalledTimes(1);
-	expect(handled).toHaveBeenCalledWith({ type: 'query', library: '2', name: 'x', params: {} });
+	expect(handled).toHaveBeenCalledWith({ type: 'prepareIndex', library: '2' });
 	expect(owner.foreign).toBe(true);
 	old.close();
 });

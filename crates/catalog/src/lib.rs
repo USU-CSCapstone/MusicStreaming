@@ -21,6 +21,7 @@ pub mod recipes;
 pub mod refs;
 pub mod search;
 pub mod snapshot;
+pub mod statistics;
 pub mod sync;
 pub mod tag_filter;
 pub mod tags;

@@ -50,7 +50,7 @@ async fn filled() -> (tempfile::TempDir, Arc<Database>, Router) {
     tokio::task::spawn_blocking(move || {
         filling.write_blocking(|tx| library(tx, 1, "Music", "/music")).unwrap();
         let store = SqliteStore::new(filling).unwrap();
-        scale::fill(&store, scale::records(Path::new("/music"), scale::size()));
+        scale::fill(&store, 1, scale::records(Path::new("/music"), scale::size()));
     })
     .await
     .unwrap();

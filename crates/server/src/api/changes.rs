@@ -92,7 +92,7 @@ pub async fn list(
 
 /// The changes of `library` after the cursor `(after, epoch)` as [`list`] answers them, in run
 /// `current`.
-fn read(
+pub(super) fn read(
     conn: &Connection,
     library: i64,
     (after, epoch): (i64, Option<i64>),

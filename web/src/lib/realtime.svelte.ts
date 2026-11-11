@@ -21,7 +21,7 @@ const CONNECT_WITHIN_MS = 10_000;
  */
 const UNREACHABLE_AFTER_MS = 3_000;
 /** Reconnecting waits twice as long after each failure, up to this. */
-const MAX_RETRY_MS = 30_000;
+export const MAX_RETRY_MS = 30_000;
 
 type Listener = (message: RealtimeServerMessage) => void;
 

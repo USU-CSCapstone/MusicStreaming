@@ -1,6 +1,8 @@
 //! Answering a query from an index: matching each word, scoring each document, and ranking the
 //! sections.
 
+use std::ops::Range;
+
 use super::distance::distance;
 use super::{Index, Kind, Section, words};
 use crate::fold::ARTICLES;
@@ -66,10 +68,10 @@ impl Index {
         let mut best: Vec<Vec<Quality>> = Vec::with_capacity(query_words.len());
         let mut matched: Vec<Vec<u32>> = Vec::with_capacity(query_words.len());
         for word in &query_words {
-            let mut qualities = vec![0; self.documents.len()];
+            let mut qualities = vec![0; self.ids.len()];
             let mut docs = Vec::new();
             for (w, q) in self.matching_words(word) {
-                for &d in &self.postings[w as usize] {
+                for &d in self.posting(w as usize) {
                     let slot = &mut qualities[d as usize];
                     if *slot == 0 {
                         docs.push(d);
@@ -84,10 +86,8 @@ impl Index {
         }
 
         // The query's exact words after any leading article, for the exact-name check.
-        let exact: Option<Vec<u32>> = query_words[optional..]
-            .iter()
-            .map(|word| self.vocabulary.binary_search(word).ok().map(|w| w as u32))
-            .collect();
+        let exact: Option<Vec<u32>> =
+            query_words[optional..].iter().map(|word| self.find(word).map(|w| w as u32)).collect();
 
         // Candidates are the documents the most selective required word matched, so an optional
         // article never picks them; `score` drops those that miss another required word.
@@ -96,9 +96,8 @@ impl Index {
         };
         let mut scored: [Vec<(Score, u32)>; 3] = Default::default();
         for &d in fewest {
-            let document = &self.documents[d as usize];
-            let kind = document.kind;
-            if !kinds.contains(&kind) || !keep(kind, document.id) {
+            let kind = self.kinds[d as usize];
+            if !kinds.contains(&kind) || !keep(kind, self.ids[d as usize]) {
                 continue;
             }
             let Some(score) = self.score(d, &best, optional, exact.as_deref()) else {
@@ -123,7 +122,7 @@ impl Index {
                 hits[0].0,
                 Section {
                     kind: Kind::ALL[k],
-                    ids: hits.iter().map(|&(_, d)| self.documents[d as usize].id).collect(),
+                    ids: hits.iter().map(|&(_, d)| self.ids[d as usize]).collect(),
                     total,
                 },
             ));
@@ -156,11 +155,8 @@ impl Index {
             }
         }
         let matched = (best.len() - usize::from(skipped)) as u32;
-        let doc_words =
-            &self.words[self.starts[d as usize] as usize..self.starts[d as usize + 1] as usize];
-        let article = leading_article(doc_words, |&w| {
-            ARTICLES.contains(&self.vocabulary[w as usize].as_str())
-        });
+        let doc_words = self.document_words(d as usize);
+        let article = leading_article(doc_words, |&w| ARTICLES.contains(&self.word(w as usize)));
         Some(Score {
             inexact: exact != Some(&doc_words[article..]),
             typos,
@@ -182,7 +178,7 @@ impl Index {
         if max_typos == 0 || chars.len() > MAX_FUZZY_CHARS {
             // Exact and prefix matches are one contiguous run of the sorted vocabulary.
             for w in self.prefixed(word) {
-                let prefix = self.vocabulary[w].len() != word.len();
+                let prefix = self.word(w).len() != word.len();
                 found.push((w as u32, quality(0, prefix)));
             }
             return found;
@@ -192,7 +188,7 @@ impl Index {
         let mut candidate: Vec<char> = Vec::with_capacity(MAX_FUZZY_CHARS);
         for w in self.prefixed(first) {
             candidate.clear();
-            candidate.extend(self.vocabulary[w].chars().take(MAX_FUZZY_CHARS + max_typos as usize));
+            candidate.extend(self.word(w).chars().take(MAX_FUZZY_CHARS + max_typos as usize));
             if let Some((typos, prefix)) = distance(&chars, &candidate, max_typos) {
                 found.push((w as u32, quality(typos, prefix)));
             }
@@ -201,9 +197,29 @@ impl Index {
     }
 
     /// The vocabulary indexes of the words that start with `prefix`.
-    pub(super) fn prefixed(&self, prefix: &str) -> std::ops::Range<usize> {
-        let start = self.vocabulary.partition_point(|w| w.as_str() < prefix);
-        let end = start + self.vocabulary[start..].partition_point(|w| w.starts_with(prefix));
+    pub(super) fn prefixed(&self, prefix: &str) -> Range<usize> {
+        let start = self.partition(0..self.vocabulary_len(), |w| w < prefix);
+        let end = self.partition(start..self.vocabulary_len(), |w| w.starts_with(prefix));
         start..end
+    }
+
+    /// The vocabulary index of `word`, if it is there.
+    fn find(&self, word: &str) -> Option<usize> {
+        let w = self.partition(0..self.vocabulary_len(), |v| v < word);
+        (w < self.vocabulary_len() && self.word(w) == word).then_some(w)
+    }
+
+    /// The first vocabulary index in `within` whose word `before` is false of, where it holds of
+    /// every word up to some point and of none after, as `slice::partition_point` finds it.
+    fn partition(&self, mut within: Range<usize>, before: impl Fn(&str) -> bool) -> usize {
+        while within.start < within.end {
+            let middle = within.start + (within.end - within.start) / 2;
+            if before(self.word(middle)) {
+                within.start = middle + 1;
+            } else {
+                within.end = middle;
+            }
+        }
+        within.start
     }
 }
