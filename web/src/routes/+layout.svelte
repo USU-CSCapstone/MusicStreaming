@@ -1,5 +1,6 @@
 <script lang="ts">
 	import '../app.css';
+	import { untrack } from 'svelte';
 	import { page } from '$app/state';
 	import favicon from '$lib/assets/favicon.svg';
 	import DevicesPanel from '$lib/components/DevicesPanel.svelte';
@@ -10,11 +11,13 @@
 	import TabBar from '$lib/components/TabBar.svelte';
 	import Toast from '$lib/components/Toast.svelte';
 	import { catalog } from '$lib/catalog/client.svelte';
+	import { connectivity } from '$lib/connectivity.svelte';
 	import { controls } from '$lib/controls.svelte';
 	import { tellServiceWorker } from '$lib/image-cache';
 	import { marks } from '$lib/marks.svelte';
 	import { player } from '$lib/player.svelte';
 	import { queue } from '$lib/queue/client.svelte';
+	import { sender } from '$lib/sync/sender';
 	import { checkForUpdate } from '$lib/app-update';
 	import { realtime } from '$lib/realtime.svelte';
 
@@ -30,23 +33,55 @@
 	// Live updates, the account's queue and the device's copy of its libraries, for someone signed
 	// in; setup and login have nothing to update. They leave the catalog's election but keep its
 	// files, which stay the last account's until the server ends its session or another signs in.
+	// Keyed on the account alone: a load run again, as `invalidateAll` does, gives the same
+	// account as a new object, which must not start the catalog's worker over. Nothing the
+	// connecting reads is tracked either: the workers read Work offline as they start, and a toggle
+	// must reach them as `setWorkingOffline` (below), never as a restart.
+	const userId = $derived(data.me?.id);
 	$effect(() => {
-		if (bare || !data.me) {
-			catalog.disconnect();
+		const user = userId;
+		if (bare || !user) {
+			untrack(() => catalog.disconnect());
 			return;
 		}
-		void tellServiceWorker(data.me.id);
-		realtime.start();
-		// A restarted server may be a new version: its connection saying hello is the cue to look.
-		const unsubscribe = realtime.on((message) => message.type === 'hello' && checkForUpdate());
-		queue.connect(realtime, data.me.id, marks);
-		catalog.connect(realtime, data.me.id);
+		const unsubscribe = untrack(() => {
+			void tellServiceWorker(user);
+			// A restarted server may be a new version: its connection saying hello is the cue to
+			// look, and to send what was made while it could not be reached.
+			const unsubscribe = realtime.on((message) => {
+				if (message.type !== 'hello') return;
+				checkForUpdate();
+				sender.wake();
+			});
+			queue.connect(realtime, user, marks);
+			catalog.connect(realtime, user);
+			return unsubscribe;
+		});
 		return () => {
 			unsubscribe();
 			catalog.disconnect();
 			queue.disconnect();
-			realtime.stop();
 		};
+	});
+
+	// What was done while the server could not be reached waits in the log, kept for this account
+	// alone, until it can be sent (`$lib/sync/sender`).
+	$effect(() => {
+		if (bare || !userId) return;
+		sender.start(userId);
+		return () => sender.stop();
+	});
+
+	// Working offline closes the realtime connection and keeps the workers from any request;
+	// turning it off connects again, and the `hello` that follows makes them catch up.
+	$effect(() => {
+		const working = connectivity.workOffline;
+		queue.setWorkingOffline(working);
+		catalog.setWorkingOffline(working);
+		if (working) player.stopStreaming();
+		if (bare || !data.me || working) return;
+		realtime.start();
+		return () => realtime.stop();
 	});
 
 	/**

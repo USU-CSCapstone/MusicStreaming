@@ -123,6 +123,8 @@ fn a_like_makes_the_liked_songs_a_device_lacks_under_the_given_id_and_reverts_to
     .unwrap();
     let before = dump(&conn);
     assert!(matches!(run(&conn, "like", json!({ "trackId": "2" })), Err(Error::Invalid(_))));
+    let taken = run(&conn, "like", json!({ "trackId": "2", "likedId": "10" }));
+    assert!(matches!(taken, Err(Error::IdTaken)), "an ID another playlist has");
     assert_eq!(dump(&conn), before, "a refused like writes nothing");
     let undo = run(&conn, "like", json!({ "trackId": "2", "likedId": "88" })).unwrap();
     assert_eq!(items(&conn, 88), [(KEY_GAP, 2)]);

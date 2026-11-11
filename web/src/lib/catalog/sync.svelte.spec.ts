@@ -141,11 +141,13 @@ async function started(...ids: string[]) {
 	await h.idle();
 }
 
+/** The feed position `grown` moves a library to. */
+const BASE = SEQ + 1;
+
 /**
  * Moves the started library on to `BASE`, a catch-up of one change that gives it `tracks` tracks,
  * so the catch-ups that follow are each well under a tenth of it.
  */
-const BASE = SEQ + 1;
 async function grown(tracks = 1000) {
 	const counts = {
 		seq: BASE,
@@ -192,21 +194,26 @@ const album = (seq: number, id: string, title: string) => ({
 });
 
 const hello = { type: 'hello', deviceId: '1', serverTime: '' };
+/** The realtime hint that `libraryId`'s feed reached `seq`. */
 const libraryChanged = (seq: number, libraryId = '1') => ({
 	type: 'libraryChanged',
 	libraryId,
 	seq
 });
+/** The name the device's catalog holds for tag `id`, or undefined when it has none. */
 const tagName = async (id: string) =>
 	((await h.query('1', 'getTag', { tagId: id })) as { name: string } | null)?.name;
 /** The golden library's tracks the account sees: its six, less the two it hid. */
 const SHOWN = 4;
 
+/** The total of the device's catalog answer to the list query `name`. */
 const total = async (name: string) =>
 	((await h.query('1', name, { limit: 1 })) as { total: number }).total;
 
-/** The changes of a catch-up of `count` new tags after `BASE`, which apply in many chunks. */
+/** The number of changes in a catch-up large enough to apply in many chunks. */
 const LARGE = 2000;
+
+/** The `LARGE` changes of a catch-up: new tags after `BASE`. */
 const largeFeed = () =>
 	Array.from({ length: LARGE }, (_, i) => tag(BASE + 1 + i, `${100 + i}`, `Tag ${i}`));
 
@@ -1244,5 +1251,427 @@ describe('catalog sync', () => {
 		await h.message(libraryChanged(SEQ + 1));
 		await h.idle();
 		await expect.poll(async () => await found(), { timeout: 5000 }).toBe(1);
+	});
+});
+
+describe('the device’s own writes', () => {
+	/** When the writes were made, which a replay makes them at again. */
+	const at = 1_700_000_000_000;
+	/** A like of track 1001, which is not in Liked Songs. */
+	const like = { id: 'm1/0', name: 'like', args: { trackId: '1001', likedId: '9001' }, at };
+	/** A hide of track 1002, which is not hidden. */
+	const hide = { id: 'm2/0', name: 'hide', args: { trackId: '1002' }, at };
+	/** A rename of Road Trip made at `version`. */
+	const rename = (version: number) => ({
+		id: 'm3/0',
+		name: 'editPlaylist',
+		args: { playlistId: '501', baseVersion: version, title: 'Mine' },
+		at
+	});
+	type Items = { items: { id?: string; title?: string; track?: { id: string } }[] };
+	/** Road Trip as the device has it. */
+	const roadTrip501 = async () =>
+		(await h.query('1', 'getPlaylist', { playlistId: '501' })) as {
+			version: number;
+			title: string;
+		};
+	/** The IDs of a playlist's tracks as the device lists them. */
+	const itemsOf = async (playlistId: string) =>
+		((await h.query('1', 'listPlaylistItems', { playlistId, limit: 100 })) as Items).items.map(
+			(item) => item.track?.id
+		);
+	/** Whether the like, the hide and the rename each show on every list of the device that has them. */
+	async function shown() {
+		const track = (await h.query('1', 'getTrack', { trackId: '1001' })) as { liked: boolean };
+		const hidden = (await h.query('1', 'listHiddenTracks', {})) as Items;
+		const tracks = (await h.query('1', 'listTracks', { limit: 100 })) as Items;
+		const lists = (await h.query('1', 'listPlaylists', {})) as Items;
+		return {
+			liked: track.liked && (await itemsOf('500')).includes('1001'),
+			hidden:
+				hidden.items.some((t) => t.id === '1002') && !tracks.items.some((t) => t.id === '1002'),
+			renamed: (await roadTrip501()).title === 'Mine' && lists.items.some((p) => p.title === 'Mine')
+		};
+	}
+	const all = { liked: true, hidden: true, renamed: true };
+	const none = { liked: false, hidden: false, renamed: false };
+
+	/** Serves `changes` after the account feed's head, moving it on, and has the device pull them. */
+	let head = accountHead;
+	let feed: Record<string, unknown>[] = [];
+	async function account(...changes: Record<string, unknown>[]) {
+		feed = [...feed, ...changes.map((change, i) => ({ ...change, seq: head + 1 + i }))];
+		head += changes.length;
+		await h.api.setAccount([...playlists, elsewhere, ...feed] as typeof playlists, head);
+		await h.message({ type: 'accountChanged', seq: head });
+		await h.idle();
+	}
+	beforeEach(() => {
+		head = accountHead;
+		feed = [];
+	});
+
+	it('shows a pending like, hide and playlist edit on every list, through a feed apply and a new snapshot', async () => {
+		await started('1');
+		expect(await shown()).toEqual(none);
+		const calls = [like, hide, rename((await roadTrip501()).version)];
+		await h.setLog('1', calls);
+		await h.mutate('1', calls);
+		expect(await shown()).toEqual(all);
+		// Asked again, as a tab adopting it would: nothing is made twice.
+		await h.mutate('1', calls);
+		expect(await h.applied('1')).toBe(3);
+
+		// The server's rows for the same Liked Songs, as another device liked a track meanwhile.
+		const liked = structuredClone(playlists[0]);
+		const row = liked.rows.playlists[0] as { version: number; track_count: number };
+		row.version += 1;
+		row.track_count += 1;
+		const item = {
+			op: 'upsert',
+			kind: 'playlistItem',
+			id: '500',
+			key: 50,
+			rows: {
+				playlist_items: [
+					{ added_at: 9000, key: 50, library_id: '1', playlist_id: '500', track_id: '1005' }
+				]
+			}
+		};
+		await account(liked, item);
+		expect(await shown()).toEqual(all);
+		expect(await itemsOf('500')).toEqual(['1001', '1005', '1003']);
+
+		// A catch-up too large for the feed, so a new snapshot replaces the file.
+		const more = [tag(12, '91', 'Jazz'), tag(13, '92', 'Soul'), tag(14, '93', 'Folk')];
+		await h.api.setFeed('1', more, 14);
+		await h.api.setSeq('1', 14);
+		await h.message(libraryChanged(14));
+		await h.idle();
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
+		expect(await shown()).toEqual(all);
+		expect(await h.applied('1')).toBe(3);
+	});
+
+	it('takes back an append sent before the server’s rows of it arrive, so it is there once', async () => {
+		await started('1');
+		const before = await itemsOf('501');
+		const append = {
+			id: 'm4/0',
+			name: 'appendToPlaylist',
+			args: { playlistId: '501', items: ['1005'] },
+			at
+		};
+		await h.setLog('1', [append]);
+		await h.mutate('1', [append]);
+		expect(await itemsOf('501')).toEqual([...before, '1005']);
+
+		// Sent: it leaves the log, and the account feed brings what the server made of it.
+		await h.setLog('1', []);
+		const playlist = structuredClone(roadTrip);
+		const row = playlist.rows.playlists[0] as { version: number; track_count: number };
+		row.version += 1;
+		row.track_count += 1;
+		const item = {
+			op: 'upsert',
+			kind: 'playlistItem',
+			id: '501',
+			key: 900,
+			rows: {
+				playlist_items: [
+					{ added_at: 9000, key: 900, library_id: '1', playlist_id: '501', track_id: '1005' }
+				]
+			}
+		};
+		await account(playlist, item);
+		expect(await itemsOf('501')).toEqual([...before, '1005']);
+		expect(await h.applied('1')).toBe(0);
+	});
+
+	it('makes an append once whose server rows came while it was still in the log', async () => {
+		await started('1');
+		const before = await itemsOf('501');
+		const { version } = await roadTrip501();
+		const append = {
+			id: 'm4/0',
+			name: 'appendToPlaylist',
+			args: { playlistId: '501', items: ['1005'] },
+			at
+		};
+		await h.setLog('1', [append]);
+		await h.mutate('1', [append]);
+
+		// The server applied it, and the feed brings its rows before its answer leaves the log, so
+		// the replay makes it again over them.
+		const playlist = structuredClone(roadTrip);
+		const row = playlist.rows.playlists[0] as { version: number; track_count: number };
+		row.version = version + 1;
+		row.track_count += 1;
+		const item = {
+			op: 'upsert',
+			kind: 'playlistItem',
+			id: '501',
+			key: 900,
+			rows: {
+				playlist_items: [
+					{ added_at: 9000, key: 900, library_id: '1', playlist_id: '501', track_id: '1005' }
+				]
+			}
+		};
+		await account(playlist, item);
+		expect(await itemsOf('501')).toEqual([...before, '1005', '1005']);
+
+		// Its answer, at the server's version, leaves the log.
+		await h.setLog('1', []);
+		await h.confirmed('1', '501', version + 1);
+		expect(await itemsOf('501')).toEqual([...before, '1005']);
+		expect((await roadTrip501()).version).toBe(version + 1);
+		// Answered with nothing made twice, it takes nothing back.
+		const announced = (await h.changes()).length;
+		await h.confirmed('1', '501', version + 1);
+		expect((await h.changes()).length).toBe(announced);
+	});
+
+	it('makes an append once whose server rows came before its answer, through later rebases too', async () => {
+		await started('1');
+		const before = await itemsOf('501');
+		const { version } = await roadTrip501();
+		const append = {
+			id: 'm4/0',
+			name: 'appendToPlaylist',
+			args: { playlistId: '501', items: ['1005'] },
+			at
+		};
+		await h.setLog('1', [append]);
+		await h.mutate('1', [append]);
+		const playlist = structuredClone(roadTrip);
+		const row = playlist.rows.playlists[0] as { version: number; track_count: number };
+		row.version = version + 1;
+		row.track_count += 1;
+		const item = {
+			op: 'upsert',
+			kind: 'playlistItem',
+			id: '501',
+			key: 900,
+			rows: {
+				playlist_items: [
+					{ added_at: 9000, key: 900, library_id: '1', playlist_id: '501', track_id: '1005' }
+				]
+			}
+		};
+		await account(playlist, item);
+		expect(await itemsOf('501')).toEqual([...before, '1005', '1005']);
+
+		// Answered, as the sender tells the device, so the copy made over the feed's rows is kept as
+		// answered; the check of its version drops it, and a later rebase does not make it again.
+		await h.answered('1', [append]);
+		await h.setLog('1', []);
+		await h.confirmed('1', '501', version + 1);
+		expect(await itemsOf('501')).toEqual([...before, '1005']);
+		await h.rebase('1');
+		expect(await itemsOf('501')).toEqual([...before, '1005']);
+	});
+
+	it('makes nothing of an answer told after the feed brought the write, as from a tab closing', async () => {
+		await started('1');
+		const before = await itemsOf('501');
+		const { version } = await roadTrip501();
+		const append = {
+			id: 'm4/0',
+			name: 'appendToPlaylist',
+			args: { playlistId: '501', items: ['1005'] },
+			at
+		};
+		await h.setLog('1', [append]);
+		await h.mutate('1', [append]);
+		// It left the log, and the feed brought the server's rows before the device heard the answer.
+		await h.setLog('1', []);
+		const playlist = structuredClone(roadTrip);
+		const row = playlist.rows.playlists[0] as { version: number; track_count: number };
+		row.version = version + 1;
+		row.track_count += 1;
+		const item = {
+			op: 'upsert',
+			kind: 'playlistItem',
+			id: '501',
+			key: 900,
+			rows: {
+				playlist_items: [
+					{ added_at: 9000, key: 900, library_id: '1', playlist_id: '501', track_id: '1005' }
+				]
+			}
+		};
+		await account(playlist, item);
+		await h.answered('1', [append]);
+		await h.rebase('1');
+		expect(await itemsOf('501')).toEqual([...before, '1005']);
+		expect(await h.applied('1')).toBe(0);
+	});
+
+	it('takes nothing back of an append answered at the version the device made it to', async () => {
+		await started('1');
+		const before = await itemsOf('501');
+		const { version } = await roadTrip501();
+		const append = {
+			id: 'm4/0',
+			name: 'appendToPlaylist',
+			args: { playlistId: '501', items: ['1005'] },
+			at
+		};
+		await h.setLog('1', [append]);
+		await h.mutate('1', [append]);
+		// Answered before the feed brought its rows, at the version the device's copy is at.
+		await h.setLog('1', []);
+		const announced = (await h.changes()).length;
+		await h.confirmed('1', '501', version + 1);
+		expect(await itemsOf('501')).toEqual([...before, '1005']);
+		expect(await h.applied('1')).toBe(1);
+		expect((await h.changes()).length).toBe(announced);
+	});
+
+	it('deals with an append’s answer only once an apply under way is over', async () => {
+		await largeCatchUp();
+		expect(await h.confirmedMidApply('1', '501', 1)).toBe(false);
+		await h.idle();
+	});
+
+	it('tells the page what it took back of a write that left the log unsent', async () => {
+		await started('1');
+		await h.setLog('1', [hide]);
+		await h.mutate('1', [hide]);
+		const announced = (await h.changedKinds()).length;
+		await h.setLog('1', []);
+		await h.rebase('1');
+		expect((await shown()).hidden).toBe(false);
+		const kinds = await h.changedKinds();
+		expect(kinds).toHaveLength(announced + 1);
+		expect([...kinds.at(-1)!].sort()).toEqual(['hidden', 'liked', 'playlists']);
+	});
+
+	it('leaves the device’s own writes alone through a library feed, a sent one not yet in a feed too', async () => {
+		await started('1');
+		await grown();
+		const before = await itemsOf('501');
+		const append = {
+			id: 'm4/0',
+			name: 'appendToPlaylist',
+			args: { playlistId: '501', items: ['1005'] },
+			at
+		};
+		await h.setLog('1', [append]);
+		await h.mutate('1', [append]);
+		// Answered, and not yet in the account feed.
+		await h.setLog('1', []);
+		await h.api.setFeed('1', [tag(BASE + 1, '90', 'Rock')], BASE + 1);
+		await h.message(libraryChanged(BASE + 1));
+		await h.idle();
+		expect(await tagName('90')).toBe('Rock');
+		expect(await itemsOf('501')).toEqual([...before, '1005']);
+		expect(await h.applied('1')).toBe(1);
+	});
+
+	it('keeps showing a write the server answered through rebases and a restart, until the account feed brings it', async () => {
+		await started('1');
+		await h.setLog('1', [like]);
+		await h.mutate('1', [like]);
+		// Answered, so it leaves the log, and no feed has come.
+		await h.answered('1', [like]);
+		await h.setLog('1', []);
+		await h.rebase('1');
+		expect((await shown()).liked).toBe(true);
+		await h.stop();
+		await h.start();
+		await h.idle();
+		await h.rebase('1');
+		expect((await shown()).liked).toBe(true);
+
+		// The feed brings the server's rows of it: it is there once, and nothing is kept to make again.
+		const liked = structuredClone(playlists[0]);
+		const row = liked.rows.playlists[0] as { version: number; track_count: number };
+		row.version += 1;
+		row.track_count += 1;
+		const item = {
+			op: 'upsert',
+			kind: 'playlistItem',
+			id: '500',
+			key: 1,
+			rows: {
+				playlist_items: [
+					{ added_at: at, key: 1, library_id: '1', playlist_id: '500', track_id: '1001' }
+				]
+			}
+		};
+		await account(liked, item);
+		expect((await itemsOf('500')).filter((id) => id === '1001')).toHaveLength(1);
+		expect(await h.applied('1')).toBe(0);
+		await h.rebase('1');
+		expect((await itemsOf('500')).filter((id) => id === '1001')).toHaveLength(1);
+	});
+
+	it('makes the log again in a few transactions, not one each', async () => {
+		await started('1');
+		const calls = Array.from({ length: 200 }, (_, i) => ({
+			id: `m${i}/0`,
+			name: i % 2 ? 'unlike' : 'like',
+			args: { trackId: '1001' },
+			at
+		}));
+		await h.setLog('1', calls);
+		await h.rebase('1');
+		const batches = await h.batches();
+		expect(batches.reduce((sum, n) => sum + n, 0)).toBe(200);
+		expect(batches.length).toBeLessThanOrEqual(4);
+		expect(await h.applied('1')).toBe(200);
+	});
+
+	it('makes a write asked for during an apply only once the apply is over', async () => {
+		await largeCatchUp();
+		expect(await h.mutateMidApply('1', [hide])).toBe(false);
+		await h.idle();
+		expect((await shown()).hidden).toBe(true);
+		expect(await h.applied('1')).toBe(1);
+	});
+
+	it('takes back a write that left the log unsent, and makes the rest again', async () => {
+		await started('1');
+		const calls = [like, hide];
+		await h.setLog('1', calls);
+		await h.mutate('1', calls);
+		// The hide was refused: it leaves the log, and the device is asked to take it back.
+		await h.setLog('1', [like]);
+		await h.rebase('1');
+		expect(await shown()).toEqual({ liked: true, hidden: false, renamed: false });
+		expect(await h.applied('1')).toBe(1);
+	});
+
+	it('makes on a start what the log holds that the file does not, and takes back what it does not', async () => {
+		await started('1');
+		await h.setLog('1', [hide]);
+		await h.mutate('1', [hide]);
+		// Closed; meanwhile the hide was answered, and a like was made in a tab with no worker.
+		await h.stop();
+		await h.setLog('1', [like]);
+		await h.start();
+		await h.idle();
+		await expect.poll(async () => (await shown()).liked).toBe(true);
+		expect((await shown()).hidden).toBe(false);
+	});
+
+	it('leaves unshown a write the device refuses on replay, and shows the others', async () => {
+		await started('1');
+		const stale = rename((await roadTrip501()).version - 1);
+		await h.setLog('1', [stale, like]);
+		await h.rebase('1');
+		expect(await shown()).toEqual({ liked: true, hidden: false, renamed: false });
+		expect(await h.applied('1')).toBe(1);
+	});
+
+	it('makes nothing of a library not on the device, and makes the log’s writes as it arrives', async () => {
+		await serve('1');
+		await h.setLog('1', [like]);
+		await h.start();
+		await h.idle();
+		expect((await shown()).liked).toBe(true);
+		expect(await h.applied('1')).toBe(1);
 	});
 });

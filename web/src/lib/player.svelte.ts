@@ -17,7 +17,14 @@ import {
 	imageUrl,
 	recordPlays
 } from './api/client';
-import type { PlayContext, PlayerCommand, PlayerState, TrackSummary } from './api/types';
+import type {
+	PlayContext,
+	PlayerCommand,
+	PlayerState,
+	PlayReport,
+	TrackSummary
+} from './api/types';
+import { connectivity } from './connectivity.svelte';
 import { albumTitle, artistName } from './format';
 import { marks } from './marks.svelte';
 import { playback } from './playback.svelte';
@@ -27,10 +34,13 @@ import { firstPlayable, type PlayFrom, restartsOnPrevious } from './queue';
 import { queue } from './queue/client.svelte';
 import { realtime } from './realtime.svelte';
 import { carryOut, type Controls } from './remote';
+import { sender } from './sync/sender';
 import { decodeWaveform } from './waveform';
 
 /** How often a playing player says where it is, so a device picking up is never far behind. */
 const REPORT_EVERY_MS = 10_000;
+/** How often the play under way is checkpointed in the log while it goes on. */
+const CHECKPOINT_EVERY_MS = 30_000;
 /** How long a track the server could not be reached for waits before it is asked for again. */
 const RETRY_MS = 3_000;
 /** How long the volume rests before it is reported, so dragging the slider is one report. */
@@ -114,7 +124,7 @@ class Player {
 	#audio: HTMLAudioElement | null = null;
 	/** Bumped on every load, so a slow response for an earlier track is ignored. */
 	#load = 0;
-	#plays = new PlayRecorder((items, keepalive) => recordPlays(fetch, items, keepalive));
+	#plays = new PlayRecorder(keepPlays);
 	#progress = new Progress((report) => realtime.send({ type: 'progress', report }));
 	/** Waiting for audio to arrive, though not paused. */
 	#buffering = false;
@@ -123,6 +133,8 @@ class Player {
 	/** The audio is not of the current track: it is on its way, or a takeover cut that short. */
 	#stale = false;
 	#volumeReport: ReturnType<typeof setTimeout> | undefined;
+	/** Checkpoints the play under way while the audio plays. */
+	#checkpoint: ReturnType<typeof setInterval> | undefined;
 	/** This browser's other tabs, told when playback starts in this one. */
 	#tabs = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel('jewelcase.player');
 
@@ -499,6 +511,20 @@ class Player {
 		this.#audio?.pause();
 	}
 
+	/**
+	 * Pauses and lets go of the audio's stream, so no request goes on: Work offline needs none.
+	 * The track stays current where it was; playing again loads it anew from there.
+	 */
+	stopStreaming() {
+		const audio = this.#audio;
+		if (!audio?.getAttribute('src')) return;
+		this.pause();
+		this.position = audio.currentTime;
+		this.#stale = true;
+		audio.removeAttribute('src');
+		audio.load();
+	}
+
 	/** The user's Next: moves the queue on, taking playback over here, or stops at its end. */
 	next() {
 		if (this.#hasNext()) this.#started();
@@ -725,6 +751,9 @@ class Player {
 		audio.volume = this.volume;
 		audio.addEventListener('play', () => (this.playing = true));
 		audio.addEventListener('playing', () => {
+			// Checkpointed while it plays, so a page closed without warning keeps what was heard.
+			clearInterval(this.#checkpoint);
+			this.#checkpoint = setInterval(() => this.#plays.checkpoint(), CHECKPOINT_EVERY_MS);
 			// Something plays: a run of tracks that would not has ended.
 			this.#tried.clear();
 			this.#buffering = false;
@@ -747,6 +776,7 @@ class Player {
 		audio.addEventListener('pause', () => {
 			// Changing track pauses the one before, while the new one is to play.
 			if (this.#loading) return;
+			clearInterval(this.#checkpoint);
 			this.playing = false;
 			if (!audio.ended) {
 				this.#plays.paused();
@@ -756,6 +786,10 @@ class Player {
 		setInterval(() => {
 			if (this.playing) this.#report();
 		}, REPORT_EVERY_MS);
+		// A page sent to the background may be closed without a word, as a phone does.
+		document.addEventListener('visibilitychange', () => {
+			if (document.visibilityState === 'hidden') this.#plays.checkpoint();
+		});
 		audio.addEventListener('timeupdate', () => {
 			// Not the time of the track before, while this one is on its way, nor of this one
 			// before it knows where it is.
@@ -767,6 +801,7 @@ class Player {
 			if (Number.isFinite(audio.duration)) this.duration = audio.duration;
 		});
 		audio.addEventListener('ended', () => {
+			clearInterval(this.#checkpoint);
 			this.#plays.heard(audio.currentTime);
 			this.#plays.end('finished');
 			// A move under way is waiting for the item it goes to.
@@ -823,3 +858,15 @@ class Player {
 }
 
 export const player = new Player();
+
+/**
+ * Keeps `reports` in the log, each replacing the earlier report of its play. With `keepalive`, for
+ * a page that is closing, they are also sent at once by a request that outlives it, and the kept
+ * copies are sent again by whoever opens the log next, which the server counts once.
+ */
+function keepPlays(reports: PlayReport[], keepalive: boolean) {
+	const kept = reports.map((report) => sender.enqueue('play', report, { now: !keepalive }));
+	// Nothing goes where no log is open, as signed out.
+	if (keepalive && kept.some(Boolean) && !connectivity.blocked)
+		recordPlays(sender.fetch, reports, true).catch(() => {});
+}

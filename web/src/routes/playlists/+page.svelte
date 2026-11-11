@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { createPlaylist, listPlaylists } from '$lib/api/client';
-	import type { PlaylistCreate } from '$lib/api/types';
+	import { listPlaylists } from '$lib/api/client';
+	import { newPlaylist } from '$lib/adding.svelte';
 	import { playlistCard } from '$lib/cards';
 	import CollectionView from '$lib/components/CollectionView.svelte';
 	import Icon from '$lib/components/Icon.svelte';
@@ -34,20 +34,17 @@
 	let creating = $state(false);
 
 	/**
-	 * The last request and its `Idempotency-Key`. Sending the same request again reuses the key,
-	 * so a retry after a lost response still makes one playlist; a changed one gets a new key.
+	 * A new playlist, empty to start with (`requirements/playlists.md` §2), opened as soon as it can
+	 * be; where it cannot yet, the dialog closes and a toast says it is left for later.
 	 */
-	let sent: { request: string; key: string } | null = null;
-
-	/** A new playlist, empty to start with (`requirements/playlists.md` §2), opened at once. */
-	async function create({ title, description }: PlaylistDetails) {
-		const body: PlaylistCreate = { title };
-		if (description) body.description = description;
-		const request = JSON.stringify(body);
-		if (sent?.request !== request) sent = { request, key: crypto.randomUUID() };
-		const playlist = await createPlaylist(fetch, data.lib, body, sent.key);
+	async function create(details: PlaylistDetails) {
+		const { id, open } = await newPlaylist(data.lib, details);
+		if (!open) {
+			creating = false;
+			return;
+		}
 		// The dialog stays up, busy, until the new playlist's page replaces this one.
-		await goto(resolve('/playlists/[id]', { id: playlist.id }));
+		await goto(resolve('/playlists/[id]', { id }));
 	}
 </script>
 

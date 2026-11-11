@@ -211,16 +211,22 @@ impl<'a> Writer<'a> {
 /// the entities since, and a caller that must not undo that leaves it out.
 pub fn revert(conn: &Connection, undo: &Undo) -> Result<(), Error> {
     let tx = conn.unchecked_transaction()?;
+    revert_in(&tx, undo)?;
+    Ok(tx.commit()?)
+}
+
+/// [`revert`] inside a transaction the caller holds and commits.
+pub fn revert_in(conn: &Connection, undo: &Undo) -> Result<(), Error> {
     for Entry { kind, id, key, before } in undo.entries.iter().rev() {
         match before {
-            Some(rows) => sync::apply(&tx, rows)?,
+            Some(rows) => sync::apply(conn, rows)?,
             None => {
                 let id = id.parse().map_err(|_| Error::Invalid("an ID is not an ID".to_owned()))?;
-                sync::delete(&tx, *kind, id, *key)?;
+                sync::delete(conn, *kind, id, *key)?;
             }
         }
     }
-    Ok(tx.commit()?)
+    Ok(())
 }
 
 /// Tells a `null` from a field left out, as `Some(None)` from `None`.
@@ -308,8 +314,23 @@ pub fn apply(
     now: i64,
 ) -> Result<Undo, Error> {
     let tx = conn.unchecked_transaction()?;
+    let undo = apply_in(&tx, user, library, name, args, now)?;
+    tx.commit()?;
+    Ok(undo)
+}
+
+/// [`apply`] inside a transaction the caller holds: it commits what this wrote, or rolls back
+/// after a failure, as part of its own work.
+pub fn apply_in(
+    conn: &Connection,
+    user: i64,
+    library: i64,
+    name: &str,
+    args: &str,
+    now: i64,
+) -> Result<Undo, Error> {
     let mut none = |_| Ok(());
-    let mut w = Writer::new(&tx, user, library, now, &mut none).recording();
+    let mut w = Writer::new(conn, user, library, now, &mut none).recording();
     match name {
         "like" => {
             let TrackArgs { track_id, liked_id } = parse(args)?;
@@ -348,9 +369,7 @@ pub fn apply(
         }
         other => return Err(Error::Invalid(format!("no write is named {other}"))),
     }
-    let undo = w.undo();
-    tx.commit()?;
-    Ok(undo)
+    Ok(w.undo())
 }
 
 impl Writer<'_> {

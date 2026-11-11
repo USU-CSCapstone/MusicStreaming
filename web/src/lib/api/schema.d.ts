@@ -4278,7 +4278,15 @@ export interface operations {
     };
     likeTrack: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description The ID to give Liked Songs if this like makes it again, chosen by the client: a
+                 *     positive 63-bit integer in decimal, as `createPlaylist`'s `id`. A device that likes
+                 *     offline makes Liked Songs under it, so the server's is the same playlist. Not used, nor
+                 *     checked, while Liked Songs is there.
+                 */
+                likedId?: string;
+            };
             header?: never;
             path: {
                 libraryId: components["parameters"]["LibraryId"];
@@ -4294,6 +4302,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description `id_taken` — Liked Songs had to be made, and a playlist already has the `likedId` the request chose. Nothing changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
             };
             default: components["responses"]["Problem"];
         };

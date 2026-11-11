@@ -4,7 +4,7 @@ import { base } from '$app/paths';
 import { checkForUpdate } from '$lib/app-update';
 import { ApiError } from '$lib/api/root';
 import { catalog } from '$lib/catalog/client.svelte';
-import { LOGOUT_PENDING } from '$lib/last-known';
+import { LOGOUT_PENDING, lastKnown, logoutPending } from '$lib/last-known';
 import { realtime } from '$lib/realtime.svelte';
 
 /**
@@ -34,6 +34,13 @@ if (!dev && 'serviceWorker' in navigator) {
 
 // The server ending the session wipes the device before the login page loads.
 realtime.onSessionEnd = () => catalog.signOut();
+
+// A signed-in device joins the catalog's election before the first page loads, so a launch at a
+// deep link offline finds the device's copy of the library coming rather than none. Where the
+// browser has no OPFS there is never an owner, and reads need not wait for one.
+const me = lastKnown().me;
+if (me && !logoutPending() && navigator.storage && 'getDirectory' in navigator.storage)
+	catalog.preconnect(me.id);
 
 // A logout another tab made with no server in reach leaves this tab signed in, as the session
 // cookie is still good: it goes to the login page, where the pending logout is told to the server.

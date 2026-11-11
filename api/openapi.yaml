@@ -48,8 +48,8 @@ info:
     and name what it makes with IDs it chose, so a device and the server agree without a round
     trip: a player command's `commandId` and a play's `playId`, which the server applies once
     however often they arrive (for player commands, see `CommandResult`); a playlist's `id`
-    (`PlaylistCreate.id`), whose edits name its tracks by position at a version; a queue's
-    `queueId`; and a queue edit's `editId`.
+    (`PlaylistCreate.id`), whose edits name its tracks by position at a version; the `likedId`
+    of the Liked Songs a like makes; a queue's `queueId`; and a queue edit's `editId`.
 
     **Idempotency.** Any `POST`, `PUT`, `PATCH` or `DELETE` a signed-in caller makes may carry
     an `Idempotency-Key` header: client-generated, 1 to 128 characters of plain text (anything
@@ -681,8 +681,24 @@ paths:
         liking and hiding undo each other (`requirements/conventions.md` §8). A track the library
         does not have is `404`.
       operationId: likeTrack
+      parameters:
+        - name: likedId
+          in: query
+          description: |
+            The ID to give Liked Songs if this like makes it again, chosen by the client: a
+            positive 63-bit integer in decimal, as `createPlaylist`'s `id`. A device that likes
+            offline makes Liked Songs under it, so the server's is the same playlist. Not used, nor
+            checked, while Liked Songs is there.
+          schema:
+            type: string
+            example: '4611686018427387904'
       responses:
         '204': { description: Liked. }
+        '409':
+          description: '`id_taken` — Liked Songs had to be made, and a playlist already has the `likedId` the request chose. Nothing changed.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
     delete:
       tags: [Playlists]

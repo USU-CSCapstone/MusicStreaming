@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { RealtimeServerMessage } from '$lib/api/types';
+import { connectivity } from '$lib/connectivity.svelte';
+import { rememberDevice } from '$lib/last-known';
+import { IdbPort } from '$lib/sync/store';
 import { CatalogClient } from './client.svelte';
 import { FakeClock } from './fake-clock';
 import { PROTOCOL, type FromWorker, type LibraryState, type ToWorker } from './protocol';
@@ -111,6 +114,8 @@ function browser() {
 		/** Opens a tab. */
 		tab(tabName: string) {
 			const workers: FakeWorker[] = [];
+			// Whether the tab is out of sight; `show` and `hide` change it and tell the tab.
+			const view = { hidden: false };
 			const client = new CatalogClient(
 				() => {
 					workers.push(new FakeWorker(tabName, () => silent, clock, flags));
@@ -118,9 +123,15 @@ function browser() {
 					return workers[workers.length - 1] as unknown as Worker;
 				},
 				name,
+				() => view.hidden,
 				clock
 			);
-			return { client, workers };
+			/** Shows or hides the tab's page and fires the event the client listens to. */
+			const change = (hidden: boolean) => {
+				view.hidden = hidden;
+				document.dispatchEvent(new Event('visibilitychange'));
+			};
+			return { client, workers, hide: () => change(true), show: () => change(false) };
 		},
 		/** The router of a worker of the queue or any other asker, on the browser's channel. */
 		router() {
@@ -171,6 +182,82 @@ describe('CatalogClient', () => {
 		client.disconnect();
 	});
 
+	it('tells the owner’s worker whether the device is working offline, as it starts and when it changes', async () => {
+		const b = browser();
+		const { client, workers } = b.tab('a');
+		connectivity.setWorkOffline(true);
+		onTestFinished(() => connectivity.setWorkOffline(false));
+		client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(workers[0])).toContain('start'));
+		expect(types(workers[0]).slice(0, 3)).toEqual(['init', 'offline', 'start']);
+		client.setWorkingOffline(false);
+		expect(workers[0].sent.at(-1)).toEqual({ type: 'offline', value: false });
+		client.disconnect();
+	});
+
+	it('a tab that joined the election early answers a read once its owner is up, and connect keeps that owner', async () => {
+		const b = browser();
+		const { client, workers } = b.tab('a');
+		connectivity.setWorkOffline(true);
+		onTestFinished(() => connectivity.setWorkOffline(false));
+		rememberDevice('7', ['1']);
+		client.preconnect('7');
+		// Offline and asked at once, before the election has the lock: it waits rather than saying no.
+		expect(await client.waitForDevice('1')).toBe(true);
+		client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(workers[0])).toContain('start'));
+		expect(workers).toHaveLength(1);
+		b.hear({ type: 'hello', deviceId: '1', serverTime: '' });
+		expect(types(workers[0])).toContain('message');
+		// The same account keeps its owner: nothing was paused or stopped.
+		expect(types(workers[0])).not.toContain('pause');
+		expect(workers[0].terminated).toBe(false);
+		client.disconnect();
+	});
+
+	it('another account never reads the files of the account that preconnected: its owner is replaced', async () => {
+		const b = browser();
+		const { client, workers } = b.tab('a');
+		client.preconnect('7');
+		await vi.waitFor(() => expect(types(workers[0])).toContain('start'));
+		client.connect(b.realtime, '8');
+		await vi.waitFor(() => expect(workers).toHaveLength(2));
+		expect(types(workers[0])).toContain('pause');
+		expect(workers[0].terminated).toBe(true);
+		expect(workers[1].sent[0]).toMatchObject({ type: 'init', user: '8' });
+		client.disconnect();
+	});
+
+	it('a tab whose worker failed finds no library on the device, and an offline read gives up on it after the cold start wait', async () => {
+		const b = browser();
+		const { client, workers } = b.tab('a');
+		rememberDevice('7', ['1']);
+		client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(workers[0])).toContain('start'));
+		workers[0].onerror?.();
+		// The lock is given back once the failed worker is stopped.
+		await vi.waitFor(async () =>
+			expect((await navigator.locks.query()).held?.some((lock) => lock.name === b.name)).toBe(false)
+		);
+		expect(client.onDevice('1')).toBe(false);
+		const settled = vi.fn();
+		const wait = client.waitForDevice('1').then(settled);
+		await b.clock.advance(4999);
+		expect(settled).not.toHaveBeenCalled();
+		await b.clock.advance(1);
+		await wait;
+		expect(settled).toHaveBeenCalledWith(false);
+	});
+
+	it('a tab that joined early can still sign out', async () => {
+		const b = browser();
+		const { client, workers } = b.tab('a');
+		client.preconnect('7');
+		await vi.waitFor(() => expect(types(workers[0])).toContain('start'));
+		await client.signOut();
+		expect(types(workers.at(-1)!)).toContain('signOut');
+	});
+
 	it('a library is not on the device with no owner, and every tab learns the owner’s state, which changes as it does', async () => {
 		const b = browser();
 		const first = b.tab('first');
@@ -205,7 +292,10 @@ describe('CatalogClient', () => {
 		second.client.connect(b.realtime, '7');
 		await vi.waitFor(() => expect(second.client.onDevice('1')).toBe(true));
 
-		for (const { client } of [first, second]) client.onDevice('1');
+		for (const { client } of [first, second]) {
+			client.onDevice('1');
+			await client.waitForDevice('1');
+		}
 		await flush(b.name);
 		expect(requests).toEqual([]);
 		expect(types(first.workers[0])).toEqual(['init', 'start']);
@@ -226,6 +316,8 @@ describe('CatalogClient', () => {
 		b.heavy(true);
 		await vi.waitFor(() => expect(second.client.onDevice('1')).toBe(false));
 		expect(first.client.onDevice('1')).toBe(false);
+		// Offline there is no server to skip to: the device is still waited for.
+		expect(await second.client.waitForDevice('1')).toBe(true);
 		// No time passed on the clock, and no request went to the worker.
 		expect(types(first.workers[0])).toEqual(['init', 'start']);
 
@@ -264,6 +356,19 @@ describe('CatalogClient', () => {
 		client.disconnect();
 	});
 
+	it('the libraries kept for the next launch are the ones on the device, under the owner’s account', async () => {
+		const b = browser();
+		b.flags.libraries = {
+			'1': { onDevice: true, applying: false },
+			'2': { onDevice: false, applying: false }
+		};
+		const { client, workers } = b.tab('owner');
+		client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(workers[0])).toContain('start'));
+		await vi.waitFor(() => expect(localStorage.getItem('jewelcase-device:7')).toBe('["1"]'));
+		client.disconnect();
+	});
+
 	it('an owner of another account is no owner to this tab: its device is not read, though it serves', async () => {
 		const b = browser();
 		const first = b.tab('first');
@@ -273,6 +378,9 @@ describe('CatalogClient', () => {
 		second.client.connect(b.realtime, '8');
 		await flush(b.name);
 		expect(second.client.onDevice('1')).toBe(false);
+		// Kept as held for its own account, it waits for an owner of its own; this one is not it.
+		rememberDevice('8', ['1']);
+		expect(await second.client.waitForDevice('1')).toBe(false);
 		first.client.disconnect();
 		second.client.disconnect();
 	});
@@ -307,6 +415,50 @@ describe('CatalogClient', () => {
 		await vi.waitFor(() => expect(second.client.onDevice('1')).toBe(true));
 		first.client.disconnect();
 		second.client.disconnect();
+	});
+
+	it('an owner that is silent while the device is offline is waited for, not given up on after the device deadline', async () => {
+		const b = browser();
+		const first = b.tab('first');
+		const second = b.tab('second');
+		first.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(first.workers[0])).toContain('start'));
+		second.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(second.client.onDevice('1')).toBe(true));
+		connectivity.setWorkOffline(true);
+		onTestFinished(() => connectivity.setWorkOffline(false));
+
+		b.silence(true);
+		expect(await second.client.waitForDevice('1')).toBe(true);
+		const outcome = vi.fn();
+		const read = second.client.query('1', 'listTracks', {}, true).then(outcome, outcome);
+		await b.clock.advance(9999);
+		expect(outcome).not.toHaveBeenCalled();
+		await b.clock.advance(1);
+		await read;
+		expect(outcome.mock.calls[0][0]).toBeInstanceOf(Unanswered);
+		first.client.disconnect();
+		second.client.disconnect();
+	});
+
+	it('a cold start offline waits for its own owner only for a library the device is kept as holding, and only for a while', async () => {
+		const b = browser();
+		const { client } = b.tab('a');
+		// The owner's worker never comes up.
+		b.flags.stalled = true;
+		rememberDevice('7', ['1']);
+		client.preconnect('7');
+
+		// Not kept as held: no wait.
+		expect(await client.waitForDevice('2')).toBe(false);
+		const settled = vi.fn();
+		const held = client.waitForDevice('1').then(settled);
+		await b.clock.advance(4999);
+		expect(settled).not.toHaveBeenCalled();
+		await b.clock.advance(1);
+		await held;
+		expect(settled).toHaveBeenCalledWith(false);
+		client.disconnect();
 	});
 
 	it('an owner of another protocol is no owner: reads go to the server, and the app says it needs updating', async () => {
@@ -421,7 +573,7 @@ describe('CatalogClient', () => {
 		second.client.disconnect();
 	});
 
-	it('a tab restored from the cache asks the owner for its state again, which it may have missed', async () => {
+	it('a tab restored from the cache or unfrozen asks the owner for its state again, which it may have missed', async () => {
 		const b = browser();
 		const first = b.tab('first');
 		const second = b.tab('second');
@@ -436,6 +588,9 @@ describe('CatalogClient', () => {
 		channel.onmessage = ({ data }) => asked.push(data.type);
 
 		dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+		await vi.waitFor(() => expect(asked).toContain('who'));
+		asked.length = 0;
+		document.dispatchEvent(new Event('resume'));
 		await vi.waitFor(() => expect(asked).toContain('who'));
 		first.client.disconnect();
 		second.client.disconnect();
@@ -459,6 +614,145 @@ describe('CatalogClient', () => {
 		second.client.disconnect();
 	});
 
+	it('an owner hidden with a waiting tab in view hands over, and wants the files back when shown', async () => {
+		const b = browser();
+		const first = b.tab('first');
+		const second = b.tab('second');
+		first.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(first.workers[0])).toContain('start'));
+
+		// No one waits: nothing changes.
+		first.hide();
+		await flush(b.name);
+		expect(first.workers[0].terminated).toBe(false);
+		first.show();
+
+		second.client.connect(b.realtime, '7');
+		await vi.waitFor(async () =>
+			expect((await navigator.locks.query()).pending?.length).toBeGreaterThan(0)
+		);
+		first.hide();
+		await vi.waitFor(() =>
+			expect(types(second.workers[0] ?? ({ sent: [] } as never))).toContain('start')
+		);
+		expect(first.workers[0].terminated).toBe(true);
+		expect(types(first.workers[0]).slice(-1)).toEqual(['pause']);
+
+		first.show();
+		first.client.disconnect();
+		second.client.disconnect();
+	});
+
+	it('an owner hidden keeps the catalog while the tabs waiting for it are hidden too, and hands over when one is shown', async () => {
+		const b = browser();
+		const first = b.tab('first');
+		const second = b.tab('second');
+		first.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(first.workers[0])).toContain('start'));
+		second.client.connect(b.realtime, '7');
+		await vi.waitFor(async () => expect(await waiting(b.name)).toBe(1));
+		// A hidden waiting tab leaves the queue for the lock.
+		second.hide();
+		await vi.waitFor(async () => expect(await waiting(b.name)).toBe(0));
+
+		first.hide();
+		await flush(b.name);
+		expect(first.workers[0].terminated).toBe(false);
+		expect(second.workers).toHaveLength(0);
+
+		second.show();
+		await vi.waitFor(() =>
+			expect(types(second.workers[0] ?? ({ sent: [] } as never))).toContain('start')
+		);
+		expect(first.workers[0].terminated).toBe(true);
+		first.client.disconnect();
+		second.client.disconnect();
+	});
+
+	it('the catalog goes to a waiting tab in view, never to a hidden tab that joined before it', async () => {
+		const b = browser();
+		const a = b.tab('a');
+		const hiddenTab = b.tab('b');
+		const visibleTab = b.tab('c');
+		a.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(a.workers[0])).toContain('start'));
+		hiddenTab.hide();
+		hiddenTab.client.connect(b.realtime, '7');
+		visibleTab.client.connect(b.realtime, '7');
+		await vi.waitFor(async () => expect(await waiting(b.name)).toBe(1));
+
+		a.hide();
+		await vi.waitFor(() =>
+			expect(types(visibleTab.workers[0] ?? ({ sent: [] } as never))).toContain('start')
+		);
+		expect(hiddenTab.workers).toHaveLength(0);
+		a.client.disconnect();
+		hiddenTab.client.disconnect();
+		visibleTab.client.disconnect();
+	});
+
+	it('a tab out of sight owns the catalog when no one holds it, and is not queued when someone does', async () => {
+		const b = browser();
+		const alone = b.tab('alone');
+		alone.hide();
+		alone.client.connect(b.realtime, '7');
+		await vi.waitFor(() =>
+			expect(types(alone.workers[0] ?? ({ sent: [] } as never))).toContain('start')
+		);
+
+		const other = b.tab('other');
+		other.hide();
+		other.client.connect(b.realtime, '7');
+		await flush(b.name);
+		expect(await waiting(b.name)).toBe(0);
+		alone.client.disconnect();
+		other.client.disconnect();
+	});
+
+	it('says what each tab has to say: an owner hidden says so, and a tab in view that waits asks', async () => {
+		const b = browser();
+		const heard: string[] = [];
+		const probe = new BroadcastChannel(b.name);
+		probe.onmessage = ({ data }) => data.type === 'turn' && heard.push(data.kind);
+		const first = b.tab('first');
+		const second = b.tab('second');
+		first.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(first.workers[0])).toContain('start'));
+		await vi.waitFor(() => expect(heard).toEqual(['want']));
+		heard.length = 0;
+		first.hide();
+		await vi.waitFor(() => expect(heard).toEqual(['hidden']));
+		first.show();
+
+		// A tab that joins in view asks at once, and one shown again after leaving the queue asks too.
+		second.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(heard).toEqual(['hidden', 'want']));
+		second.hide();
+		await vi.waitFor(async () => expect(await waiting(b.name)).toBe(0));
+		second.show();
+		await vi.waitFor(() => expect(heard).toEqual(['hidden', 'want', 'want']));
+		probe.close();
+		first.client.disconnect();
+		second.client.disconnect();
+	});
+
+	it('a hidden owner that is asked for the catalog gives it up, and a visible one does not', async () => {
+		const b = browser();
+		const probe = new BroadcastChannel(b.name);
+		const first = b.tab('first');
+		first.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(first.workers[0])).toContain('start'));
+		probe.postMessage({ protocol: PROTOCOL, type: 'turn', kind: 'want' });
+		await flush(b.name);
+		expect(first.workers[0].terminated).toBe(false);
+
+		first.hide();
+		probe.postMessage({ protocol: PROTOCOL, type: 'turn', kind: 'want' });
+		await vi.waitFor(() => expect(first.workers[0].terminated).toBe(true));
+		probe.close();
+		first.client.disconnect();
+	});
+
 	it('an owner downloading a snapshot keeps the catalog when hidden, and hands over once it is done', async () => {
 		const b = browser();
 		const first = b.tab('first');
@@ -469,20 +763,67 @@ describe('CatalogClient', () => {
 		await vi.waitFor(async () =>
 			expect((await navigator.locks.query()).pending?.length).toBeGreaterThan(0)
 		);
-		const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
-		onTestFinished(() => hidden.mockRestore());
 		b.flags.busy = true;
-		document.dispatchEvent(new Event('visibilitychange'));
+		first.hide();
 		await vi.waitFor(() => expect(types(first.workers[0])).toContain('busy'));
 		await flush(b.name);
 		expect(first.workers[0].terminated).toBe(false);
 
 		b.flags.busy = false;
-		document.dispatchEvent(new Event('visibilitychange'));
+		second.show();
 		await vi.waitFor(() => expect(first.workers[0].terminated).toBe(true));
-		hidden.mockReturnValue(false);
 		first.client.disconnect();
 		second.client.disconnect();
+	});
+
+	it('an owner whose page is frozen stops its worker and releases the lock in microtasks, with no wait for a task', async () => {
+		const b = browser();
+		const first = b.tab('first');
+		first.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(first.workers[0])).toContain('start'));
+
+		document.dispatchEvent(new Event('freeze'));
+		// A frozen page runs no tasks: nothing but microtasks may stand between this and the end of its
+		// ownership.
+		for (let i = 0; i < 20; i++) await Promise.resolve();
+		expect(first.workers[0].terminated).toBe(true);
+		expect(types(first.workers[0])).not.toContain('pause');
+		await vi.waitFor(async () =>
+			expect((await navigator.locks.query()).held?.some((lock) => lock.name === b.name)).toBe(false)
+		);
+
+		document.dispatchEvent(new Event('resume'));
+		await vi.waitFor(() => expect(first.workers).toHaveLength(2));
+		await vi.waitFor(() => expect(types(first.workers[1])).toContain('start'));
+
+		// Owning again, a normal hand-over does the pause round trip: nothing is still in a hurry.
+		const second = b.tab('second');
+		second.client.connect(b.realtime, '7');
+		await vi.waitFor(async () => expect(await waiting(b.name)).toBe(1));
+		first.hide();
+		await vi.waitFor(() => expect(first.workers[1].terminated).toBe(true));
+		expect(types(first.workers[1])).toContain('pause');
+		first.client.disconnect();
+		second.client.disconnect();
+	});
+
+	it('a tab that started out of view and was shown before it connected joins the queue when it connects', async () => {
+		const b = browser();
+		const owner = b.tab('owner');
+		const late = b.tab('late');
+		owner.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(owner.workers[0])).toContain('start'));
+		late.hide();
+		late.client.preconnect('7');
+		await flush(b.name);
+		expect(await waiting(b.name)).toBe(0);
+		late.show();
+
+		// No visibility event follows: connecting alone has to bring it into the queue.
+		late.client.connect(b.realtime, '7');
+		await vi.waitFor(async () => expect(await waiting(b.name)).toBe(1));
+		owner.client.disconnect();
+		late.client.disconnect();
 	});
 
 	it('an owner whose worker fails gives the lock to the next tab', async () => {
@@ -523,6 +864,57 @@ describe('CatalogClient', () => {
 		expect(first.workers[0].terminated).toBe(true);
 		first.client.disconnect();
 		second.client.disconnect();
+	});
+
+	it('a tab alone whose worker never starts tries again after giving the lock up, so the catalog is still owned', async () => {
+		const b = browser();
+		const { client, workers } = b.tab('a');
+		b.flags.stalled = true;
+		client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(workers[0] ?? ({ sent: [] } as never))).toContain('start'));
+		b.flags.stalled = false;
+
+		await b.clock.advance(21_000);
+		await vi.waitFor(() => expect(client.onDevice('1')).toBe(true));
+		expect(workers).toHaveLength(2);
+		expect(workers[0].terminated).toBe(true);
+		client.disconnect();
+	});
+
+	it('a tab that leaves after its worker never started does not join again', async () => {
+		const b = browser();
+		const { client, workers } = b.tab('a');
+		b.flags.stalled = true;
+		client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(workers[0] ?? ({ sent: [] } as never))).toContain('start'));
+		b.flags.stalled = false;
+
+		// Signed out, or its layout gone, as the wait for the worker ends and the hold is let go of.
+		await b.clock.advance(19_999);
+		const passing = b.clock.advance(1);
+		client.disconnect();
+		await passing;
+		await b.clock.advance(21_000);
+		await flush(b.name);
+		expect(workers).toHaveLength(1);
+	});
+
+	it('a tab that leaves and joins again while its worker starts ends up owning the catalog', async () => {
+		const b = browser();
+		const { client, workers } = b.tab('a');
+		b.flags.stalled = true;
+		client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(workers[0] ?? ({ sent: [] } as never))).toContain('start'));
+		b.flags.stalled = false;
+
+		// As the layout did on each Work offline toggle: out of the election and straight back in.
+		client.disconnect();
+		client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(client.onDevice('1')).toBe(true));
+		await flush(b.name);
+		expect(client.onDevice('1')).toBe(true);
+		expect(workers.at(-1)!.terminated).toBe(false);
+		client.disconnect();
 	});
 
 	it('a tab that hears a sign-out leaves the election', async () => {
@@ -595,6 +987,37 @@ describe('CatalogClient', () => {
 		}
 		expect(localStorage.getItem('jewelcase-owner')).toBeNull();
 		expect(localStorage.getItem('jewelcase-user:1')).toBeNull();
+	});
+
+	it('sign-out deletes the owner’s log, unsent work and all', async () => {
+		localStorage.setItem('jewelcase-owner', '1');
+		const port = new IdbPort('1');
+		await port.put('mutations', { key: 'p', rev: 'r', owner: 'tab', createdAt: 1, tries: 0 });
+		port.close();
+		await browser().tab('a').client.signOut();
+		expect((await indexedDB.databases()).map((db) => db.name)).not.toContain('jewelcase-outbox-1');
+	});
+
+	it('a session the server ended notes how many unsent plays and changes it discarded, which a chosen logout does not', async () => {
+		for (const chosen of [false, true]) {
+			sessionStorage.clear();
+			localStorage.setItem('jewelcase-owner', '1');
+			const port = new IdbPort('1');
+			for (const key of ['a', 'b'])
+				await port.put('mutations', { key, rev: 'r', owner: 'tab', createdAt: 1, tries: 0 });
+			port.close();
+			await browser().tab('a').client.signOut(chosen);
+			expect(sessionStorage.getItem('jewelcase-discarded'), String(chosen)).toBe(
+				chosen ? null : '2'
+			);
+		}
+	});
+
+	it('a session that ended with nothing unsent notes nothing', async () => {
+		sessionStorage.clear();
+		localStorage.setItem('jewelcase-owner', '1');
+		await browser().tab('a').client.signOut();
+		expect(sessionStorage.getItem('jewelcase-discarded')).toBeNull();
 	});
 
 	it('sign-out tells the service worker that nobody is signed in', async () => {
@@ -786,6 +1209,19 @@ describe('CatalogClient', () => {
 		}
 	});
 
+	it('online, a read does not wait for this tab’s own worker to start', async () => {
+		const b = browser();
+		b.flags.slow = true;
+		const { client, workers } = b.tab('a');
+		client.preconnect('7');
+		await vi.waitFor(() => expect(types(workers[0] ?? ({ sent: [] } as never))).toContain('start'));
+		// Not serving yet: the answer is no, at once, so the server answers the read.
+		expect(client.onDevice('1')).toBe(false);
+		await b.clock.advance(300);
+		await vi.waitFor(() => expect(client.onDevice('1')).toBe(true));
+		client.disconnect();
+	});
+
 	it('once this tab serves the catalog itself, its reads go to the device again after an owner it doubted', async () => {
 		const b = browser();
 		const first = b.tab('first');
@@ -831,6 +1267,40 @@ describe('CatalogClient', () => {
 		await flush(b.name);
 		expect(second.client.onDevice('1')).toBe(true);
 		second.client.disconnect();
+	});
+
+	it('an owner that has to check who the session is makes no request while working offline', async () => {
+		const session = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ id: '8' }));
+		const b = browser();
+		const owner = b.tab('owner');
+		const stale = b.tab('stale');
+		connectivity.setWorkOffline(true);
+		onTestFinished(() => connectivity.setWorkOffline(false));
+		owner.client.connect(b.realtime, '8');
+		await vi.waitFor(() => expect(types(owner.workers[0])).toContain('start'));
+		stale.client.connect(b.realtime, '7');
+
+		await expect(stale.client.query('1', 'listTracks')).rejects.toThrow(/another account/);
+		await flush(b.name);
+		expect(session).not.toHaveBeenCalled();
+		expect(owner.workers[0].terminated).toBe(false);
+		owner.client.disconnect();
+		stale.client.disconnect();
+		session.mockRestore();
+	});
+
+	it('a caller that found the server unreachable waits for this tab’s own worker, online', async () => {
+		const b = browser();
+		b.flags.slow = true;
+		const { client, workers } = b.tab('a');
+		rememberDevice('7', ['1']);
+		client.preconnect('7');
+		await vi.waitFor(() => expect(types(workers[0] ?? ({ sent: [] } as never))).toContain('start'));
+		expect(client.onDevice('1')).toBe(false);
+		const waited = client.waitForDevice('1');
+		await b.clock.advance(300);
+		expect(await waited).toBe(true);
+		client.disconnect();
 	});
 
 	it('every tab counts a change the owner announces, for a page to ask what its read missed', async () => {

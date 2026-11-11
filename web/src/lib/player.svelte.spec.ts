@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
 	PlayReport,
 	PlayerState,
@@ -8,6 +8,8 @@ import type {
 } from '$lib/api/types';
 import type { FromWorker, RowSection, StartRequest, ToWorker } from '$lib/queue/protocol';
 import { marks } from '$lib/marks.svelte';
+import { sender } from '$lib/sync/sender';
+import { memoryEnv } from '$lib/sync/store';
 
 const fake = vi.hoisted(() => ({
 	/** Makes the worker the queue client talks to; set below, before the player loads. */
@@ -345,8 +347,9 @@ const transfer = (play: boolean) =>
 
 const result = () => vi.waitFor(() => fake.sent.find((m) => m.type === 'commandResult')!.result);
 
-beforeEach(() => {
+beforeEach(async () => {
 	marks.clear();
+	sender.start('7', { env: memoryEnv() });
 	queueWorker.sent.length = queueWorker.edits.length = queueWorker.starts.length = 0;
 	queueWorker.holdStart = false;
 	queueWorker.copyOnPrevious = queueWorker.holdEdits = false;
@@ -365,6 +368,8 @@ beforeEach(() => {
 	player.volume = 0.8;
 	player.finished = false;
 });
+
+afterEach(() => sender.stop());
 
 describe('player', () => {
 	it('takes playback over when another device moves it here', async () => {
@@ -556,13 +561,60 @@ describe('player', () => {
 		dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
 		// Back from the back/forward cache.
 		audio.dispatchEvent(new Event('playing'));
-		expect(fake.plays.map((p) => [p.trackId, p.end])).toEqual([
-			['58', null],
-			['58', 'stopped'],
-			['58', null]
-		]);
-		expect(fake.plays[2].playId).not.toBe(fake.plays[0].playId);
+		await sender.idle();
+		const [first, second] = [...new Set(fake.plays.map((p) => p.playId))];
+		expect(fake.plays.filter((p) => p.playId === first).at(-1)?.end).toBe('stopped');
+		expect(fake.plays.filter((p) => p.playId === second).map((p) => p.end)).toEqual([null]);
 		play.mockRestore();
+	});
+
+	/** A track of the queue playing, as its audio element says. */
+	async function playingAudio(id: string) {
+		fake.info = () => Promise.resolve({ variant: 'original' });
+		const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+		player.play([track(id, 60)], 0);
+		await vi.waitFor(() => expect(play).toHaveBeenCalled());
+		const audio = play.mock.contexts[0] as HTMLAudioElement;
+		audio.dispatchEvent(new Event('playing'));
+		await sender.idle();
+		return { audio, play };
+	}
+
+	it('checkpoints the play under way when the page goes to the background', async () => {
+		const { play } = await playingAudio('62');
+		const plays = vi.spyOn(sender, 'enqueue');
+		Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+		try {
+			document.dispatchEvent(new Event('visibilitychange'));
+		} finally {
+			delete (document as { visibilityState?: unknown }).visibilityState;
+		}
+		expect(plays).toHaveBeenCalledTimes(1);
+		expect(plays.mock.calls[0][1]).toMatchObject({ trackId: '62', end: null });
+		plays.mockRestore();
+		play.mockRestore();
+	});
+
+	it('checkpoints the play every 30 seconds while it plays, and not once it is paused', async () => {
+		vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+		try {
+			const { audio, play } = await playingAudio('63');
+			const plays = vi.spyOn(sender, 'enqueue');
+			vi.advanceTimersByTime(29_000);
+			expect(plays).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(1000);
+			expect(plays).toHaveBeenCalledTimes(1);
+			expect(plays.mock.calls[0][1]).toMatchObject({ trackId: '63', end: null });
+			plays.mockClear();
+			audio.dispatchEvent(new Event('pause'));
+			plays.mockClear();
+			vi.advanceTimersByTime(90_000);
+			expect(plays).not.toHaveBeenCalled();
+			plays.mockRestore();
+			play.mockRestore();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('records a play of a Manual Queue item as manual', async () => {
@@ -574,6 +626,7 @@ describe('player', () => {
 		expect(queue.playingManual).toBe(true);
 		const audio = play.mock.contexts[0] as HTMLAudioElement;
 		audio.dispatchEvent(new Event('playing'));
+		await sender.idle();
 		expect(fake.plays.filter((p) => p.trackId === '61').map((p) => p.origin)).toEqual(['manual']);
 		play.mockRestore();
 	});
@@ -634,6 +687,24 @@ describe('player and the queue', () => {
 		await settle();
 		return { play, audio: play.mock.contexts[0] as HTMLAudioElement };
 	}
+
+	it('stopStreaming pauses and lets go of the stream, and playing again asks for the audio anew', async () => {
+		const { audio } = await playing('71');
+		expect(audio.getAttribute('src')).not.toBeNull();
+		const load = vi.spyOn(audio, 'load');
+
+		player.stopStreaming();
+		expect(player.playing).toBe(false);
+		expect(audio.getAttribute('src')).toBeNull();
+		expect(load).toHaveBeenCalled();
+
+		const info = vi.fn(() => Promise.resolve({ variant: 'original' }));
+		fake.info = info;
+		void player.resume().catch(() => {});
+		await settle();
+		expect(info).toHaveBeenCalled();
+		expect(audio.getAttribute('src')).not.toBeNull();
+	});
 
 	it('start plays immediately, and reports its item once the server has the queue', async () => {
 		queueWorker.holdStart = true;
@@ -1005,6 +1076,7 @@ describe('player and the queue', () => {
 	it("records each play with the queue's context", async () => {
 		const { audio } = await playing('89', '90');
 		audio.dispatchEvent(new Event('playing'));
+		await sender.idle();
 
 		expect(fake.plays.at(-1)).toMatchObject({ trackId: '89', context: album, origin: 'context' });
 	});
@@ -1202,6 +1274,20 @@ describe('player and the queue', () => {
 
 		expect(asked).toBe(1);
 		expect(fake.sent.at(-1)!.report.itemId).toBe(`${queueWorker.key}.1`);
+	});
+
+	it('keeps playing when the queue could not be kept in the database, which is a notice and not a refused start', async () => {
+		player.play([track('61', 60), track('62', 60)] as never, 0, album);
+		await settle();
+		expect(player.playing).toBe(true);
+		const before = playback.error;
+		queueWorker.onmessage?.({
+			data: { type: 'notice', message: 'This browser couldn’t keep your queue for later.' }
+		} as MessageEvent<FromWorker>);
+		await settle();
+
+		expect(player.playing).toBe(true);
+		expect(playback.error).toBe(before);
 	});
 
 	it('pauses on the track chosen, and says so, when the server refuses the start', async () => {

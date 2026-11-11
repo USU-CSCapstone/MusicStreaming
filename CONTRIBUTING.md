@@ -49,6 +49,37 @@ pnpm dev
 another address. The server must be running: without it the page loads, but every API request
 fails with `502`.
 
+### Trying the app offline
+
+The service worker, the installable app and the offline shell exist only in a production build, so
+`pnpm dev` cannot show them. Build the app and serve it one of two ways:
+
+```sh
+cd web
+pnpm build
+
+# Either: the preview server, which forwards the API and the realtime connection to the server
+pnpm preview
+
+# Or: the server serves the build itself, one origin as in production (as the end-to-end tests do)
+JEWELCASE_WEB_DIR=$PWD/build JEWELCASE_MUSIC=/path/to/music JEWELCASE_DATA_DIR=../data \
+  cargo run -p jewelcase-server
+```
+
+Open the app and sign in. On a fresh data folder the first download waits about 30 s while the
+server builds the library's catalog; in DevTools' Network panel, `.../catalog` answers `200` once
+it is on the device. Then go offline by **stopping the server**, or turn on **Work offline** on the account
+page. DevTools' Offline option may not reach the catalog and queue workers, which is why the
+server is stopped instead. The indicator in the player bar reads `Offline` about three seconds
+after the server stops answering. Nothing plays offline, so to see work survive a closed app,
+start a track playing first, then stop the server, like another track and let the playing one go
+on a few seconds from what it has buffered. Close the tab, start the server again on the same
+address and data folder, and open the app: the like and the play reach the server once it is
+online. Every write goes through the one sync log, so a playlist you create or edit and a queue
+you start while offline reach the server the same way
+([`design/web.md`](design/web.md#the-sync-framework)). Start the server again, on the same
+address and data folder, to come back online if you have not closed the tab.
+
 ### Plugins
 
 Some Rust tests run the example plugins, so build them before `cargo test`:
@@ -81,10 +112,44 @@ from [Without Docker](#without-docker). CI runs them again on every pull request
 | | `pnpm test` |
 | `api/` | `npx @redocly/cli@2.65.1 lint openapi.yaml` |
 
-`pnpm test` includes the end-to-end tests, which build the server and run a real one for each
-Playwright worker on generated music, so they need ffmpeg, Node, and the Rust toolchain with the
-`wasm32-wasip2` target, which builds the server and the test plugin in `web/e2e/test-plugin/`. The
-first run is slow because of those builds.
+`pnpm test` runs Vitest in two projects, then the end-to-end tests. The `server` project runs in
+Node and the `client` project in headless Chromium, which `playwright install` fetches; the client
+project also runs the catalog worker's tests against the browser's real private file system
+(OPFS). Both build the web app's WebAssembly modules first (`pnpm wasm`). The end-to-end tests
+build the server and run a real one for each Playwright worker on generated music, so they need
+ffmpeg, Node, and the Rust toolchain with the `wasm32-wasip2` target, which builds the server and
+the test plugin in `web/e2e/test-plugin/`. The first run is slow because of those builds.
+
+### Catalog parity and golden files
+
+`crates/catalog` holds the SQL the server and the browser share, and a test in the server crate
+(`cargo test -p jewelcase-server parity`) checks that both give identical JSON for every list,
+get, search and recipe. It also compares the answers with the golden files in
+`crates/catalog/parity/`, which the web app's tests replay against the WebAssembly build. After a
+change that alters an answer or the device schema, regenerate them and review the diff:
+
+```sh
+UPDATE_PARITY=1 cargo test -p jewelcase-server parity
+```
+
+### Catalog scale benchmark
+
+An opt-in Playwright run measures a 500,000-track library on the device: importing the snapshot,
+page queries, recipe reads and memory. It is not part of `pnpm test`. It reads files that an
+ignored test in the server crate writes into `target/catalog-scale`:
+
+```sh
+cargo test --release -p jewelcase-server write_device_scale_files -- --ignored --nocapture
+cd web && pnpm wasm && pnpm exec playwright test catalog-scale
+```
+
+The same files feed a native benchmark of the shared queries' costs: tag-filtered pages, counted
+totals, leading pages and recipes from a large tag. It needs only the files above:
+
+```sh
+cargo test --release -p jewelcase-catalog --lib page::bench -- --ignored --nocapture
+```
+
 
 Code outside tests may not use `unwrap()`. Use `expect("why it can't fail")` only where failure
 is impossible, and handle anything that depends on input, files, configuration, or the

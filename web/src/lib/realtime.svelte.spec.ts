@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { connectivity } from './connectivity.svelte';
 import { Realtime } from './realtime.svelte';
 
 /** A WebSocket the test plays the server for. */
@@ -52,6 +53,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	realtime.stop();
+	connectivity.reach();
 	vi.useRealTimers();
 });
 
@@ -82,7 +84,7 @@ describe('Realtime', () => {
 		latest().hello();
 		vi.advanceTimersByTime(10_000);
 		expect(realtime.connected).toBe(true);
-		expect(realtime.offline).toBe(false);
+		expect(connectivity.state).toBe('online');
 	});
 
 	it('says it is offline once a lost connection stays lost, and backs off', () => {
@@ -93,7 +95,7 @@ describe('Realtime', () => {
 		latest().onclose?.();
 		vi.advanceTimersByTime(2000);
 		latest().onclose?.();
-		expect(realtime.offline).toBe(true);
+		expect(connectivity.state).toBe('unreachable');
 		expect(sockets).toHaveLength(3);
 		// It waits longer after each failure.
 		vi.advanceTimersByTime(2000);
@@ -101,16 +103,41 @@ describe('Realtime', () => {
 
 		vi.advanceTimersByTime(2000);
 		latest().hello();
-		expect(realtime.offline).toBe(false);
+		expect(connectivity.state).toBe('online');
 	});
 
-	it('never says it is offline if it was never connected', () => {
+	it('says it is offline when it has not connected within a few seconds of starting, and hello clears it', () => {
 		realtime.start();
+		vi.advanceTimersByTime(2500);
+		expect(connectivity.state).toBe('online');
+		vi.advanceTimersByTime(1000);
+		expect(connectivity.state).toBe('unreachable');
+
+		// A connection that hangs without failing still counts, and the next hello ends it.
+		latest().hello();
+		expect(connectivity.state).toBe('online');
+	});
+
+	it('flags a connection that never comes once, so an answer from HTTP is not undone by each retry', () => {
+		realtime.start();
+		latest().onclose?.();
+		vi.advanceTimersByTime(3500);
+		expect(connectivity.state).toBe('unreachable');
+		connectivity.reach();
 		for (let i = 0; i < 5; i++) {
+			vi.advanceTimersByTime(35_000);
 			latest().onclose?.();
-			vi.advanceTimersByTime(30_000);
+			vi.advanceTimersByTime(5_000);
 		}
-		expect(realtime.offline).toBe(false);
+		expect(connectivity.state).toBe('online');
+	});
+
+	it('takes any message, a pong included, as the server answering', () => {
+		realtime.start();
+		latest().hello();
+		connectivity.lose();
+		latest().receive({ type: 'pong', serverTime: new Date().toISOString() });
+		expect(connectivity.state).toBe('online');
 	});
 
 	it('pings, and gives up on a server that leaves a ping unanswered', () => {
@@ -153,7 +180,7 @@ describe('Realtime', () => {
 
 		vi.advanceTimersByTime(60_000);
 		expect(sockets).toHaveLength(1);
-		expect(realtime.offline).toBe(false);
+		expect(connectivity.state).toBe('online');
 	});
 
 	it('gives up on a handshake that hangs', () => {

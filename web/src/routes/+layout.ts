@@ -17,7 +17,7 @@ export const ssr = false;
 async function adopt(me: User) {
 	if (owner() === me.id) return;
 	if (owner()) {
-		await catalog.signOut();
+		await catalog.signOut(true);
 		remember({ me });
 	}
 	claim(me.id);
@@ -28,7 +28,7 @@ export const load: LayoutLoad = async ({ fetch, route, untrack }) => {
 	// shows, with no way back in, and the server is told as soon as it can be. The wipe is done
 	// again, in case the page closed before it finished.
 	if (logoutPending()) {
-		void catalog.signOut();
+		void catalog.signOut(true);
 		void finishLogout(fetch);
 		if (untrack(() => route.id) !== '/login') redirect(307, resolve('/login'));
 		return { me: null, library: null, tagTypes: [] };

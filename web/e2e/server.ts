@@ -11,6 +11,7 @@ import {
 	writeFileSync
 } from 'node:fs';
 import { createServer } from 'node:net';
+import { DatabaseSync } from 'node:sqlite';
 import { dirname, join, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '../..');
@@ -351,4 +352,63 @@ function moveIn(from: string, to: string, file: string) {
 	for (const name of [file, sidecar(file)]) {
 		if (existsSync(join(from, name))) renameSync(join(from, name), join(to, name));
 	}
+}
+
+/**
+ * Runs `change` on the database of the server whose folders are under `home`, which may be running.
+ */
+function inDatabase(home: string, change: (db: DatabaseSync) => void) {
+	const db = new DatabaseSync(join(home, 'data/state/jewelcase.db'), { timeout: 10_000 });
+	try {
+		change(db);
+	} finally {
+		db.close();
+	}
+}
+
+/**
+ * The plays the server holds, each with its track and the listen time it has: the API has no way to
+ * read them.
+ */
+export function playsHeld(home: string) {
+	let rows: { track_id: bigint; listen_time_ms: bigint }[] = [];
+	inDatabase(home, (db) => {
+		// IDs can be larger than a JavaScript number holds.
+		const select = db.prepare('SELECT track_id, listen_time_ms FROM plays');
+		select.setReadBigInts(true);
+		rows = select.all() as typeof rows;
+	});
+	return rows.map((row) => ({
+		track: String(row.track_id),
+		listenTimeMs: Number(row.listen_time_ms)
+	}));
+}
+
+/**
+ * Has the server end every browser's session but the harness's, as a password change does: the
+ * next request of such a session is refused as `session_revoked`. The server has no API for
+ * it yet.
+ */
+export function endBrowserSessions(home: string) {
+	inDatabase(home, (db) =>
+		db
+			.prepare("UPDATE devices SET revoked_reason = 'credentials_changed' WHERE name <> ?")
+			.run('E2E harness')
+	);
+}
+
+/**
+ * Adds an admin, who reaches every library, with the owner's password; the server has no API for
+ * accounts yet.
+ */
+export function addAdmin(home: string, username: string) {
+	inDatabase(home, (db) => {
+		const insert = db.prepare(
+			`INSERT INTO users (username, display_name, role, password, created_at)
+			 SELECT ?, ?, 'admin', password, created_at FROM users WHERE role = 'owner'`
+		);
+		// The new row's ID can be larger than a JavaScript number holds.
+		insert.setReadBigInts(true);
+		insert.run(username, username);
+	});
 }

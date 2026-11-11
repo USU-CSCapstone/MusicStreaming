@@ -159,7 +159,8 @@ test('deletes a playlist, with a moment to undo it', async ({ page }) => {
 	// Dismissing the toast deletes it for good.
 	await page.getByRole('link', { name: /Road Trip/ }).click();
 	await page.getByRole('button', { name: 'Delete playlist' }).click();
-	const sent = page.waitForResponse((r) => r.request().method() === 'DELETE');
+	// Sent once the Undo has passed, which the log waits out.
+	const sent = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: 20_000 });
 	await page.getByRole('button', { name: 'Dismiss' }).click();
 	expect((await sent).status()).toBe(204);
 	await page.reload();

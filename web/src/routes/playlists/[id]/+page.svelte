@@ -37,8 +37,9 @@
 
 	// Edits show at once and are saved behind them (`requirements/playlists.md` §4).
 	const list = $derived(new EditablePlaylist(fetch, data.loaded));
-	// An edit from another device reaches this one through the library's feed: read again, in
-	// place, when it changes on the device, and shown unless an edit here is unconfirmed.
+	// An edit from another device reaches this one through the library's feed, and one of this
+	// device's through its copy: read again, in place, when it changes on the device, and shown
+	// once the device has every edit made here.
 	const reread = $derived(
 		new Live(
 			data.loaded,
@@ -181,7 +182,7 @@
 			return;
 		}
 		confirming = false;
-		deleteWithUndo(fetch, playlist, () => list.idle());
+		deleteWithUndo(playlist);
 		// Replacing this page, so Back does not lead to a deleted playlist.
 		void goto(resolve('/playlists'), { replaceState: true });
 	}

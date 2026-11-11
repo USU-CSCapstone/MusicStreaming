@@ -1,6 +1,8 @@
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { RealtimeServerMessage } from '$lib/api/types';
-import { QueueClient } from './client.svelte';
+import { connectivity } from '$lib/connectivity.svelte';
+import { toaster } from '$lib/toast.svelte';
+import { type Log, QueueClient } from './client.svelte';
 import type { FromWorker, StartRequest, ToWorker } from './protocol';
 
 /** A worker the test plays the queue for. */
@@ -43,6 +45,50 @@ function setup() {
 }
 
 describe('QueueClient', () => {
+	it("gives the worker's starts, edits and restores to the page's log, and tells it what became of them", async () => {
+		const worker = new FakeWorker();
+		const logged: [string, unknown][] = [];
+		let settle: Parameters<Log['onSettled']>[0] = () => {};
+		let stopped = false;
+		let retry: Parameters<Log['onRetry']>[0] = () => {};
+		const cancelled: string[] = [];
+		const log: Log = {
+			enqueue: (name, args) => logged.push([name, args]),
+			onSettled: (listener) => {
+				settle = listener;
+				return () => (stopped = true);
+			},
+			onRetry: (listener) => {
+				retry = listener;
+				return () => {};
+			},
+			cancel: async (key) => (cancelled.push(key), true)
+		};
+		const client = new QueueClient(() => worker as unknown as Worker, log);
+		client.connect({ on: () => () => {} }, '7');
+		const args = { editId: 'e', queueId: 'q', edit: { type: 'next' as const } };
+		worker.say({ type: 'enqueue', mutation: { name: 'editQueue', args } });
+		expect(logged).toEqual([['editQueue', args]]);
+
+		const answer = { answer: { version: 1 } };
+		settle({ name: 'editQueue', args } as never, 'sent', answer);
+		// A kind the worker does not make is not its to hear.
+		settle({ name: 'deleteKeptQueue', args: { queueId: 'k' } } as never, 'sent', {});
+		expect(worker.sent.filter((m) => m.type === 'settled')).toEqual([
+			{ type: 'settled', mutation: { name: 'editQueue', args }, outcome: 'sent', result: answer }
+		]);
+
+		// A restore that could not reach the server is taken back, once its request is over; an edit
+		// waits to be tried again.
+		retry({ name: 'editQueue', key: 'edit-key' } as never);
+		retry({ name: 'restoreQueue', key: 'restore-key' } as never);
+		expect(cancelled).toEqual([]);
+		await Promise.resolve();
+		expect(cancelled).toEqual(['restore-key']);
+		client.disconnect();
+		expect(stopped).toBe(true);
+	});
+
 	it('tells the worker of each hide and unhide the marks show, until it disconnects', () => {
 		const worker = new FakeWorker();
 		const client = new QueueClient(() => worker as unknown as Worker);
@@ -163,6 +209,19 @@ describe('QueueClient', () => {
 		expect(start).toMatchObject({ type: 'start', request: { offline: true } });
 	});
 
+	it('tells the worker whether the device is working offline, as it starts and when it changes', () => {
+		const { worker, client } = setup();
+		client.setWorkingOffline(true);
+		expect(worker.sent.at(-1)).toEqual({ type: 'offline', value: true });
+		client.disconnect();
+		const again = new FakeWorker();
+		const second = new QueueClient(() => again as unknown as Worker);
+		connectivity.setWorkOffline(true);
+		onTestFinished(() => connectivity.setWorkOffline(false));
+		second.connect({ on: () => () => {} }, '7');
+		expect(again.sent.map((m) => m.type)).toEqual(['init', 'offline']);
+	});
+
 	it('settles each restore with the worker answer to it', async () => {
 		const { worker, client } = setup();
 		const first = client.restore('q1');
@@ -178,5 +237,37 @@ describe('QueueClient', () => {
 		expect(one).toMatchObject({ type: 'restore', queueId: 'q1' });
 		expect(await first).toEqual({ ok: true, position: null });
 		expect(await second).toMatchObject({ ok: false, code: 'queue_active' });
+	});
+
+	it('has the worker write the queue when the page is hidden, and settles a save when it is written', async () => {
+		const state = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+		onTestFinished(() => state.mockRestore());
+		const { worker, client } = setup();
+		/** Has the page tell its listeners that its visibility changed. */
+		const tell = () => document.dispatchEvent(new Event('visibilitychange'));
+
+		tell();
+		expect(worker.sent.map((m) => m.type)).toEqual(['init']);
+		state.mockReturnValue('hidden');
+		tell();
+		const save = worker.sent.at(-1) as Extract<ToWorker, { type: 'save' }>;
+		expect(save).toMatchObject({ type: 'save' });
+		const written = client.save();
+		const ask = worker.sent.at(-1) as Extract<ToWorker, { type: 'save' }>;
+		worker.say({ type: 'saved', id: ask.id });
+		await written;
+
+		client.disconnect();
+		const sent = worker.sent.length;
+		tell();
+		expect(worker.sent).toHaveLength(sent);
+	});
+
+	it('shows a notice from the worker as a toast, and not as a refused edit', () => {
+		const { worker, client } = setup();
+		worker.say({ type: 'notice', message: 'Kept only while the app is open.' });
+
+		expect(toaster.current?.message).toBe('Kept only while the app is open.');
+		expect(client.refusal).toBeNull();
 	});
 });

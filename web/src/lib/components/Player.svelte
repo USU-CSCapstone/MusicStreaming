@@ -2,6 +2,7 @@
 	import { fullText } from '$lib/full-text';
 	import { resolve } from '$app/paths';
 	import { formatDuration } from '$lib/format';
+	import { connectivity } from '$lib/connectivity.svelte';
 	import { controls } from '$lib/controls.svelte';
 	import { panels } from '$lib/panels.svelte';
 	import { playback } from '$lib/playback.svelte';
@@ -28,7 +29,7 @@
 	const where = $derived(
 		controls.stopped
 			? null
-			: realtime.offline
+			: connectivity.state !== 'online'
 				? `Last on ${playback.deviceName}`
 				: `On ${playback.deviceName}`
 	);
@@ -60,7 +61,7 @@
      playing, so the user knows. -->
 <section
 	class="player"
-	class:idle={!track && !remote && !realtime.offline && !playback.error}
+	class:idle={!track && !remote && !connectivity.label && !playback.error}
 	aria-label="Player"
 >
 	<div class="now">
@@ -156,7 +157,9 @@
 
 	<div class="side">
 		<!-- Always there, so a screen reader announces the change. -->
-		<span class="offline" role="status">{realtime.offline ? 'Offline' : ''}</span>
+		<span class="offline" class:chosen={connectivity.workOffline} role="status"
+			>{connectivity.label}</span
+		>
 		<button
 			type="button"
 			class="icon-btn"
@@ -383,6 +386,12 @@
 
 	.offline:empty {
 		display: none;
+	}
+
+	.offline.chosen {
+		/* Chosen, not a fault. */
+		border-color: var(--border);
+		color: var(--text-muted);
 	}
 
 	.offline {

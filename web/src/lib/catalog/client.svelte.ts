@@ -5,9 +5,12 @@
 // at, and the owner tells every tab, which holds it: `onDevice` asks no one.
 
 import { API } from '$lib/api/root';
+import { connectivity } from '$lib/connectivity.svelte';
 import { clearImageCache, tellServiceWorker } from '$lib/image-cache';
 import { clearQueueLists } from '$lib/queue/lists';
-import { forget } from '$lib/last-known';
+import { deviceLibraries, forget, owner, rememberDevice } from '$lib/last-known';
+import type { Local } from '$lib/sync/mutation';
+import { DISCARDED, IdbPort, unsent, wipeDatabases } from '$lib/sync/store';
 import wasmUrl from '$lib/catalog-wasm/jewelcase_catalog_wasm_bg.wasm?url';
 import type { RealtimeServerMessage } from '$lib/api/types';
 import type { Realtime } from '$lib/realtime.svelte';
@@ -22,7 +25,15 @@ import {
 	type ToWorker
 } from './protocol';
 import { Changes } from './changes';
-import { CHANNEL, CatalogRouter, TIMEOUT_MS, Unanswered, realClock, type Clock } from './router';
+import {
+	CHANNEL,
+	CatalogRouter,
+	TIMEOUT_MS,
+	Unanswered,
+	realClock,
+	type Clock,
+	type Turn
+} from './router';
 
 /** The realtime messages that make the worker pull. */
 const PULLING = new Set(['hello', 'libraryChanged', 'accountChanged']);
@@ -36,6 +47,12 @@ const SIGN_OUT_MS = 3000;
 const START_MS = 20_000;
 /** How long an online read waits for the device before the server answers it instead. */
 const DEVICE_MS = 1500;
+/**
+ * How long a read made while the server cannot be asked waits for the catalog's owner to be
+ * serving, when the device is known to hold the library: an app launched at a deep link has
+ * not had its own election or worker finish.
+ */
+const COLD_MS = 5000;
 
 /**
  * Whether the browser can elect an owner at all; without Web Locks (plain HTTP, old iOS) the
@@ -50,6 +67,8 @@ const spawn = () => new Worker(new URL('./worker.ts', import.meta.url), { type: 
 export class CatalogClient {
 	#spawn: () => Worker;
 	#name: string;
+	/** Whether this tab is out of sight; tests give each tab its own. */
+	#hidden: () => boolean;
 	#clock: Clock;
 	#router: CatalogRouter | null = null;
 	/** The changes announced since this tab began listening, for pages to ask what a read missed. */
@@ -59,8 +78,14 @@ export class CatalogClient {
 	#unsubscribe: (() => void) | null = null;
 	#persisted = false;
 	#listening = false;
+	/** This tab is in the election, or about to be: it will own the catalog or another tab will. */
+	#wants = false;
 	/** The sign-out under way, which this tab's next election waits for. */
 	#signingOut: Promise<unknown> = Promise.resolve();
+	/** This tab holds the lock, whether or not its worker has started. */
+	#holding = false;
+	/** The page is about to freeze: the owner stops its worker without waiting for it. */
+	#hurry = false;
 	/** This tab answers requests as the owner. */
 	#serving = false;
 	/** What the owner last told every tab of the catalog; null until one has. */
@@ -75,6 +100,9 @@ export class CatalogClient {
 	 * the catalog.
 	 */
 	#heavy = false;
+	/** The reads waiting for the owner to serve, each given whether it does. */
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- waiting readers are not state to render
+	#waiting = new Set<(serving: boolean) => void>();
 	/** Ends this tab's wait for the lock, or its hold of it. */
 	#abort: AbortController | null = null;
 	#release: (() => void) | null = null;
@@ -90,11 +118,17 @@ export class CatalogClient {
 
 	/**
 	 * Makes a client whose owner starts its worker with `create`, on the lock and channel `name`;
-	 * tests pass their own, and a clock they run by hand.
+	 * tests pass their own, `hidden` and a clock they run by hand.
 	 */
-	constructor(create: () => Worker = spawn, name = CHANNEL, clock: Clock = realClock) {
+	constructor(
+		create: () => Worker = spawn,
+		name = CHANNEL,
+		hidden = () => document.hidden,
+		clock: Clock = realClock
+	) {
 		this.#spawn = create;
 		this.#name = name;
+		this.#hidden = hidden;
 		this.#clock = clock;
 	}
 
@@ -104,7 +138,30 @@ export class CatalogClient {
 	 * [`disconnect`](#disconnect).
 	 */
 	connect(realtime: Pick<Realtime, 'on'>, user: string) {
-		this.disconnect();
+		// Already in the election for this account, from `preconnect`: it carries on.
+		const electing = this.#wants && this.#user === user;
+		if (!electing) this.disconnect();
+		this.#unsubscribe?.();
+		this.#unsubscribe = realtime.on((message: RealtimeServerMessage) => {
+			if (PULLING.has(message.type)) this.#send({ type: 'message', message });
+		});
+		if (!electing) this.#begin(user);
+		// A tab that started out of view and was shown before this is still out of the queue.
+		else this.#resume();
+	}
+
+	/**
+	 * Joins the election for `user` before the app has loaded its first page, so a page that
+	 * loads at once, as an app launched offline does, finds an owner coming. Without
+	 * [`connect`](#connect) it hears no realtime messages.
+	 */
+	preconnect(user: string) {
+		if (!this.#wants) this.#begin(user);
+	}
+
+	/** Enters the election for `user`. */
+	#begin(user: string) {
+		this.#wants = true;
 		this.#persist();
 		this.#user = user;
 		if (!this.#listening) {
@@ -112,13 +169,18 @@ export class CatalogClient {
 			// A page that is going away or frozen gives the catalog up, so a tab in front can take it.
 			addEventListener('pagehide', () => this.#yield());
 			addEventListener('pageshow', (event) => event.persisted && this.#restored());
-			// iOS fires no `pagehide` for a tab switch, so an owner out of sight hands over when
-			// another tab is waiting; desktop tab switches with no one waiting change nothing.
+			// Chromium freezes a hidden page without `pagehide`, and a frozen owner must not keep the
+			// lock: its worker is stopped without the pause round trip, which needs a task the
+			// frozen page never runs, so the lock goes with the microtasks that follow.
+			document.addEventListener('freeze', () => {
+				this.#hurry = true;
+				this.#yield();
+			});
+			document.addEventListener('resume', () => this.#restored());
+			// No browser fires `pagehide` for a tab switch, and a hidden tab waiting for the catalog is
+			// no reason to move it: an owner out of sight hands over only to a waiting tab in view.
 			document.addEventListener('visibilitychange', () => this.#visibility());
 		}
-		this.#unsubscribe = realtime.on((message: RealtimeServerMessage) => {
-			if (PULLING.has(message.type)) this.#send({ type: 'message', message });
-		});
 		// A tab hearing a sign-out leaves, so a signed-out tab never owns the next account's files.
 		this.#route();
 		if (available()) this.#join();
@@ -136,10 +198,19 @@ export class CatalogClient {
 	}
 
 	/**
+	 * Tells the worker, if this tab owns one, whether the device is working offline, so it makes no
+	 * request.
+	 */
+	setWorkingOffline(value: boolean) {
+		this.#send({ type: 'offline', value });
+	}
+
+	/**
 	 * Leaves the election, and stops the worker if this tab owns the catalog. The device's files
 	 * stay.
 	 */
 	disconnect() {
+		this.#wants = false;
 		this.#unsubscribe?.();
 		this.#unsubscribe = null;
 		this.#yield();
@@ -210,11 +281,83 @@ export class CatalogClient {
 	}
 
 	/**
+	 * Whether `library` is on the device as `onDevice` says, for a read the server cannot answer:
+	 * it waits, up to `COLD_MS`, for an owner that is not serving yet if this device holds the
+	 * library, which an app launched offline at a deep link knows from what it kept.
+	 */
+	async waitForDevice(library: string) {
+		if (!available()) return false;
+		if (!this.#current()) {
+			if (!deviceLibraries(this.#user).has(library)) return false;
+			if (!(await this.#serves(COLD_MS))) return false;
+		}
+		const here = this.#current()?.libraries[library];
+		return !!here && here.onDevice;
+	}
+
+	/**
 	 * Whether an owner of another version of the app is there that this tab cannot talk to, so the
 	 * app needs updating to read the device.
 	 */
 	get outdated() {
 		return this.#route().foreign && !this.#state?.serving;
+	}
+
+	/**
+	 * Has whichever tab owns the catalog make a mutation's writes to its library that the file does
+	 * not hold (`$lib/sync`), for `user`. Settles once they are made, or at once where the library
+	 * is not on the device as the owner last said, or no owner for `user` is serving: the owner that
+	 * holds it next makes them from the log as it starts or downloads it. With `answered`, the
+	 * server has answered the mutation: those the file holds are kept through rebases until the
+	 * account feed brings them, and none is made. Never rejects.
+	 */
+	async mutate(user: string, { library, calls }: Local, answered = false) {
+		if (!available() || user !== this.#user || !this.#current()?.libraries[library]?.onDevice)
+			return;
+		await this.#route()
+			.ask({ type: 'mutate', library, calls, answered, user })
+			.catch((error) => console.error(error));
+	}
+
+	/**
+	 * Has whichever tab owns the catalog take back the device's own writes to `library` and make
+	 * those the log holds again, for `user`. Settles once done, or at once where there is nothing
+	 * to do it on, as `mutate`. Never rejects.
+	 */
+	async rebase(user: string, library: string) {
+		if (!available() || user !== this.#user || !this.#current()?.libraries[library]?.onDevice)
+			return;
+		await this.#route()
+			.ask({ type: 'rebase', library, user })
+			.catch((error) => console.error(error));
+	}
+
+	/**
+	 * Tells whichever tab owns the catalog that the server answered a write to `playlistId` of
+	 * `library` with it at `version`, for `user`, so a write made twice over the server's rows of it
+	 * is made once. Settles once done, or at once where there is nothing to do it on, as `mutate`.
+	 * Never rejects.
+	 */
+	async confirmed(user: string, library: string, playlistId: string, version: number) {
+		if (!available() || user !== this.#user || !this.#current()?.libraries[library]?.onDevice)
+			return;
+		await this.#route()
+			.ask({ type: 'confirmed', library, playlistId, version, user })
+			.catch((error) => console.error(error));
+	}
+
+	/** Resolves with whether the owner is serving, as soon as it says so, or false after `ms`. */
+	#serves(ms: number) {
+		if (this.#state?.serving) return Promise.resolve(true);
+		return new Promise<boolean>((resolve) => {
+			const done = (serving: boolean) => {
+				cancel();
+				this.#waiting.delete(done);
+				resolve(serving);
+			};
+			const cancel = this.#clock.after(ms, () => done(false));
+			this.#waiting.add(done);
+		});
 	}
 
 	/**
@@ -236,14 +379,23 @@ export class CatalogClient {
 	 * Deletes every file of the catalog from this device, from every tab: the next person to
 	 * sign in must see nothing of the last, nor the account and library list kept for starting
 	 * offline, nor the images and queue lists kept for it, and the service worker keeps no more
-	 * images until it is told who is signed in. A tab that owns the catalog does it; if none does,
-	 * this tab starts a worker for it.
+	 * images until it is told who is signed in, nor the log's unsent work: every tab lets go of
+	 * its database before it is deleted. A tab that owns the catalog does it; if none does, this
+	 * tab starts a worker for it. Where the server ended the session (not `chosen`, as a logout
+	 * or a sign-in as someone else is), the unsent plays and changes the wipe deletes are counted
+	 * first and told once on the login page.
 	 */
-	signOut() {
+	signOut(chosen = false) {
 		// A tab owning the catalog lets go of it first, or the wipe would wait on its own lock.
 		this.disconnect();
+		const user = owner();
 		forget();
+		const wiped = (async () => {
+			if (user && !chosen) await discarded(user);
+			await wipeDatabases(user ? [user] : []);
+		})();
 		return (this.#signingOut = Promise.all([
+			wiped,
 			clearImageCache(),
 			clearQueueLists(),
 			tellServiceWorker(null),
@@ -290,8 +442,8 @@ export class CatalogClient {
 	}
 
 	/**
-	 * A page restored from the back/forward cache may have missed what the owner published
-	 * meanwhile: it asks the owner for its state again, then takes part again.
+	 * A page restored from the back/forward cache, or unfrozen, may have missed what the owner
+	 * published meanwhile: it asks the owner for its state again, then takes part again.
 	 */
 	#restored() {
 		this.#router?.who();
@@ -299,17 +451,29 @@ export class CatalogClient {
 	}
 
 	/**
-	 * Gives the catalog up when hidden with another tab waiting for it, unless its worker is
-	 * downloading a snapshot, and wants it back when shown.
+	 * A tab that is shown joins the election again; one that goes out of sight leaves the queue
+	 * for the lock, so only tabs in view are ever waiting, and an owner that goes out of sight
+	 * says so, for a waiting tab in view to ask; see [`#turn`](#turn).
 	 */
-	async #visibility() {
+	#visibility() {
 		if (!this.#unsubscribe) return;
-		if (!document.hidden) return this.#resume();
-		if (!this.#serving) return;
-		const { pending } = await navigator.locks.query();
-		if (!pending?.some((lock) => lock.name === this.#name)) return;
-		const busy = await this.#call({ type: 'busy' });
-		if (document.hidden && this.#serving && !busy) this.#yield();
+		if (!this.#hidden()) this.#resume();
+		else if (this.#serving) this.#route().say('hidden');
+		else if (!this.#holding) this.#yield();
+	}
+
+	/**
+	 * Hears another tab: a hidden owner heard `want` gives the catalog up, unless its worker is
+	 * downloading a snapshot, and wants it back when shown; a waiting tab in view answers `hidden`
+	 * with `want`.
+	 */
+	async #turn(kind: Turn) {
+		if (kind === 'hidden') {
+			if (!this.#hidden() && this.#abort && !this.#serving) this.#route().say('want');
+		} else if (this.#hidden() && this.#serving) {
+			const busy = await this.#call({ type: 'busy' });
+			if (this.#hidden() && this.#serving && !busy) this.#yield();
+		}
 	}
 
 	/** The channel to the owner, joined when first needed. */
@@ -321,12 +485,14 @@ export class CatalogClient {
 			(request) => request.type === 'signOut' && !this.#serving && this.disconnect(),
 			this.#clock
 		));
+		router.onTurn((kind) => void this.#turn(kind));
 		router.listen((library, kinds) => this.#changes.record(library, kinds));
 		router.onState((state, own) => {
 			// No other tab serves while this one does: a state heard from one was sent before this
 			// tab took over, and reached it late, as another channel's message can.
 			if (this.#serving && !own) return;
 			this.#state = state;
+			if (state.serving) for (const done of [...this.#waiting]) done(true);
 		});
 		router.who();
 		return router;
@@ -339,15 +505,24 @@ export class CatalogClient {
 		navigator.storage?.persist?.().catch((error) => console.error(error));
 	}
 
-	/** Waits for the lock; whoever holds it owns the catalog, for as long as it is held. */
+	/**
+	 * Waits for the lock; whoever holds it owns the catalog, for as long as it is held. A tab out
+	 * of sight takes it only if no one holds it, and otherwise waits to be shown.
+	 */
 	#elect() {
 		const abort = (this.#abort = new AbortController());
 		const released = new Promise<void>((resolve) => (this.#release = resolve));
+		const hidden = this.#hidden();
 		this.#held = navigator.locks
-			.request(this.#name, { signal: abort.signal }, () => this.#own(released))
+			.request(this.#name, hidden ? { ifAvailable: true } : { signal: abort.signal }, (lock) => {
+				if (lock) return this.#own(released);
+				if (this.#abort === abort) this.#abort = this.#release = null;
+			})
 			.catch((error) => {
 				if (error.name !== 'AbortError') console.error(error);
 			});
+		// A tab in view that has to wait asks a hidden owner for the catalog.
+		if (!hidden) this.#route().say('want');
 	}
 
 	/**
@@ -363,17 +538,27 @@ export class CatalogClient {
 
 	/**
 	 * Runs while this tab holds the lock: opens the catalog in a new worker, answers requests
-	 * from every tab until `released`, then pauses the pool so the next owner can take it.
+	 * from every tab until `released`, then pauses the pool so the next owner can take it. A worker
+	 * that does not start in `START_MS` gives the lock up, and the tab joins the election again
+	 * behind any tab waiting, so the catalog is never left without an owner.
 	 */
 	async #own(released: Promise<void>) {
+		this.#holding = true;
+		this.#hurry = false;
 		this.#launch(this.#user);
 		// A worker that cannot load leaves the lock to the next tab.
 		this.#worker!.onerror = () => this.#yield();
 		let started = false;
 		const heard = this.#hear('started').then(() => (started = true));
 		this.#send({ type: 'start' });
-		await Promise.race([heard, released, this.#after(START_MS)]);
-		if (!started) this.#yield();
+		const late = await Promise.race([
+			heard.then(() => false),
+			released.then(() => false),
+			this.#after(START_MS).then(() => true)
+		]);
+		// Only a hold still this tab's own is given up: once `released`, the tab may already be in
+		// a newer election, which this must not end.
+		if (late) this.#yield();
 		const stop = started
 			? this.#route().serve(async (request: Request) => {
 					// Device data never crosses accounts; the asker falls back to the server.
@@ -395,12 +580,14 @@ export class CatalogClient {
 		await released;
 		this.#serve(false);
 		stop();
-		if (started) {
+		if (started && !this.#hurry) {
 			const paused = this.#hear('paused');
 			this.#send({ type: 'pause' });
 			await Promise.race([paused, this.#after(PAUSE_MS)]);
 		}
 		this.#stop();
+		this.#holding = false;
+		if (late && this.#wants && !this.#abort) this.#join();
 	}
 
 	/** Starts or stops this tab's serving of the catalog, and tells every tab. */
@@ -410,7 +597,10 @@ export class CatalogClient {
 		this.#publish();
 	}
 
-	/** Tells every tab, this one included, what this tab's worker holds, as the owner. */
+	/**
+	 * Tells every tab, this one included, what this tab's worker holds, as the owner. While it
+	 * serves, the libraries it holds are also kept for the next launch, which may be offline.
+	 */
 	#publish() {
 		this.#route().publish({
 			protocol: PROTOCOL,
@@ -419,13 +609,19 @@ export class CatalogClient {
 			heavy: this.#heavy,
 			libraries: this.#libraries
 		});
+		if (this.#serving && this.#user)
+			rememberDevice(
+				this.#user,
+				Object.keys(this.#libraries).filter((id) => this.#libraries[id].onDevice)
+			);
 	}
 
 	/**
-	 * Gives the catalog up if the session now belongs to someone other than this tab's account;
-	 * offline or on any other failure, keeps it.
+	 * Gives the catalog up if the session now belongs to someone other than this tab's account; while
+	 * working offline (no request is made) or on any other failure, keeps it.
 	 */
 	async #leaveIfStale() {
+		if (connectivity.workOffline) return;
 		try {
 			const response = await fetch(`${API}/me`);
 			if (response.status === 401) this.disconnect();
@@ -440,6 +636,7 @@ export class CatalogClient {
 		const worker = (this.#worker = this.#spawn());
 		worker.onmessage = ({ data }: MessageEvent<FromWorker>) => this.#heard(data);
 		this.#send({ type: 'init', api: API, wasm: wasmUrl, user });
+		if (connectivity.workOffline) this.#send({ type: 'offline', value: true });
 	}
 
 	/** Terminates the worker. Requests it had not answered are left for the next owner. */
@@ -500,3 +697,20 @@ export class CatalogClient {
 
 /** The page's one catalog client. */
 export const catalog = new CatalogClient();
+
+/**
+ * Notes in this tab's session storage how many unsent plays and changes `user`'s log holds, for
+ * the login page to tell.
+ */
+async function discarded(user: string) {
+	if (typeof indexedDB === 'undefined') return;
+	const port = new IdbPort(user);
+	try {
+		const count = await unsent(port);
+		if (count > 0) sessionStorage.setItem(DISCARDED, String(count));
+	} catch {
+		// Nothing could be counted, so nothing is told.
+	} finally {
+		port.close();
+	}
+}

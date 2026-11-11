@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Playlist, PlaylistItem, TrackSummary } from './api/types';
 import { CONFLICT_MESSAGE, EditablePlaylist, loadPlaylist, rowMoveOps } from './playlist.svelte';
+import { connectivity } from './connectivity.svelte';
+import type { Device } from './sync/device';
+import type { Local } from './sync/mutation';
+import { sender } from './sync/sender';
+import { type Env, memoryEnv } from './sync/store';
 import { applyOps } from './playlist-ops';
 import { toaster } from './toast.svelte';
 
@@ -45,10 +50,14 @@ const playlist: Playlist = {
 type Request = { method: string; path: string; body: Record<string, unknown>; key: string | null };
 type Reply = { status: number; body?: unknown };
 
+/** Whether the fake server stores the tracks an add names, so what it holds can be read back. */
+const applies = { on: false };
+
 /**
  * A server holding the playlist at a version. PATCH succeeds against the current version and
  * advances it, and is refused with `version_conflict` otherwise. `next` answers the following
- * request instead, once, and may hold it open to see what is sent meanwhile.
+ * request instead, once, and may hold it open to see what is sent meanwhile. With `editing`, the
+ * first plain GET (the version read before a first edit) is answered but left out of `requests`.
  */
 function server(editing = true) {
 	const state = {
@@ -78,6 +87,18 @@ function server(editing = true) {
 			};
 		}
 		state.version++;
+		if (r.body.ops)
+			for (const op of r.body.ops as {
+				op: string;
+				items?: { id: string }[];
+				positions?: number[];
+			}[]) {
+				if (!applies.on) continue;
+				if (op.op === 'add')
+					state.items = [...state.items, ...op.items!.map((p) => item(Number(p.id)))];
+				if (op.op === 'remove')
+					state.items = state.items.filter((_, i) => !op.positions!.includes(i));
+			}
 		for (const k of ['title', 'description', 'pinned']) {
 			if (k in r.body) state.details[k] = r.body[k];
 		}
@@ -114,14 +135,35 @@ function server(editing = true) {
 }
 
 let api: ReturnType<typeof server>;
+let env: Env;
 let list: EditablePlaylist;
+/** What the device was asked to make. */
+let made: Local[];
+/** Settles the device's making of each change, which is at once unless held. */
+let making: Promise<void>;
+const device: Device = {
+	apply: async (_user, local, answered) => {
+		await making;
+		// What it is asked to make, not what it is told was answered.
+		if (!answered) made.push(local);
+	},
+	rebase: async () => {},
+	confirmed: async () => {}
+};
 
-beforeEach(() => {
+beforeEach(async () => {
+	applies.on = false;
 	api = server();
+	env = memoryEnv();
+	made = [];
+	making = Promise.resolve();
+	sender.start('u', { env, fetch: api.fetch, device });
 	list = new EditablePlaylist(api.fetch, { playlist, items: [item(1), item(2), item(3)] });
 });
 
 afterEach(() => {
+	sender.stop();
+	connectivity.setWorkOffline(false);
 	toaster.dismiss();
 	vi.useRealTimers();
 });
@@ -150,17 +192,103 @@ describe('editing', () => {
 		expect(api.requests).toEqual([]);
 	});
 
-	it('takes the server’s playlist once nothing is pending', async () => {
+	it('is saving until the server has the edit, at the version the edit made', async () => {
 		list.edit({ ops: [{ op: 'move', positions: [0], at: 2 }] });
+		expect(list.playlist.version).toBe(2);
 		await list.idle();
 		expect(list.saving).toBe(false);
-		expect(list.playlist).toMatchObject({ version: 2, image: { id: 'mosaic-2' } });
+		expect(api.edits().map((r) => r.body.baseVersion)).toEqual([1]);
 		expect(ids(list.items)).toEqual(['2', '3', '1']);
+	});
+
+	it('has the device make the edit with its tracks, and says what it was made on', async () => {
+		list.edit(
+			{ title: 'Renamed', ops: [{ op: 'add', items: [{ type: 'track', id: '9' }], at: 0 }] },
+			[track(9)]
+		);
+		await vi.waitFor(() => expect(made).toHaveLength(1));
+		expect(made[0]).toMatchObject({
+			library: '11',
+			calls: [
+				{
+					name: 'editPlaylist',
+					args: {
+						playlistId: 'p1',
+						baseVersion: 1,
+						title: 'Renamed',
+						ops: [{ op: 'add', items: ['9'], at: 0 }]
+					}
+				}
+			]
+		});
+		await list.idle();
 	});
 
 	it('clears the artwork at once when the playlist empties', () => {
 		list.edit({ ops: [{ op: 'remove', positions: [0, 1, 2] }] });
 		expect(list.playlist.image).toBeNull();
+	});
+});
+
+describe('opened again', () => {
+	it('is saving while this tab holds changes to it unsent, and leaves showing them to the device', async () => {
+		connectivity.setWorkOffline(true);
+		list.edit({ ops: [{ op: 'add', items: [{ type: 'track', id: '9' }], at: 0 }] }, [track(9)]);
+		await sender.idle();
+
+		// What the device reads holds the edit; nothing applies it again here.
+		const again = new EditablePlaylist(api.fetch, {
+			playlist: { ...playlist, version: 2 },
+			items: [item(9), item(1), item(2), item(3)]
+		});
+		expect(ids(again.items)).toEqual(['9', '1', '2', '3']);
+		expect(again.saving).toBe(true);
+		connectivity.setWorkOffline(false);
+		sender.wake();
+		await again.idle();
+		expect(again.saving).toBe(false);
+		expect(api.edits().map((r) => r.body.baseVersion)).toEqual([1]);
+	});
+});
+
+describe('leaving the page and coming back', () => {
+	/** An edit that adds track `n`. */
+	const add = (n: number) => ({
+		ops: [{ op: 'add' as const, items: [{ type: 'track' as const, id: String(n) }] }]
+	});
+
+	it('keeps both offline edits made on either side, as the route builds the page again', async () => {
+		applies.on = true;
+		connectivity.setWorkOffline(true);
+		list.edit(add(9), [track(9)]);
+		await sender.idle();
+		// As the device reads it, with the first edit made.
+		const again = new EditablePlaylist(api.fetch, {
+			playlist: { ...playlist, version: 2 },
+			items: [item(1), item(2), item(3), item(9)]
+		});
+		again.edit(add(8), [track(8)]);
+		connectivity.setWorkOffline(false);
+		sender.wake();
+		await again.idle();
+		expect(api.edits().map((r) => r.body.baseVersion)).toEqual([1, 2]);
+		expect(api.state.items.map((i) => i.track?.id)).toEqual(['1', '2', '3', '9', '8']);
+		expect(toaster.current).toBeNull();
+	});
+
+	it('keeps them too where the page was read before the first reached the device', async () => {
+		applies.on = true;
+		connectivity.setWorkOffline(true);
+		list.edit(add(9), [track(9)]);
+		await sender.idle();
+		const again = new EditablePlaylist(api.fetch, { playlist, items: [item(1), item(2), item(3)] });
+		again.edit(add(8), [track(8)]);
+		connectivity.setWorkOffline(false);
+		sender.wake();
+		await sender.idle();
+		expect(api.edits().map((r) => r.body.baseVersion)).toEqual([1, 2]);
+		expect(api.state.items.map((i) => i.track?.id)).toEqual(['1', '2', '3', '9', '8']);
+		expect(toaster.current).toBeNull();
 	});
 });
 
@@ -181,47 +309,28 @@ describe('refresh', () => {
 		expect(ids(list.items)).toEqual(['1', '2', '3']);
 	});
 
-	it('never replaces an edit that is unconfirmed', async () => {
-		let answer!: (r: Reply) => void;
-		api.next.push(() => new Promise<Reply>((resolve) => (answer = resolve)));
+	it('ignores a read from before the device made an edit made here, and shows a newer one after', async () => {
+		let release!: () => void;
+		making = new Promise((resolve) => (release = resolve));
 		list.edit({ title: 'Mine' });
-		await vi.waitFor(() => expect(api.edits()).toHaveLength(1));
-		list.refresh(newer);
+		list.refresh({ ...newer, playlist: { ...newer.playlist, version: 3 } });
 		expect(list.playlist.title).toBe('Mine');
-		answer({ status: 409, body: { status: 409, code: 'version_conflict', currentVersion: 2 } });
+		// The read held back is offered again once the device has the edit.
+		release();
+		await vi.waitFor(() => expect(list.playlist.title).toBe('Elsewhere'));
+		list.refresh({ playlist: { ...playlist, title: 'Older', version: 2 }, items: [] });
+		expect(list.playlist.title).toBe('Elsewhere');
+		await list.idle();
+	});
+
+	it('shows what is read after a refusal, whatever its version', async () => {
+		api.next.push(() => ({ status: 409, body: { status: 409, code: 'version_conflict' } }));
+		api.state.items = [item(7)];
+		list.edit({ title: 'Mine' });
 		await list.idle();
 		expect(toaster.current?.message).toBe(CONFLICT_MESSAGE);
-	});
-});
-
-describe('refresh while sending', () => {
-	/** Holds the next request open; the returned function answers it. */
-	const hold = () => {
-		let answer!: (r: Reply) => void;
-		api.next.push(() => new Promise<Reply>((resolve) => (answer = resolve)));
-		return (r: Reply) => answer(r);
-	};
-	const newer = { playlist: { ...playlist, title: 'Elsewhere', version: 3 }, items: [item(3)] };
-
-	it('leaves an unconfirmed removal of rows in place', async () => {
-		const answer = hold();
-		list.edit({ ops: [{ op: 'remove', positions: [0] }] });
-		await vi.waitFor(() => expect(api.edits()).toHaveLength(1));
-		list.refresh(newer);
-		expect(ids(list.items)).toEqual(['2', '3']);
-		answer({ status: 200, body: { ...playlist, version: 4 } });
-		await list.idle();
-	});
-
-	it('shows a newer playlist heard meanwhile once the edit is confirmed', async () => {
-		const answer = hold();
-		list.edit({ title: 'Mine' });
-		await vi.waitFor(() => expect(api.edits()).toHaveLength(1));
-		list.refresh(newer);
-		answer({ status: 200, body: { ...playlist, title: 'Mine', version: 2 } });
-		await list.idle();
-		expect(list.playlist).toMatchObject({ title: 'Elsewhere', version: 3 });
-		expect(ids(list.items)).toEqual(['3']);
+		await vi.waitFor(() => expect(ids(list.items)).toEqual(['7']));
+		expect(list.playlist.title).toBe('Road Trip');
 	});
 });
 
@@ -237,22 +346,9 @@ describe('sending', () => {
 		await list.idle();
 		expect(api.edits().map((r) => r.body.baseVersion)).toEqual([1, 2, 3]);
 		expect(api.edits()[0].body.ops).toEqual([{ op: 'remove', positions: [0] }]);
-		expect(list.playlist).toMatchObject({ version: 4 });
+		expect(list.playlist).toMatchObject({ version: 4, pinned: true });
 		expect(ids(list.items)).toEqual(['3']);
 		expect(toaster.current).toBeNull();
-	});
-
-	it('keeps pending details over the server’s answers to earlier edits', async () => {
-		let release!: () => void;
-		api.next.push((r) => new Promise((done) => (release = () => done(api.answer(r)))));
-		list.edit({ pinned: true });
-		list.edit({ title: 'Later' });
-		await vi.waitFor(() => expect(api.edits()).toHaveLength(1));
-		release();
-		await vi.waitFor(() => expect(api.edits()).toHaveLength(2));
-		// The first is confirmed and the second still pending: both show.
-		expect(list.playlist).toMatchObject({ pinned: true, title: 'Later' });
-		await list.idle();
 	});
 
 	it('retries an unanswered edit with the same key until it gets through', async () => {
@@ -345,11 +441,10 @@ describe('a Liked Songs', () => {
 	it('puts adds at the top, leaving out what it holds, as the server does', async () => {
 		expect(ids(add(2, 9, 9, 4))).toEqual(['9', '4', '1', '2', '3']);
 		await liked.idle();
-		// What the server confirmed is what shows: a refused edit falls back to it.
-		api.next.push(() => ({ status: 422, body: { status: 422, code: 'validation_failed' } }));
-		liked.edit({ ops: [{ op: 'remove', positions: [0] }] });
-		await liked.idle();
-		expect(ids(liked.items)).toEqual(['9', '4', '1', '2', '3']);
+		// The device is given the add as made, and makes it by the same rule.
+		expect(made.at(-1)?.calls[0].args).toMatchObject({
+			ops: [{ op: 'add', items: ['2', '9', '9', '4'] }]
+		});
 	});
 
 	it('adds nothing for a song liked already, so later edits name the right positions', async () => {
@@ -381,16 +476,16 @@ describe('a Liked Songs', () => {
 });
 
 describe('when the server refuses', () => {
-	it('reloads after a conflict, drops what was pending, and says why', async () => {
+	it('shows the playlist read again after a conflict, drops what was pending, and says why', async () => {
 		// Another device moved the playlist on, and left one track.
 		api.state.version = 5;
 		api.state.items = [item(3)];
 		list.edit({ ops: [{ op: 'remove', positions: [0] }] });
 		list.edit({ title: 'Mine' });
 		await list.idle();
-		// The first edit's version check finds other items on the server, so nothing is sent.
-		expect(api.edits()).toHaveLength(0);
-		expect(ids(list.items)).toEqual(['3']);
+		// The first edit conflicts, and the server's items are not the ones it was made on.
+		expect(api.edits()).toHaveLength(1);
+		await vi.waitFor(() => expect(ids(list.items)).toEqual(['3']));
 		expect(list.playlist).toMatchObject({ version: 5, title: 'Road Trip' });
 		expect(list.saving).toBe(false);
 		expect(toaster.current?.message).toBe(CONFLICT_MESSAGE);
@@ -401,6 +496,7 @@ describe('when the server refuses', () => {
 		api.state.items = [item(3)];
 		list.edit({ pinned: true });
 		await list.idle();
+		await vi.waitFor(() => expect(list.playlist.version).toBe(5));
 		list.edit({ pinned: true });
 		await list.idle();
 		expect(api.edits().at(-1)?.body.baseVersion).toBe(5);
@@ -416,7 +512,7 @@ describe('when the server refuses', () => {
 		list.edit({ title: 'Built on the first' });
 		await list.idle();
 		expect(api.edits()).toHaveLength(1);
-		expect(ids(list.items)).toEqual(['1', '2', '3']);
+		await vi.waitFor(() => expect(ids(list.items)).toEqual(['1', '2', '3']));
 		expect(list.playlist).toEqual(playlist);
 		expect(toaster.current?.message).toBe('Couldn’t save your change. Position 7 is out of range.');
 	});

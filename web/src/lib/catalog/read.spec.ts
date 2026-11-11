@@ -1,27 +1,57 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-/** The shared state's answers are immediate. */
+/**
+ * The shared state's answers are immediate; the wait for an owner that is not serving yet is
+ * `waitForDevice`.
+ */
 const device = vi.hoisted(() => ({
 	onDevice: vi.fn(),
+	waitForDevice: vi.fn(),
 	outdated: false,
 	query: vi.fn()
 }));
-const link = vi.hoisted(() => ({ offline: false }));
+/**
+ * `offline` is the server not answering: the realtime connection lost, or a request that failed.
+ */
+const link = vi.hoisted(() => ({ offline: false, working: false }));
 vi.mock('./client.svelte', () => ({ catalog: device }));
-vi.mock('$lib/realtime.svelte', () => ({
-	realtime: {
-		get offline() {
-			return link.offline;
+vi.mock('$lib/connectivity.svelte', () => {
+	/**
+	 * Where the device stands, as the test sets it: working offline, no network, or the server not
+	 * answering.
+	 */
+	const state = () =>
+		link.working
+			? 'working-offline'
+			: navigator.onLine === false
+				? 'offline'
+				: link.offline
+					? 'unreachable'
+					: 'online';
+	return {
+		connectivity: {
+			get state() {
+				return state();
+			},
+			get blocked() {
+				return state() === 'offline' || state() === 'working-offline';
+			}
 		}
-	}
-}));
+	};
+});
 vi.mock('$app/paths', () => ({ base: '', resolve: (path: string) => path }));
 
 import { ApiError } from '$lib/api/root';
-import { read, readSearch, unavailableIfOffline } from './read';
+import { SLOW_MS, read, readSearch, unavailableIfNotOnline } from './read';
 
 const ON_DEVICE = { items: ['device'] };
 const ON_SERVER = { items: ['server'] };
+
+/** A server request that fails for want of an answer, as the typed client records it. */
+const unreached = () => {
+	link.offline = true;
+	return Promise.reject(new TypeError('Failed to fetch'));
+};
 
 /** A read of albums of library 1 with the server answering `answer`, and what it was asked. */
 function albums(params: object = { sort: 'name' }, answer: unknown = ON_SERVER) {
@@ -29,18 +59,28 @@ function albums(params: object = { sort: 'name' }, answer: unknown = ON_SERVER) 
 	return { server, result: read('listAlbums', '1', params, server) };
 }
 
+/**
+ * Says whether the library is on the device, to a read that waits for the owner and to one that
+ * does not.
+ */
+const has = (value: boolean) => {
+	device.onDevice.mockReturnValue(value);
+	device.waitForDevice.mockResolvedValue(value);
+};
+
 beforeEach(() => {
 	vi.clearAllMocks();
 	vi.spyOn(console, 'error').mockImplementation(() => {});
 	link.offline = false;
+	link.working = false;
 	device.outdated = false;
-	device.onDevice.mockReturnValue(true);
+	has(true);
 	device.query.mockResolvedValue(JSON.stringify(ON_DEVICE));
 });
 
 describe('where a read is answered', () => {
 	it('a library never fully synced is read from the server', async () => {
-		device.onDevice.mockReturnValue(false);
+		has(false);
 		const { server, result } = albums();
 		expect(await result).toEqual(ON_SERVER);
 		expect(server).toHaveBeenCalledOnce();
@@ -48,17 +88,21 @@ describe('where a read is answered', () => {
 	});
 
 	it('a library never fully synced is still read from the server while only the realtime connection is down', async () => {
-		device.onDevice.mockReturnValue(false);
+		has(false);
 		link.offline = true;
 		const { server, result } = albums();
 		expect(await result).toEqual(ON_SERVER);
 		expect(server).toHaveBeenCalledOnce();
 	});
 
-	it('a library never fully synced says so when the server cannot be reached either, and rethrows when online', async () => {
-		device.onDevice.mockReturnValue(false);
+	it('a library never fully synced says so when the server cannot be reached either, and lets a refusal stand', async () => {
+		has(false);
 		const failed = new TypeError('Failed to fetch');
-		await expect(read('listAlbums', '1', {}, () => Promise.reject(failed))).rejects.toBe(failed);
+		await expect(read('listAlbums', '1', {}, () => Promise.reject(failed))).rejects.toMatchObject({
+			code: 'not_on_device'
+		});
+		const refused = new ApiError(401, 'unauthenticated', 'sign in');
+		await expect(read('listAlbums', '1', {}, () => Promise.reject(refused))).rejects.toBe(refused);
 		link.offline = true;
 		await expect(read('listAlbums', '1', {}, () => Promise.reject(failed))).rejects.toMatchObject({
 			status: 503,
@@ -81,6 +125,29 @@ describe('where a read is answered', () => {
 		expect(server).not.toHaveBeenCalled();
 	});
 
+	it('a read made online asks the shared state and waits for no owner', async () => {
+		const { result } = albums();
+		await result;
+		expect(device.onDevice).toHaveBeenCalledWith('1');
+		expect(device.waitForDevice).not.toHaveBeenCalled();
+	});
+
+	it('a read made offline waits for the owner', async () => {
+		link.working = true;
+		const { result } = albums();
+		await result;
+		expect(device.waitForDevice).toHaveBeenCalledWith('1');
+		expect(device.onDevice).not.toHaveBeenCalled();
+	});
+
+	it('a device held by an owner of another version says the app needs updating', async () => {
+		link.working = true;
+		device.outdated = true;
+		has(false);
+		const { result } = albums();
+		await expect(result).rejects.toThrow(/needs updating/);
+	});
+
 	it('a library on the device answers from it, without asking the server', async () => {
 		const { server, result } = albums();
 		expect(await result).toEqual(ON_DEVICE);
@@ -91,22 +158,10 @@ describe('where a read is answered', () => {
 	it('the browser saying it is offline counts, whatever the realtime connection says', async () => {
 		vi.stubGlobal('navigator', { onLine: false });
 		try {
-			device.onDevice.mockReturnValue(false);
+			has(false);
 			const { server, result } = albums();
 			await expect(result).rejects.toMatchObject({ code: 'not_on_device' });
 			expect(server).not.toHaveBeenCalled();
-		} finally {
-			vi.unstubAllGlobals();
-		}
-	});
-
-	it('a device held by an owner of another version says the app needs updating', async () => {
-		vi.stubGlobal('navigator', { onLine: false });
-		try {
-			device.outdated = true;
-			device.onDevice.mockReturnValue(false);
-			const { result } = albums();
-			await expect(result).rejects.toThrow(/needs updating/);
 		} finally {
 			vi.unstubAllGlobals();
 		}
@@ -147,12 +202,50 @@ describe('where a read is answered', () => {
 	});
 });
 
-describe('unavailableIfOffline', () => {
+describe('a server that cannot be reached while no owner is serving yet', () => {
+	it('is answered from the device, which is waited for as offline', async () => {
+		// Not asked of the owner at first, since none serves; found once it does.
+		device.onDevice.mockReturnValue(false);
+		device.waitForDevice.mockResolvedValue(true);
+		expect(await read('listAlbums', '1', { sort: 'name' }, unreached)).toEqual(ON_DEVICE);
+		expect(device.waitForDevice).toHaveBeenLastCalledWith('1');
+		expect(device.query).toHaveBeenCalledWith('1', 'listAlbums', { sort: 'name' }, true);
+	});
+
+	it('a library not on the device shows the server’s own 500 while online', async () => {
+		has(false);
+		const broken = new ApiError(500, 'internal', 'broken');
+		await expect(read('listAlbums', '1', {}, () => Promise.reject(broken))).rejects.toBe(broken);
+	});
+
+	it('says unavailable when the device then fails, as offline', async () => {
+		device.onDevice.mockReturnValue(false);
+		device.waitForDevice.mockResolvedValue(true);
+		device.query.mockRejectedValue(new Error('closed'));
+		await expect(read('listAlbums', '1', {}, unreached)).rejects.toMatchObject({
+			code: 'unavailable_offline'
+		});
+	});
+});
+
+describe('offline', () => {
+	it('working offline reads the device and never asks the server', async () => {
+		link.working = true;
+		const { server, result } = albums();
+		expect(await result).toEqual(ON_DEVICE);
+		expect(server).not.toHaveBeenCalled();
+		const search = vi.fn(async () => ON_SERVER);
+		expect(await readSearch('search', '1', { q: 'a' }, search)).toEqual(ON_DEVICE);
+		expect(search).not.toHaveBeenCalled();
+	});
+});
+
+describe('unavailableIfNotOnline', () => {
 	it('marks a failure unavailable offline, and rethrows it online', () => {
 		const error = new TypeError('Failed to fetch');
-		expect(() => unavailableIfOffline(error)).toThrow(error);
+		expect(() => unavailableIfNotOnline(error)).toThrow(error);
 		link.offline = true;
-		expect(() => unavailableIfOffline(error)).toThrowError(
+		expect(() => unavailableIfNotOnline(error)).toThrowError(
 			expect.objectContaining({ status: 503, code: 'unavailable_offline' })
 		);
 	});
@@ -190,6 +283,13 @@ describe('readSearch', () => {
 		}
 	);
 
+	it('a server that cannot be reached is answered by a device that only a waiting ask finds, as no owner is serving yet', async () => {
+		device.onDevice.mockReturnValue(false);
+		device.waitForDevice.mockResolvedValue(true);
+		const { result } = search(vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+		expect(await result).toEqual(ON_DEVICE);
+	});
+
 	it('a server that refuses the request is not second-guessed', async () => {
 		const refusal = new ApiError(400, 'invalid', 'no');
 		await expect(search(vi.fn().mockRejectedValue(refusal)).result).rejects.toBe(refusal);
@@ -197,7 +297,7 @@ describe('readSearch', () => {
 	});
 
 	it('a library not on the device asks the server while only the realtime connection is down, says so when that fails or the device is offline, and online keeps the server’s failure', async () => {
-		device.onDevice.mockReturnValue(false);
+		has(false);
 		const failure = new TypeError('Failed to fetch');
 		await expect(search(vi.fn().mockRejectedValue(failure)).result).rejects.toBe(failure);
 		link.offline = true;
@@ -217,5 +317,92 @@ describe('readSearch', () => {
 		} finally {
 			vi.unstubAllGlobals();
 		}
+	});
+
+	describe('a slow server', () => {
+		/** A server answer the test settles itself. */
+		const hanging = () => {
+			let answer!: (value: unknown) => void;
+			let fail!: (error: unknown) => void;
+			const server = vi.fn(
+				() =>
+					new Promise<unknown>((resolve, reject) => {
+						answer = resolve;
+						fail = reject;
+					})
+			);
+			return { server, answer: (v: unknown) => answer(v), fail: (e: unknown) => fail(e) };
+		};
+
+		beforeEach(() => vi.useFakeTimers());
+		afterEach(() => vi.useRealTimers());
+
+		it('hands off to the device after the wait when the library is on it', async () => {
+			const { server } = hanging();
+			const result = readSearch('search', '1', { q: 'a' }, server);
+			await vi.advanceTimersByTimeAsync(SLOW_MS - 1);
+			expect(device.query).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(1);
+			expect(await result).toEqual(ON_DEVICE);
+		});
+
+		it('a server that answers within the wait is the answer, and the device is never asked', async () => {
+			const { server, answer } = hanging();
+			const result = readSearch('search', '1', { q: 'a' }, server);
+			await vi.advanceTimersByTimeAsync(SLOW_MS - 1);
+			answer(ON_SERVER);
+			expect(await result).toEqual(ON_SERVER);
+			await vi.advanceTimersByTimeAsync(SLOW_MS);
+			expect(device.query).not.toHaveBeenCalled();
+		});
+
+		it('a late failure after the hand-off is not an unhandled rejection', async () => {
+			const { server, fail } = hanging();
+			const result = readSearch('search', '1', { q: 'a' }, server);
+			await vi.advanceTimersByTimeAsync(SLOW_MS);
+			expect(await result).toEqual(ON_DEVICE);
+			fail(new TypeError('Failed to fetch'));
+			await vi.advanceTimersByTimeAsync(0);
+		});
+
+		it('with the library not on the device it keeps waiting for the server', async () => {
+			has(false);
+			const { server, answer } = hanging();
+			const result = readSearch('search', '1', { q: 'a' }, server);
+			await vi.advanceTimersByTimeAsync(SLOW_MS * 4);
+			answer(ON_SERVER);
+			expect(await result).toEqual(ON_SERVER);
+			expect(device.query).not.toHaveBeenCalled();
+		});
+
+		it('a server answer that lands while the device is still answering wins', async () => {
+			device.query.mockReturnValue(new Promise(() => {}));
+			const { server, answer } = hanging();
+			const result = readSearch('search', '1', { q: 'a' }, server);
+			await vi.advanceTimersByTimeAsync(SLOW_MS);
+			expect(device.query).toHaveBeenCalled();
+			answer(ON_SERVER);
+			expect(await result).toEqual(ON_SERVER);
+		});
+
+		it('a device that fails and then a server that fails shows the server’s failure', async () => {
+			device.query.mockRejectedValue(new Error('disk I/O error'));
+			const { server, fail } = hanging();
+			const result = readSearch('search', '1', { q: 'a' }, server);
+			const failure = new TypeError('Failed to fetch');
+			const caught = result.catch((error) => error);
+			await vi.advanceTimersByTimeAsync(SLOW_MS);
+			fail(failure);
+			expect(await caught).toBe(failure);
+		});
+
+		it('a device that fails after the hand-off falls back to the server’s answer', async () => {
+			device.query.mockRejectedValue(new Error('disk I/O error'));
+			const { server, answer } = hanging();
+			const result = readSearch('search', '1', { q: 'a' }, server);
+			await vi.advanceTimersByTimeAsync(SLOW_MS);
+			answer(ON_SERVER);
+			expect(await result).toEqual(ON_SERVER);
+		});
 	});
 });
