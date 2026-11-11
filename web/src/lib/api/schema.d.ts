@@ -1333,6 +1333,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/libraries/{libraryId}/scans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a library's scans
+         * @description What is under way, and how the library was last scanned: its queued and running scans,
+         *     and the last one to finish, newest first. That is the last scan that ran, `completed` or
+         *     `suspended`; a `cancelled` one never ran, so it is not listed. A scan queued while
+         *     another runs is next. Any
+         *     trigger's scans are listed, not only the ones an admin started
+         *     (`requirements/scanning.md` §5).
+         */
+        get: operations["adminListScans"];
+        put?: never;
+        /**
+         * Scan a library now
+         * @description Queues a scan of every root of the library (`requirements/scanning.md` §4) and answers
+         *     the scan that will do it, before it starts. Triggers never compound: if a scan of the
+         *     whole library is already queued, that scan is the answer and nothing more is queued. If
+         *     one is running, this queues one to follow it.
+         */
+        post: operations["adminStartScan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/plugins": {
         parameters: {
             query?: never;
@@ -1714,6 +1748,55 @@ export interface components {
             durationUs: components["schemas"]["DurationUs"];
             /** @description Content is still appearing. The library is fully usable either way. */
             scanning: boolean;
+        };
+        /**
+         * @description One scan of a library and its progress (`requirements/scanning.md` §5). Counts are as
+         *     files are met, so they grow while it runs, and may run slightly high after a scan resumes
+         *     from a restart.
+         */
+        Scan: {
+            id: components["schemas"]["Id"];
+            /**
+             * @description Why it started: a library's first scan, a change seen on disk, the schedule or a
+             *     restart, an admin, a change in what is read from files, or a restore.
+             * @enum {string}
+             */
+            trigger: "initial" | "watch" | "scheduled" | "manual" | "reconfigure" | "restore";
+            /**
+             * @description `cancelled` — a later scan covered its work before it started. `suspended` — it
+             *     stopped short and will not resume, as when a root did not answer; what it could not
+             *     reach is left as it was (`requirements/scanning.md` §7).
+             * @enum {string}
+             */
+            state: "queued" | "running" | "completed" | "cancelled" | "suspended";
+            /** Format: date-time */
+            startedAt: string | null;
+            /** Format: date-time */
+            finishedAt: string | null;
+            filesSeen: number;
+            filesProcessed: number;
+            /** @description Tracks added. */
+            added: number;
+            /** @description Tracks updated. */
+            updated: number;
+            /** @description Tracks whose files are now missing. */
+            missing: number;
+            /** @description Files and folders it had trouble with. */
+            problems: number;
+            /**
+             * @description Whether it covers every root of the library, whole. The trigger does not say: a scan
+             *     of changed files covers only their folders, and a retry of a suspended scan keeps its
+             *     trigger but covers only the roots that did not answer (`design/scanning.md` §9).
+             *     While one that does waits, `adminStartScan` answers with it.
+             */
+            wholeLibrary: boolean;
+            /**
+             * @description While it runs, the folder it is in, relative to whichever of the library's roots holds
+             *     it (`''` is that root itself). Which root is not said: a library's roots are not
+             *     served, and their paths never leave the server (`requirements/general.md` §3.7).
+             *     Otherwise `null`.
+             */
+            currentFolder: string | null;
         };
         AlbumRef: {
             id: components["schemas"]["Id"];
@@ -5187,6 +5270,54 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    adminListScans: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["Scan"][];
+                    };
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    adminStartScan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Queued, or already queued. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Scan"];
                 };
             };
             default: components["responses"]["Problem"];
