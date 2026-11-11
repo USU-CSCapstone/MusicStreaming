@@ -33,7 +33,7 @@
 			return;
 		}
 		realtime.start();
-		queue.connect(realtime, marks);
+		queue.connect(realtime, data.me.id, marks);
 		catalog.connect(realtime, data.me.id);
 		return () => {
 			catalog.disconnect();

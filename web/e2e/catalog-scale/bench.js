@@ -67,7 +67,12 @@ window.runBench = async () => {
 		]
 	];
 	rows.push(...env);
-	for (const message of [{ phase: 'import' }, { phase: 'query', db: 'import.db' }]) {
+	for (const message of [
+		{ phase: 'import' },
+		{ phase: 'index' },
+		{ phase: 'recipe' },
+		{ phase: 'query', db: 'import.db' }
+	]) {
 		rows.push(...(await phase(message)));
 	}
 	return table(rows);

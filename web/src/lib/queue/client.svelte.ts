@@ -3,6 +3,7 @@
 // worker.
 
 import { API } from '$lib/api/client';
+import { offline } from '$lib/catalog/read';
 import wasmUrl from '$lib/core-wasm/jewelcase_core_wasm_bg.wasm?url';
 import type { RealtimeServerMessage, SentEdit } from '$lib/api/types';
 import type { marks as Marks } from '$lib/marks.svelte';
@@ -61,14 +62,14 @@ export class QueueClient {
 	}
 
 	/**
-	 * Starts the worker and feeds it the queue's realtime messages, and each hide and unhide
-	 * `marks` shows, whose rows it leaves out, until [`disconnect`](#disconnect).
+	 * Starts the worker for `user`'s queue and feeds it the queue's realtime messages, and each
+	 * hide and unhide `marks` shows, whose rows it leaves out, until [`disconnect`](#disconnect).
 	 */
-	connect(realtime: Pick<Realtime, 'on'>, marks?: Pick<typeof Marks, 'onHidden'>) {
+	connect(realtime: Pick<Realtime, 'on'>, user: string, marks?: Pick<typeof Marks, 'onHidden'>) {
 		if (this.#worker) return;
 		const worker = (this.#worker = this.#spawn());
 		worker.onmessage = ({ data }: MessageEvent<FromWorker>) => this.#heard(data);
-		this.#send({ type: 'init', api: API, wasm: wasmUrl });
+		this.#send({ type: 'init', api: API, wasm: wasmUrl, user });
 		const unsubscribe = realtime.on((message: RealtimeServerMessage) => {
 			if (QUEUE_MESSAGES.has(message.type)) this.#send({ type: 'message', message });
 		});
@@ -102,18 +103,21 @@ export class QueueClient {
 	/**
 	 * Applies `edit` here at once and sends it to the server in the background. An `add` of a
 	 * `recipe` shows as `length` rows, the view's count, until the server says how many it made.
+	 * The worker is told whether the app counts itself offline, as it resolves a search on the
+	 * device only then.
 	 */
 	edit(edit: SentEdit, length?: number) {
-		this.#send({ type: 'edit', edit, length });
+		this.#send({ type: 'edit', edit, length, offline: offline() });
 	}
 
 	/**
 	 * Starts a queue here (`QueueStore.start`): settles once the worker has it, and then
 	 * `queueId`, `current` and the rest are the new queue's. False if the start is not a position
-	 * of its source. Never settles if the worker is stopped first.
+	 * of its source. Never settles if the worker is stopped first. The worker is told whether the
+	 * app counts itself offline, as with `edit`.
 	 */
 	start(request: StartRequest): Promise<boolean> {
-		return this.#ask((id) => ({ type: 'start', id, request }));
+		return this.#ask((id) => ({ type: 'start', id, request: { ...request, offline: offline() } }));
 	}
 
 	/**
