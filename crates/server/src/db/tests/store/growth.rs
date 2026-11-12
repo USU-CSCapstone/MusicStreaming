@@ -9,6 +9,8 @@ use jewelcase_scanner::*;
 
 use super::{make, record};
 use crate::db::store::SqliteStore;
+use crate::db::{Database, queue};
+use rusqlite::Connection;
 
 mod credits;
 mod problems;
@@ -47,10 +49,21 @@ fn steps(store: &SqliteStore, write: impl FnOnce()) -> u64 {
         false
     };
     let db = store.db();
-    db.write_blocking(move |tx| tx.progress_handler(1, Some(count))).unwrap();
+    on_writer(db, move |conn| conn.progress_handler(1, Some(count)));
     write();
-    db.write_blocking(|tx| tx.progress_handler(0, None::<fn() -> bool>)).unwrap();
-    steps.load(Ordering::Relaxed)
+    on_writer(db, |conn| conn.progress_handler(0, None::<fn() -> bool>));
+    let n = steps.load(Ordering::Relaxed);
+    assert_ne!(n, 0, "the progress handler counted no steps");
+    n
+}
+
+/// Runs `f` on the writer's connection itself, outside a transaction, which setting a progress
+/// handler needs.
+fn on_writer(
+    db: &Database,
+    f: impl FnOnce(&mut Connection) -> rusqlite::Result<()> + Send + 'static,
+) {
+    queue(&db.writer, f).unwrap().blocking_recv().unwrap().unwrap();
 }
 
 /// The IDs of album `album`'s tracks, in path order.

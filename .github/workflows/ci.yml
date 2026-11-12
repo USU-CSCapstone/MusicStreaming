@@ -56,7 +56,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        crate: [core, ffmpeg, scanner, plugins, server]
+        crate: [core, catalog, ffmpeg, scanner, plugins, server]
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install

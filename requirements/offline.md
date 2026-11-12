@@ -21,12 +21,12 @@ The catalog is small enough to carry entirely; imagery and audio are not, and do
 
 **Every library a user can access is browsable, searchable, and queueable on their device without downloading anything** — including tracks whose audio is not present. This is the design target and the normal case; [§1.2](#12-when-the-catalog-does-not-fit) is the only exception.
 
-- **Sync is automatic and invisible.** The user never initiates it, waits on it, or is told a device is "not ready".
-- **A partially synced device is fully usable.** Sync fills in progressively; nothing is gated on its completion.
-- **It costs proportionally.** Bringing a device current after ten new tracks costs what ten tracks cost, not what the library costs.
+- **Sync is automatic and invisible while online.** The user never initiates it, waits on it, or is told a device is "not ready": until a library's catalog is on the device, its pages are answered from the server. The one case the user is told about is being offline before a library's first sync, when the page says plainly that the library isn't on this device yet.
+- **A device that is still syncing is fully usable.** Nothing is gated on its completion.
+- **It costs proportionally.** Bringing a device current after ten new tracks costs what ten tracks cost, not what the library costs. When a library has changed so much that fetching it whole is cheaper than catching up, the device fetches it whole.
 
 ### 1.1 Footprint
-The device footprint is **bounded well below what the music itself would cost** — even for a library of hundreds of thousands of tracks, comparable to a handful of downloaded songs ([`performance.md` §6](performance.md#6-client-footprint)).
+The device footprint is **bounded well below what the music itself would cost** — even for a library of hundreds of thousands of tracks ([`performance.md` §6](performance.md#6-client-footprint)).
 
 - **A visual stand-in for every album and artist**, a few bytes each, enough to render a recognizable, correctly coloured placeholder. A whole library's worth costs about as much as one photograph.
 - **Full-resolution imagery is cached as it is seen**, within a bounded cache, and is always present for downloads ([§2](#2-a-download-is-complete)).
