@@ -177,7 +177,7 @@ fn every_device_column_exists_in_the_server_schema_with_the_same_type() {
             assert!(server[table].contains(column), "{table}.{} is not on the server", column.0);
         }
     }
-    assert_eq!(device.len(), 17);
+    assert_eq!(device.len(), 18);
 }
 
 #[test]
@@ -185,7 +185,7 @@ fn the_device_schema_changes_only_with_its_version() {
     let hash = format!("{:x}", Sha256::digest(SCHEMA));
     assert_eq!(
         (SCHEMA_VERSION, hash.as_str()),
-        (8, "f84ac3b088fb5dab0fb0efc56f070843e1a5d1e694002dc40051bf0f5b762d7a"),
+        (9, "fdc109151b789ec3ccee1bab13e1a0110f77c626e3a2dc2163b1810df1dc97ff"),
         "schema.sql changed: raise SCHEMA_VERSION, and pin its new hash here"
     );
 }

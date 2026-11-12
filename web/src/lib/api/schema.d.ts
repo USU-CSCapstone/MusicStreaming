@@ -136,16 +136,18 @@ export interface paths {
         };
         /**
          * List the caller's changes
-         * @description The caller's own playlists, Liked Songs included, and the tracks they hid, as a feed of
-         *     changes, for a device that keeps a copy of them (`requirements/offline.md`). It is read
-         *     like `listLibraryChanges`: each playlist, each playlist item and each hidden track
-         *     appears at most once, as its latest change, in order, so `after=0` is all of them now and
-         *     a later `after` is only what changed since; a catch-up after one item edit is that item.
-         *     An upsert carries the current rows (`playlists`, `playlist_items` or `hidden_tracks` of
-         *     the device schema, `crates/catalog/src/schema.sql`) and a delete is a tombstone. A
-         *     deleted playlist is one tombstone: the device drops its items with it. An item's change
-         *     names its playlist in `id` and the item in `key`; an unhidden track is its hide's
-         *     tombstone. Nothing of another account is ever listed.
+         * @description The caller's own playlists, Liked Songs included, the tracks they hid, and their recent
+         *     searches, as a feed of changes, for a device that keeps a copy of them
+         *     (`requirements/offline.md`). It is read like `listLibraryChanges`: each playlist, each
+         *     playlist item, each hidden track and each recent search appears at most once, as its
+         *     latest change, in order, so `after=0` is all of them now and a later `after` is only what
+         *     changed since; a catch-up after one item edit is that item. An upsert carries the current
+         *     rows (`playlists`, `playlist_items`, `hidden_tracks` or `recent_searches` of the device
+         *     schema, `crates/catalog/src/schema.sql`) and a delete is a tombstone. A deleted playlist
+         *     is one tombstone: the device drops its items with it. An item's change names its playlist
+         *     in `id` and the item in `key`; an unhidden track is its hide's tombstone, and a recent
+         *     search removed, replaced by the same words, pushed out by newer ones or aged out of the
+         *     window is its own. Nothing of another account is ever listed.
          *
          *     Only what is in libraries the caller reaches is listed. A library the caller lost
          *     access to is left out, so its playlists neither arrive nor are deleted here: a device
@@ -922,6 +924,12 @@ export interface paths {
          *     words searched again, ignoring case and accents, replace the earlier entry under a new
          *     ID. `422` for a query with nothing to search for or over 500 bytes, or a `selected`
          *     that is not a track, album, or artist in this library.
+         *
+         *     A client may choose the search's `id`, as a device that records one offline does, so
+         *     that removing it later names the same search here. One already used by any search is
+         *     `409 id_taken`, without saying whose, and nothing is recorded; one that is not a
+         *     positive 63-bit integer in decimal is `422`. Send an `Idempotency-Key`, so a retry
+         *     records it, and tells the plugins the caller shares searches with, once.
          */
         post: operations["recordRecentSearch"];
         /** Clear recent searches */
@@ -1796,8 +1804,8 @@ export interface components {
             /** @enum {string} */
             op: "upsert" | "delete";
             /** @enum {string} */
-            kind: "playlist" | "playlistItem" | "hiddenTrack";
-            /** @description The playlist, for a `playlist` or `playlistItem`, or the track a `hiddenTrack` hid. */
+            kind: "playlist" | "playlistItem" | "hiddenTrack" | "recentSearch";
+            /** @description The playlist, for a `playlist` or `playlistItem`, the track a `hiddenTrack` hid, or the `recentSearch`. */
             id: components["schemas"]["Id"];
             /**
              * Format: int64
@@ -1805,8 +1813,8 @@ export interface components {
              */
             key?: number;
             /**
-             * @description The rows by table name, `playlists`, `playlist_items` or `hidden_tracks`, with an
-             *     upsert. Liked Songs is a playlist like any other here.
+             * @description The rows by table name, `playlists`, `playlist_items`, `hidden_tracks` or
+             *     `recent_searches`, with an upsert. Liked Songs is a playlist like any other here.
              */
             rows?: {
                 [key: string]: {
@@ -2365,6 +2373,12 @@ export interface components {
             query: string;
             /** @description The result acted on, if any. A track, album, or artist in this library. */
             selected?: components["schemas"]["EntityRef"];
+            /**
+             * @description The search's ID, chosen by the client: a positive 63-bit integer in decimal, as IDs
+             *     are shown. Omitted, the server chooses. See `recordRecentSearch`.
+             * @example 4611686018427387904
+             */
+            id?: string;
         };
         /** @description What any source can say about a playlist. `Playlist` adds what only the user's own playlists have. */
         PlaylistBase: {
@@ -5052,7 +5066,17 @@ export interface operations {
     recordRecentSearch: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /**
+                 * @description Client-generated, at most 128 characters; longer, empty or not plain text is `422`. A
+                 *     repeated key returns the original result without applying twice: the same status and
+                 *     body, whatever else the request says. Keys are the caller's own, so another user's
+                 *     identical key is another key. Only a request that applied is remembered, so one that was
+                 *     refused (`409`, `422`) can be sent again with the same key. Kept for 8 days. Every write
+                 *     takes it (**Idempotency** in the conventions); it is listed where a retry matters most.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 libraryId: components["parameters"]["LibraryId"];
             };
@@ -5071,6 +5095,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecentSearch"];
+                };
+            };
+            /** @description `id_taken` — a search already has the `id` the request chose. Nothing was recorded. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
                 };
             };
             default: components["responses"]["Problem"];

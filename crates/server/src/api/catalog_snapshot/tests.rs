@@ -156,7 +156,7 @@ async fn the_snapshot_holds_exactly_the_device_rows_of_its_library_at_its_positi
             _ => tables.push((table.to_owned(), column.to_owned())),
         }
     }
-    assert_eq!(tables.len(), 17);
+    assert_eq!(tables.len(), 18);
     let read = |conn: &Connection, table: &str, cols: &str| -> Vec<Vec<rusqlite::types::Value>> {
         let scope = match table {
             "tag_types" => "key IN (SELECT type FROM tags WHERE library_id = 1)",
@@ -174,7 +174,9 @@ async fn the_snapshot_holds_exactly_the_device_rows_of_its_library_at_its_positi
     };
     for (table, cols) in tables {
         // An account's own rows are never in a library's snapshot, which every account shares.
-        if ["playlists", "playlist_items", "hidden_tracks"].contains(&table.as_str()) {
+        if ["playlists", "playlist_items", "hidden_tracks", "recent_searches"]
+            .contains(&table.as_str())
+        {
             assert_eq!(read(&snapshot, &table, &cols), Vec::<Vec<_>>::new(), "{table}");
             continue;
         }
@@ -743,6 +745,11 @@ async fn no_account_row_is_in_a_snapshot_every_account_shares() {
             )?;
             tx.execute("INSERT INTO playlist_items VALUES (?1, 1048576, 1, 1001, 0)", [id])?;
         }
+        // Each account's recent searches there.
+        tx.execute_batch(
+            "INSERT INTO recent_searches (id, user_id, library_id, query, folded, searched_at) \
+             VALUES (8, 1, 1, 'Mine', 'mine', 0), (9, 2, 1, 'Theirs', 'theirs', 0)",
+        )?;
         // The other account's like and hides, in the library this account downloads.
         tx.execute(
             "INSERT INTO playlists (id, library_id, user_id, kind, title, folded, sort_key, \
@@ -761,7 +768,7 @@ async fn no_account_row_is_in_a_snapshot_every_account_shares() {
     let (_, bytes) = built(&app).await;
     let (_file, snapshot) = open(&bytes);
 
-    for table in ["playlists", "playlist_items", "hidden_tracks"] {
+    for table in ["playlists", "playlist_items", "hidden_tracks", "recent_searches"] {
         let rows: i64 =
             snapshot.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0)).unwrap();
         assert_eq!(rows, 0, "{table}");

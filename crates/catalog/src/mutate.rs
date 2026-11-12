@@ -1,5 +1,6 @@
-//! The account's writes to the rows a device keeps: like, unlike, hide, unhide, and create, edit,
-//! append to and delete a playlist (`design/general.md` §3). The server's handlers and a device
+//! The account's writes to the rows a device keeps: like, unlike, hide, unhide, create, edit,
+//! append to and delete a playlist, and record, remove and clear a recent search
+//! (`design/general.md` §3). The server's handlers and a device
 //! both run this code, so a write changes the same rows whichever applies it, as reads already
 //! share their SQL. The server adds what is its own: authorization, the feeds, the marks plugins
 //! read, idempotency and announcements, each reached through the [`Effect`]s a write reports.
@@ -27,6 +28,7 @@ mod hidden;
 mod keys;
 mod like;
 mod playlist;
+mod search;
 
 pub use artwork::{mosaic_id, set as set_artwork};
 pub use edit::{
@@ -34,6 +36,7 @@ pub use edit::{
 };
 pub use like::{Liked, Removed};
 pub use playlist::Deleted;
+pub use search::{MAX_QUERY, check_query};
 
 /// How far apart the keys of a playlist's items start, so an item put between two takes the
 /// midpoint, 20 times over, before the playlist is renumbered.
@@ -46,7 +49,7 @@ pub enum Error {
     NotFound,
     /// The edit was made on another version: the playlist is at this one.
     VersionConflict(i64),
-    /// The playlist ID a create chose is used already.
+    /// The ID a create or a recorded search chose is used already.
     IdTaken,
     /// The arguments are not acceptable; the message is safe to show.
     Invalid(String),
@@ -117,6 +120,9 @@ pub enum Effect {
     Hidden { track: i64, hidden: bool },
     /// A track entered Liked Songs, or left it.
     Liked { track: i64, liked: bool },
+    /// A recent search was recorded (`kept`), or deleted: `removed` by the user, or replaced by
+    /// the same words or pushed out by newer ones.
+    Search { id: i64, kept: bool, removed: bool },
 }
 
 /// One write's view of a database that is in a transaction, which the caller commits.
@@ -196,7 +202,7 @@ impl<'a> Writer<'a> {
         }
         let text = id.to_string();
         let before = match kind {
-            Kind::HiddenTrack => {
+            Kind::HiddenTrack | Kind::RecentSearch => {
                 sync::export_for(self.conn, self.user, self.library, kind, &text, key)?
             }
             _ => sync::export(self.conn, self.library, kind, &text, key)?,
@@ -292,6 +298,30 @@ struct DeleteArgs {
     playlist_id: Id,
 }
 
+/// The result a recorded search's user acted on.
+#[derive(Deserialize)]
+struct SelectedArgs {
+    #[serde(rename = "type")]
+    kind: String,
+    id: Id,
+}
+
+/// The arguments of `recordSearch`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchArgs {
+    id: Id,
+    query: String,
+    selected: Option<SelectedArgs>,
+}
+
+/// The arguments of `deleteSearch`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteSearchArgs {
+    id: Id,
+}
+
 /// Reads `args`, JSON text, as `T`.
 fn parse<T: serde::de::DeserializeOwned>(args: &str) -> Result<T, Error> {
     serde_json::from_str(args).map_err(|error| Error::Invalid(error.to_string()))
@@ -303,8 +333,9 @@ fn parse<T: serde::de::DeserializeOwned>(args: &str) -> Result<T, Error> {
 /// give a Liked Songs it must make), `hide` and `unhide` (`trackId`), `createPlaylist` (`id`,
 /// `title`, `description`, `items` as track IDs), `editPlaylist` (`playlistId`, `baseVersion`,
 /// `title`, `description`, `pinned`, and `ops` as `editPlaylist` takes them, with track IDs),
-/// `appendToPlaylist` (`playlistId`, `items`) and `deletePlaylist` (`playlistId`). Nothing is
-/// written when it fails.
+/// `appendToPlaylist` (`playlistId`, `items`), `deletePlaylist` (`playlistId`), `recordSearch`
+/// (`id`, `query`, and `selected` as `{type, id}`), `deleteSearch` (`id`; one the device does not
+/// hold is no change) and `clearSearches` (none). Nothing is written when it fails.
 pub fn apply(
     conn: &Connection,
     user: i64,
@@ -314,13 +345,15 @@ pub fn apply(
     now: i64,
 ) -> Result<Undo, Error> {
     let tx = conn.unchecked_transaction()?;
-    let undo = apply_in(&tx, user, library, name, args, now)?;
+    let undo = apply_in(&tx, user, library, name, args, now, &mut |_| Ok(()))?;
     tx.commit()?;
     Ok(undo)
 }
 
 /// [`apply`] inside a transaction the caller holds: it commits what this wrote, or rolls back
-/// after a failure, as part of its own work.
+/// after a failure, as part of its own work. Each row written is reported to `effects`, as a
+/// [`Writer`] reports it, and a deleted playlist as [`Effect::Playlist`] too, which the server's
+/// handler records its own way.
 pub fn apply_in(
     conn: &Connection,
     user: i64,
@@ -328,9 +361,9 @@ pub fn apply_in(
     name: &str,
     args: &str,
     now: i64,
+    effects: &mut dyn FnMut(Effect) -> rusqlite::Result<()>,
 ) -> Result<Undo, Error> {
-    let mut none = |_| Ok(());
-    let mut w = Writer::new(conn, user, library, now, &mut none).recording();
+    let mut w = Writer::new(conn, user, library, now, effects).recording();
     match name {
         "like" => {
             let TrackArgs { track_id, liked_id } = parse(args)?;
@@ -366,7 +399,17 @@ pub fn apply_in(
         "deletePlaylist" => {
             let DeleteArgs { playlist_id } = parse(args)?;
             w.delete_playlist(playlist_id.0)?.ok_or(Error::NotFound)?;
+            w.report(Effect::Playlist { id: playlist_id.0 })?;
         }
+        "recordSearch" => {
+            let SearchArgs { id, query, selected } = parse(args)?;
+            let selected = selected.as_ref().map(|s| (s.kind.as_str(), s.id.0));
+            w.record_search(id.0, &query, selected)?;
+        }
+        "deleteSearch" => {
+            w.delete_search(parse::<DeleteSearchArgs>(args)?.id.0)?;
+        }
+        "clearSearches" => w.clear_searches()?,
         other => return Err(Error::Invalid(format!("no write is named {other}"))),
     }
     Ok(w.undo())

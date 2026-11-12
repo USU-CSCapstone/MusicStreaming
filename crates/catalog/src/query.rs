@@ -19,7 +19,7 @@ use crate::recipes::{self, Recipe};
 use crate::tag_filter::{TagFilter, Tags};
 use crate::tags::{self, TagSort};
 use crate::tracks::{self, TrackOrder, TrackSort};
-use crate::{AnyId, Id, Invalid, hidden, search};
+use crate::{AnyId, Id, Invalid, hidden, recent_searches, search};
 
 /// Why a query could not be answered; the message says why, safe to show a client.
 #[derive(Debug)]
@@ -155,6 +155,11 @@ struct HiddenParams {
     cursor: Option<String>,
     limit: Option<u32>,
 }
+
+/// A `listRecentSearches` request's parameters: none.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoParams {}
 
 /// A `search` request's parameters.
 #[derive(Deserialize)]
@@ -299,6 +304,11 @@ pub fn answer(
             let request =
                 Request::new(&hidden::HIDDEN_AT, order, p.cursor, p.limit)?.memoized(memo);
             json(hidden::list(conn, user, library, request)?)
+        }
+        "listRecentSearches" => {
+            let NoParams {} = serde_json::from_str(params)?;
+            // The window the server keeps them for is left to the feed's deletions.
+            json(recent_searches::list(conn, user, library, i64::MIN)?)
         }
         "resolveRecipe" => {
             let RecipeParams { recipe } = serde_json::from_str(params)?;

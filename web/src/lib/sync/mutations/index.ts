@@ -17,6 +17,7 @@ import {
 	restoreQueueMutation,
 	startQueueMutation
 } from './queue';
+import { clearSearches, deleteSearch, recordSearch } from './searches';
 
 /** Every kind of mutation, by name. */
 export const registry = {
@@ -29,7 +30,10 @@ export const registry = {
 	startQueue: startQueueMutation,
 	editQueue: editQueueMutation,
 	restoreQueue: restoreQueueMutation,
-	deleteKeptQueue: deleteKeptQueueMutation
+	deleteKeptQueue: deleteKeptQueueMutation,
+	recordSearch,
+	deleteSearch,
+	clearSearches
 };
 
 /** The name of a kind of mutation. */
