@@ -407,6 +407,7 @@ class Player {
 		const track = tracks[at];
 		const key = crypto.randomUUID();
 		const ids = tracks.map((t) => t.id);
+		const parked = this.#parked();
 		this.#summaries.set(track.id, track);
 		this.#starting = true;
 		this.#wantsNext = false;
@@ -419,11 +420,21 @@ class Player {
 		const request = from
 			? { start: at, startTrackId: track.id, total: from.total, loaded: ids }
 			: { start: at };
-		void queue.start({ queueId: crypto.randomUUID(), context, source, ...request }).then(() => {
+		const start = { queueId: crypto.randomUUID(), context, source, parked, ...request };
+		void queue.start(start).then(() => {
 			this.#starting = false;
 			void this.#preload();
 			this.#carryOutWait();
 		});
+	}
+
+	/**
+	 * Where playback is in the queue a start or restore replaces, for the queue to be kept with, as
+	 * the server keeps it from the player state; undefined with nothing playing.
+	 */
+	#parked() {
+		const item = this.#item;
+		return item ? { item, positionMs: Math.round(this.position * 1000) } : undefined;
 	}
 
 	/** Carries out the Next or skip that came while a start or restore was on its way, now that it has settled. */
@@ -438,14 +449,14 @@ class Player {
 
 	/**
 	 * Restores the kept queue `queueId` and plays it here from where it was left, taking playback
-	 * over as a start does (`requirements/queue.md` §6). Nothing changes until the server has
-	 * answered, and the first report, naming an item it holds, goes after. Settles with why it
-	 * was not restored, or null.
+	 * over as a start does (`requirements/queue.md` §6), from the state the device holds, online or
+	 * not. The first report, naming an item the server's queue holds, waits for the server's
+	 * answer. Settles with why it was not restored, or null.
 	 */
 	async restore(queueId: string): Promise<string | null> {
-		// As a start's wait: the queue is not followed while the server's answer is on its way.
+		// As a start's wait: the queue is not followed while the worker installs it.
 		this.#starting = true;
-		const result = await queue.restore(queueId);
+		const result = await queue.restore(queueId, this.#parked());
 		this.#starting = false;
 		if (!result.ok) {
 			// What was pressed meanwhile applies to the queue that is still playing.

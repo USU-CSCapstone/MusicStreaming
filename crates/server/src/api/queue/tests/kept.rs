@@ -1,4 +1,5 @@
-//! Kept queues: `listKeptQueues`, `restoreQueue` and `deleteKeptQueue`, and `queuesChanged`.
+//! Kept queues: `listKeptQueues`, `getKeptQueue`, `restoreQueue` and `deleteKeptQueue`, and
+//! `queuesChanged`.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -196,6 +197,128 @@ async fn parking_takes_its_place_from_the_player_state() {
     assert_eq!(restored_position(&app, QUEUE).await, first);
     begin(&app, &queue(3), &key(3), true).await;
     assert_eq!(restored_position(&app, QUEUE).await, first, "kept through another parking");
+}
+
+/// `getKeptQueue` as `token`.
+async fn kept_one(app: &Router, token: &str, queue: &str) -> (StatusCode, Value) {
+    call(app, token, "GET", &format!("/api/v1/me/queues/{queue}"), None).await
+}
+
+/// A kept queue is read as a restore would make it active, with its position, from memory before
+/// the save and from the database after, and reading it restores nothing. The active queue, a
+/// parked queue that was not adjusted, another account's and an unknown one are `404`.
+#[tokio::test]
+async fn a_kept_queue_is_read_without_restoring_it() {
+    let (_temp, state, app) = setup().await;
+    let address = serve(app.clone()).await;
+    let mut desk = connect_with(address, TOKEN).await;
+    begin(&app, QUEUE, KEY, true).await;
+    let place = json!({ "itemId": format!("{KEY}.1"), "positionMs": 3000, "start": true });
+    report(&mut desk, "paused", place).await;
+    begin(&app, OTHER, KEY2, false).await;
+    begin(&app, &queue(3), &key(3), false).await;
+
+    let check = |answer: &Value| {
+        assert_eq!(answer["queueId"], json!(QUEUE));
+        assert_eq!(answer["version"], json!(1));
+        assert_eq!(answer["context"], json!({ "type": "album", "id": "101" }));
+        assert_eq!(answer["state"]["sources"][0]["key"], json!(KEY));
+        assert_eq!(answer["state"]["adjusted"], json!(true));
+        assert_eq!(answer["position"], json!({ "item": format!("{KEY}.1"), "positionMs": 3000 }));
+    };
+    let (status, parked) = kept_one(&app, TOKEN, QUEUE).await;
+    assert_eq!(status, StatusCode::OK, "{parked}");
+    check(&parked);
+    // Parked unadjusted and not yet saved, it is due for deletion.
+    assert_eq!(kept_one(&app, TOKEN, OTHER).await.0, StatusCode::NOT_FOUND);
+    state.queues.save(&state.db).await;
+    let (status, saved) = kept_one(&app, TOKEN, QUEUE).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    check(&saved);
+    assert_eq!(snapshot(&app).await["queueId"], json!(queue(3)));
+    assert_eq!(ids(&kept(&app, TOKEN, "").await.1), [QUEUE]);
+
+    for (token, id) in [
+        (TOKEN, queue(3)),
+        (TOKEN, OTHER.to_owned()),
+        ("user2", QUEUE.to_owned()),
+        (TOKEN, queue(9)),
+    ] {
+        let (status, body) = kept_one(&app, token, &id).await;
+        assert_eq!((status, &body["code"]), (StatusCode::NOT_FOUND, &json!("not_found")), "{id}");
+    }
+}
+
+/// `listKeptQueues` as the owner with `query`, naming `known` in `If-None-Match`: the status, the
+/// `ETag` and whether a body came.
+async fn kept_tagged(
+    app: &Router,
+    query: &str,
+    known: Option<&str>,
+) -> (StatusCode, Option<String>, bool) {
+    let mut request = axum::http::Request::get(format!("/api/v1/me/queues?{query}"))
+        .header(axum::http::header::AUTHORIZATION, format!("Bearer {TOKEN}"));
+    if let Some(known) = known {
+        request = request.header(axum::http::header::IF_NONE_MATCH, known);
+    }
+    let (status, headers, body) =
+        crate::api::testing::respond(app.clone(), request.body(axum::body::Body::empty()).unwrap())
+            .await;
+    let tag = headers.get(axum::http::header::ETAG).map(|v| v.to_str().unwrap().to_owned());
+    (status, tag, !body.is_empty())
+}
+
+/// The first page of the kept list carries a tag over the whole kept set: the same tag answers
+/// `304` with no body until a queue is kept, saved, deleted or expired, and another `limit` has
+/// another tag. Later pages carry none.
+#[tokio::test]
+async fn the_kept_list_is_not_sent_again_while_it_has_not_changed() {
+    let (_temp, state, app) = setup().await;
+    let first = || async { kept_tagged(&app, "limit=1", None).await.1.unwrap() };
+    let unchanged = |tag: String| {
+        let app = app.clone();
+        async move { kept_tagged(&app, "limit=1", Some(&tag)).await }
+    };
+    let empty = first().await;
+    assert_eq!(
+        unchanged(empty.clone()).await,
+        (StatusCode::NOT_MODIFIED, Some(empty.clone()), false)
+    );
+
+    begin(&app, QUEUE, KEY, true).await;
+    begin(&app, OTHER, KEY2, true).await;
+    let parked = first().await;
+    assert_ne!(parked, empty);
+    assert_eq!(unchanged(parked.clone()).await.0, StatusCode::NOT_MODIFIED);
+    assert_ne!(kept_tagged(&app, "limit=2", None).await.1.unwrap(), parked);
+
+    state.queues.save(&state.db).await;
+    let saved = first().await;
+    assert_ne!(saved, parked);
+    let (status, tag, body) = unchanged(parked).await;
+    assert_eq!((status, tag.as_deref(), body), (StatusCode::OK, Some(saved.as_str()), true));
+
+    begin(&app, &queue(3), &key(3), true).await;
+    state.queues.save(&state.db).await;
+    let three = first().await;
+    // A later page carries no tag.
+    let (_, page) = kept(&app, TOKEN, "limit=1").await;
+    let cursor = page["nextCursor"].as_str().unwrap().to_owned();
+    assert_eq!(kept_tagged(&app, &format!("limit=1&cursor={cursor}"), None).await.1, None);
+    let (status, _) =
+        call(&app, TOKEN, "DELETE", &format!("/api/v1/me/queues/{QUEUE}"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let deleted = first().await;
+    assert_ne!(deleted, three);
+
+    // Expired, the rest goes: the tag changes again.
+    crate::db::retention::sweep(
+        &state.db,
+        crate::db::now_ms() + crate::db::retention::WINDOW_MS + 60_000,
+    )
+    .await;
+    assert_eq!(kept(&app, TOKEN, "").await.1["items"], json!([]));
+    assert_ne!(first().await, deleted);
 }
 
 #[tokio::test]

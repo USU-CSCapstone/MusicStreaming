@@ -62,7 +62,7 @@ and commit the result.
 ## Not built yet
 
 These are client work still to do: virtualized lists beyond the queue panel's (the other long
-lists page in as you scroll), loudness normalization, downloads and playing offline, restoring kept queues other than the active one offline, a view of what the
+lists page in as you scroll), loudness normalization, downloads and playing offline, a view of what the
 log set aside, recent searches offline, lyric search on the device, and account preferences.
 Grid/list view and theme are per-browser for now.
 
@@ -149,8 +149,8 @@ Every write the app makes, a play, a like or hide, a playlist's creation, edit o
   - **Refusals.** When a mutation is refused or cancelled, the sender asks the worker to take back every write of the library and make again those the log still holds (`rebase`). An append whose rows the feed brought before its answer reached the sender is told the version that answer named once it has left the log (`confirmed`), and the library is rebased if the copy is already past it, so it shows once.
   - **Announcements.** The worker tells pages what each apply changed by kind of row, so lists reload in place. The sender tells whoever waits for a mutation what became of it (`settled`: `sent`, `dropped` or `cancelled`, with the answer, or the problem code and what the user was told) and its listeners (`onSettled`), once the log has let go of it, and toasts once for a refusal unless the definition is `silent`; one set aside is always told.
   - **Where the library is not on the device.** The writes are made when it is (the replay does it). Until then two overlays show a write at once: `marks.svelte.ts` for likes and hides, and the playlists' `deleted` set. They are the only display of a write for such a library, and not a second source of truth for one on the device.
-- **The queue in the log** (`design/queue.md` §7). The queue worker applies a start, edit or restore with the core at once and posts the mutation to the page (`enqueue`), whose sender logs and sends it as the `queue` scope; the page tells the worker what became of each (`settled`), with the server's answer. The worker does no sending of its own, and reads the queue from the server only once nothing it gave the log is unsent. It keeps one record in the database's `queue` store, the queue the server last confirmed, and when the app opens it shows that with the log's unsent mutations on top, in the order they were made, whichever tab made them (*Queue worker*, below). The mutations' definitions are `mutations/queue.ts`.
-- **The database** is `jewelcase-outbox-<user>` in IndexedDB, behind a small port (`store.ts`): IndexedDB in browsers, memory in node specs and where the browser has no IndexedDB or Web Locks, which keeps nothing past the page. **The name is that of the first version's database, which held only an outbox, and stays: a new name would strand what version 2 held unsent.** Its stores are `mutations`, the log; `dead`, the mutations set aside; and `queue`, the confirmed queue, each keyed by `key`. Every record carries a revision that changes with each write, so a delete can leave a newer write in place; the tab instance that owns it; when it was made; and how many answered failures it has had. A store is added by raising the database's version, which `onupgradeneeded` creates without touching the others. The upgrade from version 2 to 3, inside its one transaction (`migrate.ts`), turns every play, each track's latest mark and each unconfirmed edit of a playlist chain that version 2's `plays`, `marks` and `playlists` lanes held into a mutation of the log, keeping an edit's own idempotency key so one that had applied is not applied twice, and deletes the lanes.
+- **The queue in the log** (`design/queue.md` §7). The queue worker applies a start, edit or restore, and a kept queue's deletion, at once, with the core and the kept queues it holds, and posts the mutation to the page (`enqueue`), whose sender logs and sends it as the `queue` scope; the page tells the worker what became of each (`settled`), with the server's answer. The worker does no sending of its own, and reads the queue from the server only once nothing it gave the log is unsent. It keeps one record in the database's `queue` store, the queue the server last confirmed, and when the app opens it shows that with the log's unsent mutations on top, in the order they were made, whichever tab made them (*Queue worker*, below). The mutations' definitions are `mutations/queue.ts`.
+- **The database** is `jewelcase-outbox-<user>` in IndexedDB, behind a small port (`store.ts`): IndexedDB in browsers, memory in node specs and where the browser has no IndexedDB or Web Locks, which keeps nothing past the page. **The name is that of the first version's database, which held only an outbox, and stays: a new name would strand what version 2 held unsent.** Its stores are `mutations`, the log; `dead`, the mutations set aside; `queue`, the confirmed queue; and `kept`, the account's kept queues with their states (version 4), each keyed by `key`. Every record carries a revision that changes with each write, so a delete can leave a newer write in place; the tab instance that owns it; when it was made; and how many answered failures it has had. A store is added by raising the database's version, which `onupgradeneeded` creates without touching the others. The upgrade from version 2 to 3, inside its one transaction (`migrate.ts`), turns every play, each track's latest mark and each unconfirmed edit of a playlist chain that version 2's `plays`, `marks` and `playlists` lanes held into a mutation of the log, keeping an edit's own idempotency key so one that had applied is not applied twice, and deletes the lanes.
 - **The server** carries out every signed-in write once for an account and `Idempotency-Key`, and sends the stored answer, kept 8 days (a day longer than the log's 7), to a repeat however late (`crates/server/src/api/idempotency.rs`, `design/database.md` §6). The answer is stored by a write of its own after the handler's, so a crash between them lets a retry meet the handler's own checks (a playlist's version or taken id). A queue edit's `editId` is its key when the request sends none. The client mints the ids it needs so the page can open what it made before the server answers: `createPlaylist` takes a positive 63-bit `id` (`409 id_taken` if used), a like may carry the `likedId` Liked Songs is created with, and `playId` and a queue's `queueId` are minted already. Every signed-in answer names its account in `X-Jewelcase-User`.
 - **What a page shows.** A page reads the device's rows, which already hold what is pending, so a like made offline still shows liked after a reload and a playlist's page shows its pending edits, whoever made them. A playlist page whose library is on the device reads the device alone, and a new playlist opens at its own address at once; where the library is not on the device, creating one online waits for the server's answer and offline is logged with a note that it will be created on reconnect.
 - **Plays are checkpointed.** The play under way is logged whenever the page becomes hidden and every 30 seconds while it plays, each time in full under its own ID, which merges into the one before, and the server keeps the largest listen time, so a page closed without warning loses at most the last 30 seconds. When the page closes, the play's end is also sent by a request that outlives it.
@@ -195,7 +195,7 @@ the server (*Lists and rows* below, `design/queue.md` §3).
   they are. Its `queueEdit` carries the source as the server registered it, with the length it
   resolved, and replaces the pending add. One sent with no length shows only when that arrives.
 - **`queueReplaced`** for a queue other than the one held fetches the new queue, once the
-  worker's own mutations are settled. `queuesChanged` is not the worker's: the kept list listens for it (*The queue panel*).
+  worker's own mutations are settled. `queuesChanged` reads the kept queues again (*Kept queues*, below).
 - **Lists.** The store downloads each list the confirmed queue references, `GET
   /me/queue/lists/{hash}`, one at a time in the background, those the item playing and Up Next's
   first 100 rows read first. A list is kept by hash in Cache Storage (`lists.ts`, cache
@@ -248,6 +248,7 @@ the server (*Lists and rows* below, `design/queue.md` §3).
   is `unknown`, however the server answers: its list is on its way, after a confirmed start in
   the snapshot that follows and after an add of this device's own in the add's answer, so the
   player waits for it rather than skip it.
+- **Kept queues.** The worker keeps the account's kept queues in the database's `kept` store, one record each: the entry the Kept tab shows (`KeptQueue`), and the state a restore installs, with its version, context and where playback was left. On `hello` and `queuesChanged` it reads every page of `GET /me/queues` and makes that list the device's; the first page names the `ETag` of the list last read whole, and a `304` takes that list again, so an unchanged list costs one answer with no body: an entry that agrees with the one held stays as it is, one the server no longer lists goes (deleted, restored elsewhere or expired), and so does one inactive for 30 days when the app opens. Then it fetches, one at a time in the background, the state of each entry it holds no state for at that `lastActive` (`GET /me/queues/{queueId}`), keeping the state before it looks for the lists it lacks, so an install meanwhile does not let go of them, and counting it had only once every list is there; the page is told only when an entry changes, never for a state. The lists stay in Cache Storage beside the queue's and are let go of only once no kept queue or the queue shown references them. A start or restore made here keeps the queue it replaces at once if it was adjusted, as the server does: its view, so the edits made on it, with the lists only this device holds (a pending add's tracks, a start not yet answered) attached under the hash the server gives the same tracks (`listHash`), and where the player was (`parked`). Such an entry is kept while the mutation that parked it is unsent, whatever the server lists; once that mutation is settled the list is read again, and the server's entry and state replace it. A deletion leaves the list at once, and a read of the list leaves out a queue whose deletion or restore is unsent. The page holds the list as `QueueClient.kept`.
 - **Kept for the next time the app opens.** The worker keeps the queue the server confirmed as the account's one record in the database's `queue` store, and shows it with the log's unsent starts and edits on top when the app opens, so a queue edited or started offline reopens offline as it was left; the page's sender sends them when the connection returns (*The queue survives closing the app offline*, `design/queue.md` §7).
 - **Connection.** `connect()` spawns the worker and passes it `hello`, `queueEdit` and
   `queueReplaced`, gives the page's sender the mutations the worker posts (`enqueue`), and tells
@@ -302,14 +303,19 @@ the queue only by editing it (`requirements/queue.md`, `design/queue.md` §3).
   server's queue has playing). A report the server refused is sent again when the queue next
   changes, once per change. A play records the queue's context. Its `context` and `origin` are the device's, as sent (the server cannot tell the Manual Queue from the context for a play reported after the queue changed), and the web records `manual` for a play of an item from the Manual Queue (the worker's
   `playingManual`, from the core), `context` otherwise.
-- **Restores.** `restore()` (the `restore` message, `QueueClient.restore`) logs `POST
-  /me/queues/{id}/restore` in the `queue` scope, after what was made before it; its
-  `Idempotency-Key` makes a resend harmless. Nothing shows until the server answers, since only
-  it holds the queue; its snapshot is installed as a fetch's is (stored lists attached, edits heard
-  meanwhile replayed) unless a start or restore made since replaced it, and the answer carries
-  `position`, or why it was refused (`queue_active`, `not_found`). While the app counts itself
-  offline it is not logged and answers `offline`; a request that cannot reach the server is taken
-  back from the log by the page (`Sender.onRetry`, `cancel`) and answers `unreachable`.
+- **Restores.** `restore()` (the `restore` message, `QueueClient.restore`) installs the kept
+  queue's state the worker holds at once, online or not, as a fetch's is (stored lists attached),
+  keeping the queue it replaces if it was adjusted, and logs `POST /me/queues/{id}/restore` in the
+  `queue` scope, after what was made before it and before the edits made on it; its
+  `Idempotency-Key` makes a resend harmless. A state not yet on the device is fetched first, after
+  the list if the queue is not in it, unless the app counts itself offline, which answers
+  `offline`; one that cannot be had answers `unreachable`, and one the server no longer keeps
+  `not_found`. It answers `position`, where playback was left. The item playing is not `held`, so
+  nothing is reported, until the server answers: then the queue is fetched once the edits made on
+  it are settled, which answers `304` when the device's copy is the server's. A restore the server
+  refuses is taken back with the edits made on it, as a refused start is, the server's queue is
+  fetched and the refusal is shown once. A restore the log still holds as the app opens is
+  installed again from the kept state.
 - **Taking over** a track another device plays needs the state's `itemId` to be the queue's
   current item, with its row known: playback moves without rebuilding the queue. It fails, and
   starts nothing, while the queue here is not that far or the item is of another library.
@@ -355,19 +361,17 @@ the tab's name carries from one to the other.
   re-queued, and can be removed. An empty History says nothing has played.
 - **Kept** is the third tab, so kept queues (`requirements/queue.md` §6) are reached the same way
   at every width, by touch, mouse and keyboard, beside the queue they were once the active one of
-  (`KeptQueues.svelte`). The list is the server's: `GET /me/queues`, paged with its cursor by a
-  Show more button, fetched when the tab opens, on `queuesChanged` and on `hello`, and again as
-  far as was shown, so a change does not send the person back to the top. Each entry names the
+  (`KeptQueues.svelte`). The list is the device's (`QueueClient.kept`, *Kept queues* above), drawn
+  50 entries at a time with a Show more button. Each entry names the
   song it was playing (the by-IDs lookup), its context (an album, artist or playlist by name,
   looked up in the library of the song; otherwise by kind), its Up Next and History counts and
-  when it was last active. Pressing the entry restores it (`player.restore`): the player waits
-  for the server's answer (`#starting`, so the queue playing is not followed meanwhile), then
-  takes playback over here as a start does, plays the current item from `position` (`#resumeAt`,
-  used when the item loads) and reports it as a start, which it can since the queue it names is
-  now the server's. The panel then shows Up Next. The trash button deletes with one press, and
+  when it was last active. Pressing the entry restores it (`player.restore`): the queue worker
+  installs the state it holds at once (`#starting` keeps the queue playing from being followed
+  meanwhile), then the player takes playback over here as a start does, plays the current item
+  from `position` (`#resumeAt`, used when the item loads) and reports it as a start once the
+  server has answered the restore. The panel then shows Up Next. The trash button deletes with one press, and
   `queue_active` is explained: the active queue is replaced by a start. A failed restore is
-  shown and nothing changes. **Offline** the list and a restore need the server (`design/queue.md`
-  §7): the tab says so and offers Try again, which `hello` also does when the connection returns.
+  shown and nothing changes. The list and a restore work the same offline (`design/queue.md` §7).
 - **Adding to the queue** (`queueing.svelte.ts`). Every ⋯ menu (song rows and the selection bar,
   album, artist and playlist cards and detail headers, the Songs page and the search Songs
   header) opens Queue next, Queue last and Add to Up Next…, above Add to playlist (which a view

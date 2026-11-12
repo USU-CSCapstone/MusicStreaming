@@ -45,24 +45,17 @@ function setup() {
 }
 
 describe('QueueClient', () => {
-	it("gives the worker's starts, edits and restores to the page's log, and tells it what became of them", async () => {
+	it("gives the worker's starts, edits, restores and deletions to the page's log, and tells it what became of them", () => {
 		const worker = new FakeWorker();
 		const logged: [string, unknown][] = [];
 		let settle: Parameters<Log['onSettled']>[0] = () => {};
 		let stopped = false;
-		let retry: Parameters<Log['onRetry']>[0] = () => {};
-		const cancelled: string[] = [];
 		const log: Log = {
 			enqueue: (name, args) => logged.push([name, args]),
 			onSettled: (listener) => {
 				settle = listener;
 				return () => (stopped = true);
-			},
-			onRetry: (listener) => {
-				retry = listener;
-				return () => {};
-			},
-			cancel: async (key) => (cancelled.push(key), true)
+			}
 		};
 		const client = new QueueClient(() => worker as unknown as Worker, log);
 		client.connect({ on: () => () => {} }, '7');
@@ -72,19 +65,19 @@ describe('QueueClient', () => {
 
 		const answer = { answer: { version: 1 } };
 		settle({ name: 'editQueue', args } as never, 'sent', answer);
+		const deleted = { queueId: 'k' };
+		settle({ name: 'deleteKeptQueue', args: deleted } as never, 'dropped', {});
 		// A kind the worker does not make is not its to hear.
-		settle({ name: 'deleteKeptQueue', args: { queueId: 'k' } } as never, 'sent', {});
+		settle({ name: 'like', args: {} } as never, 'sent', {});
 		expect(worker.sent.filter((m) => m.type === 'settled')).toEqual([
-			{ type: 'settled', mutation: { name: 'editQueue', args }, outcome: 'sent', result: answer }
+			{ type: 'settled', mutation: { name: 'editQueue', args }, outcome: 'sent', result: answer },
+			{
+				type: 'settled',
+				mutation: { name: 'deleteKeptQueue', args: deleted },
+				outcome: 'dropped',
+				result: {}
+			}
 		]);
-
-		// A restore that could not reach the server is taken back, once its request is over; an edit
-		// waits to be tried again.
-		retry({ name: 'editQueue', key: 'edit-key' } as never);
-		retry({ name: 'restoreQueue', key: 'restore-key' } as never);
-		expect(cancelled).toEqual([]);
-		await Promise.resolve();
-		expect(cancelled).toEqual(['restore-key']);
 		client.disconnect();
 		expect(stopped).toBe(true);
 	});
@@ -116,9 +109,16 @@ describe('QueueClient', () => {
 		hear({ type: 'hello', deviceId: '1', serverTime: '' });
 		hear({ type: 'devices', devices: [] });
 		hear({ type: 'queueReplaced', queueId: 'q' });
+		hear({ type: 'queuesChanged' });
 		client.edit({ type: 'next' });
 
-		expect(worker.sent.map((m) => m.type)).toEqual(['init', 'message', 'message', 'edit']);
+		expect(worker.sent.map((m) => m.type)).toEqual([
+			'init',
+			'message',
+			'message',
+			'message',
+			'edit'
+		]);
 		expect(worker.sent[0]).toMatchObject({ type: 'init', user: '7' });
 	});
 
@@ -261,6 +261,24 @@ describe('QueueClient', () => {
 		const sent = worker.sent.length;
 		tell();
 		expect(worker.sent).toHaveLength(sent);
+	});
+
+	it('lists the kept queues the worker holds, and forgets them as it disconnects', () => {
+		const { worker, client } = setup();
+		expect(client.kept).toBeNull();
+		const entry = {
+			queueId: 'k',
+			context: { type: 'library' as const },
+			lastActive: '2026-11-12T10:00:00Z',
+			upNext: 2,
+			history: 1
+		};
+		worker.say({ type: 'kept', entries: [entry] });
+		expect(client.kept).toEqual([entry]);
+		client.deleteKept('k');
+		expect(worker.sent.at(-1)).toEqual({ type: 'deleteKept', queueId: 'k' });
+		client.disconnect();
+		expect(client.kept).toBeNull();
 	});
 
 	it('shows a notice from the worker as a toast, and not as a refused edit', () => {

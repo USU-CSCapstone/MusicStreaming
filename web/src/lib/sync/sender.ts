@@ -133,7 +133,6 @@ export class Sender {
 	/** Who waits for what becomes of each mutation, by key. */
 	#waiting = new Map<string, ((outcome: Outcome) => void)[]>();
 	#listeners = new Set<(rec: Mutation, outcome: Settled, result: Result) => void>();
-	#retrying = new Set<(rec: Mutation) => void>();
 	/** The last sequence number given, so this tab's are in the order they were made. */
 	#seq = 0;
 
@@ -304,16 +303,6 @@ export class Sender {
 	onSettled(listener: (rec: Mutation, outcome: Settled, result: Result) => void): () => void {
 		this.#listeners.add(listener);
 		return () => this.#listeners.delete(listener);
-	}
-
-	/**
-	 * Listens to each mutation this tab holds whose attempt did not reach the server or was not
-	 * answered, as it waits to be tried again, which `cancel` may then take back; returns how to
-	 * stop.
-	 */
-	onRetry(listener: (rec: Mutation) => void): () => void {
-		this.#retrying.add(listener);
-		return () => this.#retrying.delete(listener);
 	}
 
 	/**
@@ -793,13 +782,6 @@ export class Sender {
 				const pause = backoff(error, (entry.fails = (entry.fails ?? 0) + 1) - 1);
 				entry.due = woken ? 0 : Date.now() + pause;
 				void this.#save(rec);
-				for (const listener of this.#retrying) {
-					try {
-						listener(rec);
-					} catch (error) {
-						console.error(error);
-					}
-				}
 			}
 			return;
 		}

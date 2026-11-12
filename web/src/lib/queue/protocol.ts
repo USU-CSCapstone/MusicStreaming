@@ -1,8 +1,14 @@
 // What the queue worker and the page say to each other (`design/web.md`, Queue worker). The
 // worker holds the queue; the page sends it what happened and shows what it reports.
 
-import type { PlayContext, RealtimeServerMessage, SentEdit, StartQueue } from '$lib/api/types';
-import type { EditArgs, RestoreArgs, StartArgs } from '$lib/sync/mutations/queue';
+import type {
+	KeptQueue,
+	PlayContext,
+	RealtimeServerMessage,
+	SentEdit,
+	StartQueue
+} from '$lib/api/types';
+import type { DeleteKeptArgs, EditArgs, RestoreArgs, StartArgs } from '$lib/sync/mutations/queue';
 import type { Result, Settled } from '$lib/sync/sender';
 
 /** How the queue repeats: not at all, all of it, or the item playing. */
@@ -67,25 +73,33 @@ export type StartRequest = StartQueue & {
 	 * otherwise).
 	 */
 	offline?: boolean;
+	/** Where playback was in the queue this replaces, kept with it if it is kept. Not sent. */
+	parked?: Parked;
 };
+
+/** The item and point in its track that playback was at, as a kept queue keeps it. */
+export type Parked = { item: string; positionMs: number };
 
 /**
  * The answer to restoring a kept queue (`design/queue.md` §7): the queue is now the active one
- * and `position` is where its playback was left, or why it was not restored: `offline` when the app
- * counts itself offline, `unreachable` when the server could not be reached.
+ * and `position` is where its playback was left, or why it was not restored: `offline` or
+ * `unreachable` when its state is not on the device and the server cannot give it, `not_found`
+ * when the server no longer keeps it, `busy` while another restore is under way, `superseded` when
+ * a start made meanwhile replaced it.
  */
 export type RestoreResult =
 	| { ok: true; position: { item: string; positionMs: number } | null }
 	| { ok: false; code: string; message: string };
 
 /**
- * A start, edit or restore of the queue, as the worker gives it to the page's log, which sends it
- * (`$lib/sync/mutations/queue.ts`).
+ * A start, edit or restore of the queue, or a kept queue's deletion, as the worker gives it to the
+ * page's log, which sends it (`$lib/sync/mutations/queue.ts`).
  */
 export type QueueMutation =
 	| { name: 'startQueue'; args: StartArgs }
 	| { name: 'editQueue'; args: EditArgs }
-	| { name: 'restoreQueue'; args: RestoreArgs };
+	| { name: 'restoreQueue'; args: RestoreArgs }
+	| { name: 'deleteKeptQueue'; args: DeleteKeptArgs };
 
 /** Which rows a window is of: the item playing, Up Next, or History (newest first). */
 export type RowSection = 'current' | 'upNext' | 'history';
@@ -130,10 +144,13 @@ export type ToWorker =
 	| { type: 'start'; id: number; request: StartRequest }
 	/**
 	 * Restores a kept queue; answered with `restored` carrying the same `id`. `offline`: the app
-	 * counts itself offline, so it is answered at once and nothing is restored.
+	 * counts itself offline, so a state not on the device is not asked of the server. `parked` as for
+	 * a start.
 	 */
-	| { type: 'restore'; id: number; queueId: string; offline?: boolean }
-	/** What became of a start, edit or restore the page's log held, as its sender heard it. */
+	| { type: 'restore'; id: number; queueId: string; offline?: boolean; parked?: Parked }
+	/** Deletes a kept queue here at once, and gives the deletion to the log. */
+	| { type: 'deleteKept'; queueId: string }
+	/** What became of a start, edit, restore or deletion the page's log held, as its sender heard it. */
 	| { type: 'settled'; mutation: QueueMutation; outcome: Settled; result: Result }
 	/** Asks for up to `limit` rows from `offset`; answered with `rows` carrying the same `id`. */
 	| { type: 'rows'; id: number; section: RowSection; offset: number; limit: number }
@@ -154,8 +171,13 @@ export type FromWorker =
 	| { type: 'restored'; id: number; result: RestoreResult }
 	/** The queue's write is done, or failed; answers `save` with the same `id`. */
 	| { type: 'saved'; id: number }
-	/** A start, edit or restore for the page's log to keep and send. */
+	/** A start, edit, restore or deletion for the page's log to keep and send. */
 	| { type: 'enqueue'; mutation: QueueMutation }
+	/**
+	 * The kept queues, most recently active first, whenever they change: the server's entries, and
+	 * those parked here that the server has not listed yet.
+	 */
+	| { type: 'kept'; entries: KeptQueue[] }
 	/**
 	 * Something to tell the user that is not about an edit or a start, which playback would answer
 	 * to.

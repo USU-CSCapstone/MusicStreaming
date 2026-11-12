@@ -107,6 +107,18 @@ test('queues started and adjusted with the server stopped are kept on it, with t
 	await expect(player.getByText('Signal Part 1')).toBeVisible();
 	await player.getByRole('button', { name: 'Queue' }).click();
 	await expect.poll(titles).toEqual(['Signal Part 2', 'Signal Remix']);
+	// The two adjusted queues are kept at once, with their changes, as they are online; the third is
+	// the one playing.
+	await panel.getByRole('tab', { name: 'Kept' }).click();
+	const entries = panel.getByRole('list', { name: 'Kept queues' }).getByRole('listitem');
+	await expect(entries).toHaveCount(2);
+	await expect(entries.filter({ hasText: 'Kindling' })).toContainText(
+		'1 song up next · 0 plays played'
+	);
+	await expect(entries.filter({ hasText: 'Signal Remix' })).toContainText(
+		'1 song up next · 1 play played'
+	);
+	await panel.getByRole('tab', { name: /Up Next/ }).click();
 	// Nothing was refused, here or in a toast.
 	await expect(panel.getByRole('alert')).toHaveCount(0);
 	// The first start waits to be sent, and the rest of the queue's changes behind it, in order.
@@ -142,4 +154,99 @@ test('queues started and adjusted with the server stopped are kept on it, with t
 	await expect(panel.getByRole('alert')).toHaveCount(0);
 	const toasts = await page.evaluate(() => (window as unknown as { toasts: string[] }).toasts);
 	expect(toasts.filter((text) => /Couldn’t|did not apply|refused/.test(text))).toEqual([]);
+	// The server's list replaces the device's, and agrees.
+	await panel.getByRole('tab', { name: 'Kept' }).click();
+	await expect(entries).toHaveCount(2);
+});
+
+test('kept queues restore and are deleted with the server stopped, and the server matches once it is back', async ({
+	device
+}) => {
+	const { page, server } = device;
+	const { library, albums } = server.ids;
+	const hearth = (await server.api(`/libraries/${library}/albums?limit=100`)).items.find(
+		(album: { title: string }) => album.title === 'Hearth'
+	).id as string;
+	const player = page.getByRole('region', { name: 'Player' });
+	const panel = page.getByRole('complementary', { name: 'Queue' });
+	const main = page.locator('main');
+	const play = () => main.getByRole('button', { name: 'Play', exact: true }).click();
+	/** Queues the song `title` of the page shown last, which adjusts the queue. */
+	const queueLast = async (title: string) => {
+		await main.getByRole('button', { name: `Actions for ${title}` }).click();
+		await page.getByRole('menuitem', { name: 'Queue last' }).click();
+	};
+	/** The kept queues whose states the page has read from the server. */
+	const read = new Set<string>();
+	page.on('response', (response) => {
+		const id = /\/me\/queues\/([0-9a-f-]{36})$/.exec(new URL(response.url()).pathname)?.[1];
+		if (id && response.request().method() === 'GET' && response.ok()) read.add(id);
+	});
+	/** The server's active queue; an empty one until there is one. */
+	const active = () =>
+		(server.api('/me/queue') as Promise<{ queueId: string; state: { manual: unknown[] } }>).catch(
+			() => ({ queueId: '', state: { manual: [] } })
+		);
+	const kept = async () =>
+		((await server.api('/me/queues')).items as { queueId: string }[]).map((q) => q.queueId);
+
+	// Online: two queues adjusted and replaced, so the server keeps both.
+	await page.goto(`/albums/${albums.Signal}`);
+	await expect(main.getByText('Signal Remix')).toBeVisible();
+	await expect.poll(() => onDevice(page, library), { timeout: 30_000 }).toBe(true);
+	await play();
+	await expect(player.getByText('Signal Part 1')).toBeVisible();
+	await expect.poll(async () => (await active()).queueId).toBeTruthy();
+	const signal = (await active()).queueId;
+	await queueLast('Signal Remix');
+	await go(page, `/albums/${hearth}`);
+	await expect(main.getByText('Kindling')).toBeVisible();
+	await play();
+	await expect.poll(async () => (await active()).queueId).not.toBe(signal);
+	const fire = (await active()).queueId;
+	await queueLast('Kindling');
+	await go(page, `/albums/${albums.Signal}`);
+	await expect(main.getByText('Signal Remix')).toBeVisible();
+	await play();
+	await expect.poll(async () => (await active()).queueId).not.toBe(fire);
+	await expect.poll(async () => new Set(await kept())).toEqual(new Set([signal, fire]));
+	// The device has read both states, so both restore with no connection.
+	await expect.poll(() => read.has(signal) && read.has(fire), { timeout: 15_000 }).toBe(true);
+
+	await server.halt();
+	await expect(player.getByText('Offline')).toBeVisible({ timeout: 15_000 });
+	await player.getByRole('button', { name: 'Queue' }).click();
+	await panel.getByRole('tab', { name: 'Kept' }).click();
+	const entries = panel.getByRole('list', { name: 'Kept queues' }).getByRole('listitem');
+	await expect(entries).toHaveCount(2);
+	await entries
+		.filter({ hasText: 'Kindling' })
+		.getByRole('button', { name: /^Delete/ })
+		.click();
+	await expect(entries).toHaveCount(1);
+	await entries.getByRole('button', { name: /^Restore/ }).click();
+	// It is the queue shown at once, with the song queued before it was kept.
+	await expect(panel.getByRole('tab', { name: /Up Next/ })).toHaveAttribute(
+		'aria-selected',
+		'true'
+	);
+	await expect(panel.getByRole('heading', { name: /Queued by you\s*1/ })).toBeVisible();
+	await expect(player.getByText('Signal Part 1')).toBeVisible();
+	// A change made to it now reaches it once the server is back.
+	await panel.getByRole('button', { name: 'Close queue' }).click();
+	await queueLast('Signal Part 2');
+	await player.getByRole('button', { name: 'Queue' }).click();
+	await expect(panel.getByRole('heading', { name: /Queued by you\s*2/ })).toBeVisible();
+	await panel.getByRole('tab', { name: 'Kept' }).click();
+	await expect(panel.getByText(/kept here for 30 days/)).toBeVisible();
+	await expect(panel.getByRole('alert')).toHaveCount(0);
+
+	await server.restart();
+	await expect.poll(async () => (await active()).queueId, { timeout: 60_000 }).toBe(signal);
+	// The start it replaced was never adjusted, and the other was deleted: nothing is kept.
+	await expect.poll(kept, { timeout: 10_000 }).toEqual([]);
+	await expect.poll(async () => (await active()).state.manual.length).toBe(2);
+	await panel.getByRole('tab', { name: /Up Next/ }).click();
+	await expect(panel.getByRole('heading', { name: /Queued by you\s*2/ })).toBeVisible();
+	await expect(panel.getByRole('alert')).toHaveCount(0);
 });

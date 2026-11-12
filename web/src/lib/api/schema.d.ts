@@ -1370,6 +1370,12 @@ export interface paths {
          *     its track cannot be read.
          *
          *     Devices showing the list fetch it again on `queuesChanged`. An expiry sends nothing.
+         *
+         *     The first page (no `cursor`) carries an `ETag` over the whole kept set and the `limit`:
+         *     it changes whenever a queue is kept, saved, restored, deleted or expires, but not when
+         *     what an entry's `current.trackId` resolves to changes. A request naming it in
+         *     `If-None-Match` is answered `304` with no body, so a device whose list is current reads
+         *     nothing more. Later pages carry no tag.
          */
         get: operations["listKeptQueues"];
         put?: never;
@@ -1393,8 +1399,8 @@ export interface paths {
          * Restore a kept queue
          * @description Makes a kept queue the account's active one, and parks the queue it replaces as a start
          *     does (kept if it was adjusted). Answers as `getQueue` does, with `position`: the item
-         *     and point in its track that playback was at when the queue was parked, which only this
-         *     answer carries. The restoring device resumes there and reports it as a start
+         *     and point in its track that playback was at when the queue was parked, as
+         *     `getKeptQueue` answers it too. The restoring device resumes there and reports it as a start
          *     (`start: true`), since another device may be playing; the server leaves the player state
          *     alone. A device downloads the queue's lists by hash (`getQueueList`).
          *
@@ -1416,7 +1422,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Get a kept queue
+         * @description A kept queue as `restoreQueue` would make it active, with `position`, where its playback
+         *     was left, without restoring it, so a device can keep it and restore it while offline. A
+         *     kept queue changes only when it is restored and parked again, which gives it a new
+         *     `lastActive` in `listKeptQueues`. A device downloads its lists by hash (`getQueueList`).
+         *     `404` as `restoreQueue`, and for the active queue.
+         */
+        get: operations["getKeptQueue"];
         put?: never;
         post?: never;
         /**
@@ -5614,7 +5628,10 @@ export interface operations {
                 cursor?: components["parameters"]["Cursor"];
                 limit?: components["parameters"]["Limit"];
             };
-            header?: never;
+            header?: {
+                /** @description The `ETag` of the first page the device already holds. */
+                "If-None-Match"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -5623,11 +5640,21 @@ export interface operations {
             /** @description OK */
             200: {
                 headers: {
+                    /** @description On the first page only, a tag over the whole kept set. */
+                    ETag?: string;
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["KeptQueuePage"];
                 };
+            };
+            /** @description The kept set has not changed since the tag named. */
+            304: {
+                headers: {
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Problem"];
         };
@@ -5661,6 +5688,29 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getKeptQueue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                queueId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoredQueue"];
                 };
             };
             default: components["responses"]["Problem"];
