@@ -1047,10 +1047,12 @@ describe('CatalogClient', () => {
 			const port = new IdbPort('1');
 			for (const key of ['a', 'b'])
 				await port.put('mutations', { key, rev: 'r', owner: 'tab', createdAt: 1, tries: 0 });
+			// One set aside is as unsent.
+			await port.put('dead', { key: 'c', rev: 'r', owner: 'tab', createdAt: 1, tries: 20 });
 			port.close();
 			await browser().tab('a').client.signOut(chosen);
 			expect(sessionStorage.getItem('jewelcase-discarded'), String(chosen)).toBe(
-				chosen ? null : '2'
+				chosen ? null : '3'
 			);
 		}
 	});

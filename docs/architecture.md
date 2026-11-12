@@ -63,7 +63,7 @@ which a download cut short goes on with where it stopped. After
 that the app pulls the feed from the snapshot's position, told to pull by a realtime hint when
 something changes and when it reconnects. Each feed counts positions of its own, and each start
 of the server is a new epoch, which the app sends with its position, so a server restored from a
-backup makes a device ahead of the backup download the library again. Each account has a feed of its own for its playlists.
+backup makes a device ahead of the backup download the library again. Each account has a feed of its own for its playlists, likes, hidden songs and recent searches.
 See [`design/database.md`](../design/database.md).
 
 **Browsing and search.** API requests read from SQLite. Search runs against
@@ -75,7 +75,7 @@ time owns that copy and the others ask it. The app also keeps its own files and 
 shown, so it opens offline. See [ADR 0008](../adr/0008-sqlite-device-catalog.md) and
 [`design/web.md`](../design/web.md#catalog-worker).
 
-**Writes.** Every write the web app makes (plays, likes and hides, playlists, the queue) is logged on the device, shown there at once and sent by one sender in order, online or off. The server applies a write once for its `Idempotency-Key`, however often it is sent. See [`design/web.md`](../design/web.md#the-sync-framework).
+**Writes.** Every write the web app makes (plays, likes and hides, playlists, recent searches, the queue) is logged on the device, shown there at once and sent by one sender in order, online or off. The server applies a write once for its `Idempotency-Key`, however often it is sent. See [`design/web.md`](../design/web.md#the-sync-framework).
 
 **Playback.** Audio is streamed straight from the original file, with range requests for
 seeking. When a client reports a finished play (`POST /me/plays`), it's saved along with the

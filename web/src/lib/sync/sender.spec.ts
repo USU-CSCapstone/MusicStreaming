@@ -663,6 +663,126 @@ describe('what the server answers', () => {
 		expect(api.sent('PUT')).toHaveLength(1);
 	});
 
+	it('lists what it set aside, with why, and retries it with fresh tries and its change made again', async () => {
+		vi.useFakeTimers();
+		api.rules.answer = (r) => (r.method === 'PATCH' ? { status: 500 } : { status: 204 });
+		const sender = open();
+		sender.enqueue('editPlaylist', edit(1, { title: 'One' }));
+		sender.enqueue('editPlaylist', edit(2, { title: 'Two' }));
+		for (let i = 0; i < MAX_TRIES + 5; i++) await vi.advanceTimersByTimeAsync(31_000);
+		const [head, made] = await sender.setAside();
+		expect(head).toMatchObject({
+			name: 'editPlaylist',
+			why: `The server failed to take it ${MAX_TRIES} times.`
+		});
+		expect(head.with).toBeUndefined();
+		expect(made).toMatchObject({
+			with: head.key,
+			why: 'It was made on a change that was set aside.'
+		});
+
+		api.rules.answer = (r) => ({
+			status: r.method === 'PATCH' ? 200 : 204,
+			body: { ...playlist, version: Number(r.body.baseVersion) + 1 }
+		});
+		device.rebased.length = 0;
+		const patches = api.sent('PATCH').length;
+		expect(await sender.retry(head.key)).toBe(true);
+		expect(device.rebased).toEqual(['11']);
+		await vi.advanceTimersByTimeAsync(100);
+		// Both, in the order they were made, under the keys they were first sent with.
+		const sent = api.sent('PATCH').slice(patches);
+		expect(sent.map((r) => r.body.title)).toEqual(['One', 'Two']);
+		expect(sent[0].key).toBe(api.sent('PATCH')[0].key);
+		expect(await sender.setAside()).toEqual([]);
+		expect(await dead()).toEqual([]);
+		expect(await sender.pending()).toBe(0);
+	});
+
+	it('a retried mutation is tried as many times again before it is set aside once more', async () => {
+		vi.useFakeTimers();
+		api.rules.answer = () => ({ status: 500 });
+		const sender = open();
+		sender.enqueue('play', report('poison'));
+		await vi.advanceTimersByTimeAsync(100);
+		vi.setSystemTime(Date.now() + MAX_AGE_MS + 1000);
+		await vi.advanceTimersByTimeAsync(31_000);
+		const [aside] = await sender.setAside();
+		expect(aside.why).toBe('It couldn’t be sent for a week.');
+
+		const before = api.played().length;
+		await sender.retry(aside.key);
+		for (let i = 0; i < 3; i++) await vi.advanceTimersByTimeAsync(31_000);
+		// Not a week old again: it is tried, and stays in the log.
+		expect(api.played().length).toBeGreaterThan(before + 1);
+		expect(await sender.pending()).toBe(1);
+		expect(await sender.setAside()).toEqual([]);
+	});
+
+	it('a mutation set aside after its tries starts them afresh when retried, after the rest of its scope', async () => {
+		vi.useFakeTimers();
+		api.rules.answer = () => ({ status: 500 });
+		const sender = open();
+		sender.enqueue('mark', mark('5', { liked: true }));
+		for (let i = 0; i < MAX_TRIES + 5; i++) await vi.advanceTimersByTimeAsync(31_000);
+		const [aside] = await sender.setAside();
+		expect(aside.why).toBe(`The server failed to take it ${MAX_TRIES} times.`);
+		connectivity.setWorkOffline(true);
+		sender.enqueue('mark', mark('5', { hidden: true }));
+		await sender.idle();
+		const [later] = await env.open('u').all<Mutation>('mutations');
+
+		await sender.retry(aside.key);
+		const retried = (await env.open('u').all<Mutation>('mutations')).find(
+			(rec) => rec.key === aside.key
+		)!;
+		expect(retried.seq).toBeGreaterThan(later.seq);
+		expect(retried.tries).toBe(0);
+		connectivity.setWorkOffline(false);
+		// One more failure: a mutation that kept its old tries would be set aside again now.
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(await sender.setAside()).toEqual([]);
+		expect(await sender.pending()).toBe(2);
+	});
+
+	it('discards what it set aside, with what was made on it, and has the device take it back', async () => {
+		vi.useFakeTimers();
+		api.rules.answer = (r) => (r.method === 'PATCH' ? { status: 500 } : { status: 204 });
+		const sender = open();
+		sender.enqueue('editPlaylist', edit(1, { title: 'One' }));
+		sender.enqueue('editPlaylist', edit(2, { title: 'Two' }));
+		for (let i = 0; i < MAX_TRIES + 5; i++) await vi.advanceTimersByTimeAsync(31_000);
+		const [head] = await sender.setAside();
+		device.rebased.length = 0;
+		const requests = api.requests.length;
+
+		expect(await sender.discard(head.key)).toBe(true);
+		expect(await sender.setAside()).toEqual([]);
+		expect(await dead()).toEqual([]);
+		expect(device.rebased).toEqual(['11']);
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(api.requests).toHaveLength(requests);
+		expect(await sender.discard(head.key)).toBe(false);
+		expect(await sender.retry(head.key)).toBe(false);
+	});
+
+	it('a set-aside mutation another tab made is retried by this one', async () => {
+		vi.useFakeTimers();
+		api.rules.answer = () => ({ status: 500 });
+		const first = open();
+		first.enqueue('mark', mark('5', { liked: true }));
+		for (let i = 0; i < MAX_TRIES + 5; i++) await vi.advanceTimersByTimeAsync(31_000);
+		first.stop();
+		api.rules.answer = () => ({ status: 204 });
+		const second = open();
+		const [aside] = await second.setAside();
+		await second.retry(aside.key);
+		await vi.advanceTimersByTimeAsync(100);
+		expect(await second.pending()).toBe(0);
+		expect(await dead()).toEqual([]);
+		expect(api.sent('PUT').length).toBeGreaterThan(MAX_TRIES);
+	});
+
 	it('does not count the failures of a server that does not answer', async () => {
 		vi.useFakeTimers();
 		const sender = open();
@@ -1273,5 +1393,30 @@ describe('a recent search removed', () => {
 		expect(api.lines()).toEqual(['DELETE /libraries/11/recent-searches/7']);
 		expect(device.rebased).toEqual([]);
 		expect(toaster.current).toBeNull();
+	});
+});
+
+describe('search sharing turned on', () => {
+	it('reaches the server after the searches made before it, so none of them is shared', async () => {
+		// The server takes a while over a search, so a switch sent beside it would be taken first.
+		const taken: string[] = [];
+		api.rules.answer = (r) => {
+			taken.push(`${r.method} ${r.path}`);
+			return { status: 204 };
+		};
+		api.next.push(
+			(r) => new Promise<Reply>((done) => setTimeout(() => done(api.rules.answer(r)), 20))
+		);
+		connectivity.setWorkOffline(true);
+		const sender = open();
+		sender.enqueue('recordSearch', { libraryId: '11', id: '7', query: 'private words' });
+		sender.enqueue('shareSearches', { pluginId: 'wish', name: 'Wishlist', sharing: true });
+		connectivity.setWorkOffline(false);
+		sender.wake();
+		await sender.idle();
+		expect(taken).toEqual([
+			'POST /libraries/11/recent-searches',
+			'PUT /me/plugins/wish/search-sharing'
+		]);
 	});
 });

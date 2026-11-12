@@ -15,6 +15,7 @@
 	import { controls } from '$lib/controls.svelte';
 	import { tellServiceWorker } from '$lib/image-cache';
 	import { marks } from '$lib/marks.svelte';
+	import { playback } from '$lib/playback.svelte';
 	import { player } from '$lib/player.svelte';
 	import { queue } from '$lib/queue/client.svelte';
 	import { sender } from '$lib/sync/sender';
@@ -30,9 +31,10 @@
 		player.libraryId = data.library?.id ?? '';
 	});
 
-	// Live updates, the account's queue and the device's copy of its libraries, for someone signed
-	// in; setup and login have nothing to update. They leave the catalog's election but keep its
-	// files, which stay the last account's until the server ends its session or another signs in.
+	// Live updates, the account's devices and playback as last heard, its queue and the device's
+	// copy of its libraries, for someone signed in; setup and login have nothing to update. They
+	// leave the catalog's election but keep its files, which stay the last account's until the
+	// server ends its session or another signs in.
 	// Keyed on the account alone: a load run again, as `invalidateAll` does, gives the same
 	// account as a new object, which must not start the catalog's worker over. Nothing the
 	// connecting reads is tracked either: the workers read Work offline as they start, and a toggle
@@ -53,6 +55,7 @@
 				checkForUpdate();
 				sender.wake();
 			});
+			playback.connect(user);
 			queue.connect(realtime, user, marks);
 			catalog.connect(realtime, user);
 			return unsubscribe;
@@ -61,6 +64,7 @@
 			unsubscribe();
 			catalog.disconnect();
 			queue.disconnect();
+			playback.disconnect();
 		};
 	});
 

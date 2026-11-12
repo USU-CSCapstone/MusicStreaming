@@ -215,7 +215,7 @@ export class FakeApi {
 		const path = url.pathname.replace(/^\/api\/v1/, '') + url.search;
 		if (init?.method === 'HEAD') {
 			this.heads.push(path);
-			return this.#head(url);
+			return this.#signed(this.#head(url));
 		}
 		this.requests.push(path);
 		const failure = this.#failures.find(
@@ -223,9 +223,9 @@ export class FakeApi {
 				path.includes(f.match) && this.requests.filter((r) => r.includes(f.match)).length > f.after
 		);
 		// Answered when asked, though delivered when released.
-		const response = failure
-			? problem(failure.status)
-			: this.#answer(url, new Headers(init?.headers));
+		const response = this.#signed(
+			failure ? problem(failure.status) : this.#answer(url, new Headers(init?.headers))
+		);
 		const held = this.#held;
 		if (held && path.includes(held.match) && !held.reached) {
 			held.reached = true;
@@ -239,6 +239,12 @@ export class FakeApi {
 		}
 		return response;
 	};
+
+	/** `response` naming the session's account, as every signed-in answer but a `401` does. */
+	#signed(response: Response) {
+		if (response.status !== 401) response.headers.set('x-jewelcase-user', this.#session);
+		return response;
+	}
 
 	/** A snapshot's `HEAD`: its sizes, or what a `GET` would answer where there is no file. */
 	#head(url: URL): Response {
@@ -260,7 +266,6 @@ export class FakeApi {
 		const path = url.pathname.replace(/^\/api\/v1/, '');
 		const json = (body: object) => Response.json(body);
 		if (path === '/libraries') return json({ items: this.#libraries.map((id) => ({ id })) });
-		if (path === '/me') return json({ id: this.#session });
 		if (path === '/me/changes') return this.#page(this.#account, url);
 		const library = /^\/libraries\/(\d+)\/(catalog|changes)$/.exec(path);
 		if (!library || !this.#libraries.includes(library[1])) return problem(404);

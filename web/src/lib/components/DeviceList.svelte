@@ -14,7 +14,8 @@
 	// and any other connected one can be chosen to move it to (§3).
 
 	/** This device first, then those connected, each as the server orders them: last seen first. */
-	const rank = (device: Device) => (device.id === realtime.deviceId ? 0 : device.connected ? 1 : 2);
+	const rank = (device: Device) =>
+		device.id === playback.thisDevice ? 0 : device.connected ? 1 : 2;
 	const devices = $derived([...playback.devices].sort((a, b) => rank(a) - rank(b)));
 	const stale = $derived(connectivity.state !== 'online');
 	/** The device holding playback, said aloud as playback moves, as the buttons here move it. */
@@ -29,14 +30,14 @@
 	/** Whether playback can be moved to `device`: connected, not playing it, and with something to move. */
 	function movable(device: Device): boolean {
 		const state = playback.state;
-		if (stale || !device.connected || device.id === realtime.deviceId) return false;
+		if (stale || !device.connected || device.id === playback.thisDevice) return false;
 		return state?.itemId != null && device.id !== state.activeDeviceId;
 	}
 
 	/** What to say of `device`: whether and what it is playing, or whether it is connected. */
 	function status(device: Device): string {
 		const state = playback.state;
-		if (device.id === realtime.deviceId && stale) return 'Not connected';
+		if (device.id === playback.thisDevice && stale) return 'Not connected';
 		if (!stale && device.id === playback.moving?.deviceId) return 'Starting…';
 		if (device.id === state?.activeDeviceId) {
 			// As the player bar shows the device playing, what was just asked of it included; while
@@ -86,10 +87,10 @@
 				<span class="meta">
 					<span class="name">{device.name}</span>
 					<span class="status muted">
-						{device.id === realtime.deviceId ? 'This device · ' : ''}{status(device)}
+						{device.id === playback.thisDevice ? 'This device · ' : ''}{status(device)}
 					</span>
 				</span>
-				{#if device.id === realtime.deviceId && takeable}
+				{#if device.id === playback.thisDevice && takeable}
 					<button
 						type="button"
 						class="action"
@@ -118,7 +119,7 @@
 	</ul>
 	<p class="visually-hidden" role="status">
 		{holder
-			? `Playback is on ${holder.id === realtime.deviceId ? 'this device' : holder.name}`
+			? `Playback is on ${holder.id === playback.thisDevice ? 'this device' : holder.name}`
 			: ''}
 	</p>
 {/if}
