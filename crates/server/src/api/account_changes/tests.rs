@@ -5,7 +5,9 @@ use rusqlite::Connection;
 use serde_json::{Value, json};
 
 use super::super::testing::{TOKEN, add_device, add_user, app_with_tracks, call, conn, saved_only};
-use crate::db::testing::access;
+use crate::db::now_ms;
+use crate::db::retention::WINDOW_MS;
+use crate::db::testing::{access, sweep};
 
 /// Library 1 with tracks 1 and 2, and library 2 with track 3, the owner (user 1) on device 1,
 /// and user 2 who reaches library 1 with the token `user-token`; no Liked Songs, so the feed
@@ -313,4 +315,78 @@ async fn likes_and_hides_reach_a_device_and_another_accounts_never_do() {
     catch_up(head).await;
     assert_eq!(rows(&device, hidden), [(1, 1)]);
     assert_eq!(rows(&device, liked), [(1, 2)]);
+}
+
+/// The caller's recent searches reach their device as they are recorded, and leave it however
+/// they go: removed, replaced by the same words, cleared, or aged out. Another account's never
+/// arrive, though it searches the same library.
+#[tokio::test]
+async fn recent_searches_reach_a_device_and_leave_it_and_another_accounts_never_do() {
+    let (temp, db, app) = app_with_tracks().await;
+    let server = conn(&temp);
+    add_user(&server, 2, "user");
+    add_device(&server, 2, 2, "user-token");
+    access(&server, 2, 1).unwrap();
+    const URI: &str = "/api/v1/libraries/1/recent-searches";
+    let search = async |token: &str, query: &str| {
+        let body = json!({ "query": query });
+        let (status, recorded) = call(&app, token, "POST", URI, Some(body)).await;
+        assert_eq!(status, StatusCode::CREATED, "{recorded}");
+        recorded["id"].as_str().unwrap().to_owned()
+    };
+    let device = Connection::open_in_memory().unwrap();
+    jewelcase_catalog::create_schema(&device).unwrap();
+    // Pulls everything after `after` into the device and returns the feed's head.
+    let catch_up = async |after: i64| {
+        let page = feed(&app, TOKEN, &format!("?after={after}")).await.1;
+        for change in page["changes"].as_array().unwrap() {
+            let kind: Kind = serde_json::from_value(change["kind"].clone()).unwrap();
+            let id = change["id"].as_str().unwrap().to_owned();
+            if change["op"] == "delete" {
+                delete(&device, kind, id.parse().unwrap(), 0).unwrap();
+            } else {
+                let tables = serde_json::from_value(change["rows"].clone()).unwrap();
+                apply(&device, &Rows { kind, id, key: 0, tables }).unwrap();
+            }
+        }
+        page["head"].as_i64().unwrap()
+    };
+    let held = || -> Vec<(i64, String)> {
+        device
+            .prepare("SELECT user_id, query FROM recent_searches ORDER BY searched_at, id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    let mine = |queries: &[&str]| -> Vec<(i64, String)> {
+        queries.iter().map(|q| (1, (*q).to_owned())).collect()
+    };
+
+    let aurora = search(TOKEN, "aurora").await;
+    search(TOKEN, "signal").await;
+    search("user-token", "theirs").await;
+    let head = catch_up(0).await;
+    assert_eq!(held(), mine(&["aurora", "signal"]), "the owner's, and not user 2's");
+
+    let (status, _) = call(&app, TOKEN, "DELETE", &format!("{URI}/{aurora}"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    search(TOKEN, "SIGNAL").await;
+    search(TOKEN, "help").await;
+    let head = catch_up(head).await;
+    assert_eq!(held(), mine(&["SIGNAL", "help"]), "removed, and replaced by the same words");
+
+    let (status, _) = call(&app, TOKEN, "DELETE", URI, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let head = catch_up(head).await;
+    assert_eq!(held(), mine(&[]), "cleared");
+
+    search(TOKEN, "old").await;
+    let head = catch_up(head).await;
+    assert_eq!(held(), mine(&["old"]));
+    let swept = std::sync::Arc::clone(&db);
+    tokio::task::spawn_blocking(move || sweep(&swept, now_ms() + WINDOW_MS + 1)).await.unwrap();
+    catch_up(head).await;
+    assert_eq!(held(), mine(&[]), "aged out");
 }

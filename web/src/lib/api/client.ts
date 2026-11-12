@@ -30,6 +30,7 @@ import type {
 	PlaylistItemPage,
 	PlaylistPage,
 	RecentSearch,
+	RecentSearchCreate,
 	RestoredQueue,
 	Scan,
 	SearchResponse,
@@ -477,29 +478,25 @@ export const search = (f: Fetch, libraryId: string, q: string, query: Query = {}
 
 const recent = (libraryId: string) => `${lib(libraryId)}/recent-searches`;
 
+/** The account's recent searches in the library, newest first: the device's where it holds the library. */
 export const listRecentSearches = (f: Fetch, libraryId: string) =>
-	get<{ items: RecentSearch[] }>(f, recent(libraryId));
+	device<{ items: RecentSearch[] }>(f, 'listRecentSearches', libraryId, '/recent-searches');
 
-/** Records a settled search. With `keepalive`, the request outlives the page, for one closing. */
+/** Records a settled search, under the `id` the client chose if it gives one. */
 export const recordRecentSearch = (
 	f: Fetch,
 	libraryId: string,
-	query: string,
-	selected?: RecentSearch['selected'],
-	keepalive = false
-) =>
-	send<RecentSearch>(
-		(input, init) => f(input, { ...init, keepalive }),
-		'POST',
-		recent(libraryId),
-		selected ? { query, selected } : { query }
-	);
+	search: RecentSearchCreate,
+	key?: string
+) => send<RecentSearch>(f, 'POST', recent(libraryId), search, key);
 
-export const deleteRecentSearch = (f: Fetch, libraryId: string, id: string) =>
-	send<void>(f, 'DELETE', `${recent(libraryId)}/${encodeURIComponent(id)}`);
+/** Removes one recent search. */
+export const deleteRecentSearch = (f: Fetch, libraryId: string, id: string, key?: string) =>
+	send<void>(f, 'DELETE', `${recent(libraryId)}/${encodeURIComponent(id)}`, undefined, key);
 
-export const clearRecentSearches = (f: Fetch, libraryId: string) =>
-	send<void>(f, 'DELETE', recent(libraryId));
+/** Removes all the recent searches in the library. */
+export const clearRecentSearches = (f: Fetch, libraryId: string, key?: string) =>
+	send<void>(f, 'DELETE', recent(libraryId), undefined, key);
 
 // `original` until streaming-quality settings exist (`requirements/users.md` §6).
 export const getPlaybackInfo = (f: Fetch, libraryId: string, trackId: string) =>

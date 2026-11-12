@@ -6,11 +6,12 @@ use jewelcase_plugins::Permission::{LibraryRead, SearchActivity, Searched};
 use serde_json::{Value, json};
 
 use super::super::testing::{TOKEN, add_device, add_user, app_with_tracks, call, conn, json};
-use super::{KEPT, WINDOW_MS};
+use super::WINDOW_MS;
 use crate::db::testing::{Artist, Track, access, sweep};
 use crate::db::{Database, now_ms};
 use crate::plugins::personal::set_search_sharing;
 use crate::plugins::testing::{caller, connect, enable, grant, install, manifest, plugins};
+use jewelcase_catalog::recent_searches::KEPT;
 
 const URI: &str = "/api/v1/libraries/1/recent-searches";
 
@@ -332,4 +333,54 @@ async fn a_search_is_not_counted_for_a_user_who_shares_nothing() {
     let (status, found) = json(&app, "/api/v1/libraries/1/search?q=a&types=tracks").await;
     assert_eq!(status, StatusCode::OK, "{found}");
     assert_eq!(found["sections"][0]["total"], 3, "this search built the index, not the one before");
+}
+
+/// A device that records a search offline names it, so its removal later names the same one: a
+/// free `id` is the search's, a taken one, whoever's, is `409 id_taken`, and one that is not an
+/// ID is `422`, with nothing recorded.
+#[tokio::test]
+async fn a_search_takes_the_id_the_client_chose_and_a_taken_one_is_refused() {
+    let (temp, _db, app) = app_with_tracks().await;
+    let (status, chosen) = record(&app, json!({ "id": "9001", "query": "aurora" })).await;
+    assert_eq!((status, &chosen["id"]), (StatusCode::CREATED, &json!("9001")), "{chosen}");
+
+    let conn = conn(&temp);
+    add_user(&conn, 2, "user");
+    add_device(&conn, 2, 2, "user-token");
+    access(&conn, 2, 1).unwrap();
+    let theirs = Some(json!({ "id": "9001", "query": "signal" }));
+    let (status, problem) = call(&app, "user-token", "POST", URI, theirs).await;
+    assert_eq!((status, &problem["code"]), (StatusCode::CONFLICT, &json!("id_taken")));
+    for id in ["0", "-1", "x"] {
+        let (status, problem) = record(&app, json!({ "id": id, "query": "signal" })).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{id}: {problem}");
+    }
+    assert_eq!(listed(&app, TOKEN).await, ["aurora"]);
+    assert!(listed(&app, "user-token").await.is_empty());
+
+    assert_eq!(send(&app, "DELETE", &format!("{URI}/9001")).await, StatusCode::NO_CONTENT);
+}
+
+/// A search recorded offline reaches the server as its device sends it again until one answer
+/// gets back: each try carries the same key, so it is recorded, and a plugin the user shares
+/// with is told of it, once, as of one recorded online.
+#[tokio::test]
+async fn a_search_sent_again_under_its_key_is_recorded_and_told_once() {
+    let (temp, db, app) = app_with_tracks().await;
+    share_with_a_plugin(&temp, &db).await;
+    let send_keyed = || {
+        let body = json!({ "id": "9001", "query": "a" });
+        let request = axum::http::Request::post(URI)
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .header("content-type", "application/json")
+            .header("idempotency-key", "one-search")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+        crate::api::testing::respond(app.clone(), request)
+    };
+    let first = send_keyed().await;
+    assert_eq!(first.0, StatusCode::CREATED);
+    assert_eq!(send_keyed().await, first);
+    assert_eq!(listed(&app, TOKEN).await, ["a"]);
+    assert_eq!(events(&db).await, [("searched".into(), Some(9001), Some((2, 0, 0)))]);
 }

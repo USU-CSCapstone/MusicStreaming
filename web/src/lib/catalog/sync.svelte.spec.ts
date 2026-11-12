@@ -98,10 +98,10 @@ const tag = (position: number, id: string, name: string) => ({
 
 /**
  * The account's own rows in the golden library, as the account feed carries them: its playlists,
- * Liked Songs among them, their items, and the tracks it hid.
+ * Liked Songs among them, their items, the tracks it hid, and its recent searches.
  */
 const playlists = library
-	.filter((rows) => ['playlist', 'playlistItem', 'hiddenTrack'].includes(rows.kind))
+	.filter((rows) => ['playlist', 'playlistItem', 'hiddenTrack', 'recentSearch'].includes(rows.kind))
 	.map((rows, i) => ({
 		position: i + 1,
 		op: 'upsert',
@@ -552,7 +552,7 @@ describe('catalog sync', () => {
 		const next = spawn();
 		try {
 			const other = remote<Harness>(() => next);
-			expect(await other.inspect(file)).toMatchObject({ version: 8, position: BASE });
+			expect(await other.inspect(file)).toMatchObject({ version: 9, position: BASE });
 			await other.remove(journal);
 			await other.remove(file);
 			expect(await other.files()).toEqual([]);
@@ -1015,6 +1015,9 @@ describe('catalog sync', () => {
 		expect(await last()).toEqual(['liked', 'playlists']);
 		await account({ op: 'delete', kind: 'hiddenTrack', id: '1004' });
 		expect(await last()).toEqual(['hidden']);
+		// A recent search gone, which no list shows.
+		await account({ op: 'delete', kind: 'recentSearch', id: '601' });
+		expect(await last()).toEqual(['searches']);
 
 		// A Liked Songs the device does not know, as the server makes a new one after a delete.
 		const liked = structuredClone(playlists[0]) as (typeof playlists)[number];
@@ -2051,6 +2054,29 @@ describe('the device’s own writes', () => {
 		await h.idle();
 	});
 
+	it('tells the page a recent search changed, and nothing a list shows', async () => {
+		await started('1');
+		const search = {
+			id: 'm9/0',
+			name: 'recordSearch',
+			args: { id: '9101', query: 'Help' },
+			at
+		};
+		await h.mutate('1', [search]);
+		expect((await h.changedKinds()).at(-1)).toEqual(['searches']);
+		const listed = (await h.query('1', 'listRecentSearches', {})) as { items: { query: string }[] };
+		expect(listed.items.map((s) => s.query)).toEqual(['Help', 'Signal', 'Abbey']);
+	});
+
+	it('tells the page the kinds of rows a write changed, as the shared code reports them', async () => {
+		await started('1');
+		await h.mutate('1', [hide]);
+		const likeHidden = { ...like, id: 'm5/0', args: { trackId: '1002' } };
+		await h.mutate('1', [likeHidden]);
+		// The like unhid it, so lists that leave hidden songs out are told too.
+		expect([...(await h.changedKinds()).at(-1)!].sort()).toEqual(['hidden', 'liked', 'playlists']);
+	});
+
 	it('tells the page what it took back of a write that left the log unsent', async () => {
 		await started('1');
 		await h.setLog('1', [hide]);
@@ -2061,7 +2087,7 @@ describe('the device’s own writes', () => {
 		expect((await shown()).hidden).toBe(false);
 		const kinds = await h.changedKinds();
 		expect(kinds).toHaveLength(announced + 1);
-		expect([...kinds.at(-1)!].sort()).toEqual(['hidden', 'liked', 'playlists']);
+		expect([...kinds.at(-1)!].sort()).toEqual(['hidden', 'liked', 'playlists', 'searches']);
 	});
 
 	it('leaves the device’s own writes alone through a library feed, a sent one not yet in a feed too', async () => {

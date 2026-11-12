@@ -1263,3 +1263,15 @@ describe('a playlist created', () => {
 		expect(await sender.pending()).toBe(0);
 	});
 });
+
+describe('a recent search removed', () => {
+	it('counts one the server no longer has as removed, and takes nothing back', async () => {
+		api.next.push(() => ({ status: 404, body: { status: 404, code: 'not_found' } }));
+		const sender = open();
+		const queued = sender.enqueue('deleteSearch', { libraryId: '11', id: '7', query: 'aurora' })!;
+		expect(await sender.settled(queued.key)).toBe('sent');
+		expect(api.lines()).toEqual(['DELETE /libraries/11/recent-searches/7']);
+		expect(device.rebased).toEqual([]);
+		expect(toaster.current).toBeNull();
+	});
+});

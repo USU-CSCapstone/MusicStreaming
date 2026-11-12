@@ -1,14 +1,40 @@
 <script lang="ts" module>
-	import { recordRecentSearch } from '$lib/api/client';
 	import { SearchSettler } from '$lib/recent';
+	import { sender } from '$lib/sync/sender';
+	import type { Args } from '$lib/sync/mutations';
+	import { mintId } from '$lib/sync/mutations/marks';
 
 	/** Where clearing the box returns to: the page the user was on before searching. */
 	let returnTo: string | null = null;
 
-	/** When the search on screen has settled enough to keep as a recent search. */
-	export const settler = new SearchSettler((libraryId, query, selected, keepalive) => {
-		// A recent search that fails to record is only a convenience lost.
-		recordRecentSearch(fetch, libraryId, query, selected, keepalive).catch(() => {});
+	/**
+	 * Settles once the device has made the last change to recent searches made here, so a read
+	 * after it shows it.
+	 */
+	let applied: Promise<void> = Promise.resolve();
+
+	/**
+	 * Keeps the change `name` to recent searches in the sync log, which makes it on the device at
+	 * once and sends it to the server when it can. `now` is whether to send it at once. False where
+	 * no log is open.
+	 */
+	function change<N extends 'recordSearch' | 'deleteSearch' | 'clearSearches'>(
+		name: N,
+		args: Args<N>,
+		now = true
+	) {
+		const queued = sender.enqueue(name, args, { now });
+		if (queued) applied = queued.applied;
+		return queued !== undefined;
+	}
+
+	/**
+	 * When the search on screen has settled enough to keep as a recent search. A page closing
+	 * leaves it in the log, to be sent once the app is open again.
+	 */
+	export const settler = new SearchSettler((libraryId, query, selected, closing) => {
+		// One that cannot be kept is only a convenience lost.
+		change('recordSearch', { libraryId, id: mintId(), query, selected }, !closing);
 	});
 </script>
 
@@ -17,7 +43,7 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { filterQuery, readFilter } from '$lib/filters';
-	import { clearRecentSearches, deleteRecentSearch, listRecentSearches } from '$lib/api/client';
+	import { listRecentSearches } from '$lib/api/client';
 	import type { RecentSearch } from '$lib/api/types';
 	import Icon from './Icon.svelte';
 
@@ -94,6 +120,7 @@
 	async function load() {
 		if (!libraryId) return;
 		try {
+			await applied;
 			recent = (await listRecentSearches(fetch, libraryId)).items;
 		} catch {
 			recent = [];
@@ -117,17 +144,18 @@
 		search();
 	}
 
-	// Removing applies at once and is confirmed in the background (`requirements/general.md` §3.4).
+	// Removing applies at once, offline too, and reaches the server through the sync log
+	// (`requirements/general.md` §3.4).
 	function remove(r: RecentSearch) {
 		recent = recent.filter((other) => other.id !== r.id);
 		input.focus();
-		deleteRecentSearch(fetch, libraryId, r.id).catch(load);
+		if (!change('deleteSearch', { libraryId, id: r.id, query: r.query })) void load();
 	}
 
 	function clearAll() {
 		recent = [];
 		input.focus();
-		clearRecentSearches(fetch, libraryId).catch(load);
+		if (!change('clearSearches', { libraryId })) void load();
 	}
 </script>
 

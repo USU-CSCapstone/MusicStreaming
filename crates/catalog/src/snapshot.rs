@@ -6,7 +6,7 @@ use rusqlite::{Connection, params};
 
 /// The device tables of one account's own rows, which the account feed carries and a snapshot
 /// shared by every account that reaches the library never does. A like is a playlist item.
-const ACCOUNT_TABLES: &str = "'playlists', 'playlist_items', 'hidden_tracks'";
+const ACCOUNT_TABLES: &str = "'playlists', 'playlist_items', 'hidden_tracks', 'recent_searches'";
 
 /// Copies `library`'s rows into `conn`'s own, empty, device-schema database from the server's
 /// database, which the caller attached as `server` beforehand (SQLite cannot attach inside a

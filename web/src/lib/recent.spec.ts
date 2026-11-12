@@ -5,8 +5,7 @@ function settler() {
 	let now = 0;
 	const recorded: [string, string, Selected | undefined, boolean][] = [];
 	const s = new SearchSettler(
-		(libraryId, query, selected, keepalive) =>
-			recorded.push([libraryId, query, selected, keepalive]),
+		(libraryId, query, selected, closing) => recorded.push([libraryId, query, selected, closing]),
 		() => now
 	);
 	return { s, recorded, wait: (ms: number) => (now += ms) };
@@ -53,7 +52,7 @@ describe('SearchSettler', () => {
 		]);
 	});
 
-	it('records with keepalive when the page is closing', () => {
+	it('records as closing when the page is closing', () => {
 		const { s, recorded, wait } = settler();
 		s.shown('1', 'bon');
 		wait(STAND_MS);
