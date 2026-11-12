@@ -34,6 +34,7 @@ vi.mock('$app/state', () => ({
 }));
 
 import { connectivity } from '$lib/connectivity.svelte';
+import { playback } from '$lib/playback.svelte';
 import Layout from './+layout.svelte';
 
 const children = createRawSnippet(() => ({ render: () => '<p>page</p>' }));
@@ -118,6 +119,35 @@ describe('the app layout', () => {
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		expect(catalog.disconnect).not.toHaveBeenCalled();
 		expect(catalog.connect).not.toHaveBeenCalled();
+	});
+
+	it('shows the playback kept for the account without starting its workers over', async () => {
+		route.id = '/';
+		localStorage.setItem(
+			'jewelcase-playback:1',
+			JSON.stringify({
+				deviceId: '7',
+				devices: [{ id: '7', name: 'Desk', type: 'desktop', connected: true }],
+				player: { status: 'paused', activeDeviceId: '7', itemId: null, positionMs: 0 }
+			})
+		);
+		catalog.connect.mockClear();
+		const errors = vi.spyOn(console, 'error');
+		try {
+			await render(Layout, {
+				data: { me: { id: '1' }, library: { id: '7' }, tagTypes: [] },
+				children
+			} as never);
+			await vi.waitFor(() => expect(playback.devices).toHaveLength(1));
+			// The state it shows changing, as realtime changes it, is no change of account.
+			playback.state = { ...playback.state!, status: 'playing' };
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			expect(catalog.connect).toHaveBeenCalledOnce();
+			expect(errors).not.toHaveBeenCalled();
+		} finally {
+			localStorage.removeItem('jewelcase-playback:1');
+			errors.mockRestore();
+		}
 	});
 
 	it('has the search index of the library on screen built once the app is offline, and not before', async () => {

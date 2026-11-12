@@ -213,6 +213,8 @@ describe('the IndexedDB port', () => {
 			{ name: 'like', at: 1000 }
 		]);
 		await vi.waitFor(async () => expect(await sender.pending()).toBe(0));
+		expect(await sender.discard('marks/1/6')).toBe(true);
+		expect(await sender.setAside()).toEqual([]);
 		sender.stop();
 		expect(sent.sort()).toEqual([
 			'PATCH /libraries/1/playlists/9',

@@ -143,7 +143,7 @@ export async function alreadyIn(fetch: Fetch, playlist: Playlist, what: Adding):
 	} catch (e) {
 		// A server that cannot be asked gives no warning, which is only a nicety: the add is kept
 		// and goes when it can.
-		if (e instanceof TypeError || connectivity.blocked) return [];
+		if (e instanceof ApiError && e.code === 'unavailable_offline') return [];
 		throw e;
 	}
 }

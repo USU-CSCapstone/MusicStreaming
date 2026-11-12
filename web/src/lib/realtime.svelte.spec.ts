@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { connectivity } from './connectivity.svelte';
 import { Realtime } from './realtime.svelte';
 
@@ -235,6 +235,105 @@ describe('Realtime', () => {
 		await vi.advanceTimersByTimeAsync(60_000);
 		expect(wiped).not.toHaveBeenCalled();
 		expect(revoked).not.toHaveBeenCalled();
+	});
+
+	it('with no network makes no attempt and asks no one whether the session is good', async () => {
+		const asked = vi.fn(async () => true);
+		realtime = new Realtime({
+			url: () => 'ws://test/api/v1/realtime',
+			create: () => {
+				const socket = new FakeSocket();
+				sockets.push(socket);
+				return socket as unknown as WebSocket;
+			},
+			signedIn: asked,
+			revoked
+		});
+		const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+		onTestFinished(() => onLine.mockRestore());
+		realtime.start();
+		latest().hello();
+		onLine.mockReturnValue(false);
+		latest().onclose?.();
+		latest().onclose?.(); // A late close of the one let go changes nothing.
+		document.dispatchEvent(new Event('visibilitychange'));
+		await vi.advanceTimersByTimeAsync(5 * 60_000);
+		expect(sockets).toHaveLength(1);
+		expect(asked).not.toHaveBeenCalled();
+
+		// Back online, it tries at once.
+		onLine.mockReturnValue(true);
+		dispatchEvent(new Event('online'));
+		expect(sockets).toHaveLength(2);
+		latest().hello();
+		expect(realtime.connected).toBe(true);
+	});
+
+	it('asks no one whether the session is good when an attempt is refused after the network went', async () => {
+		const asked = vi.fn(async () => true);
+		realtime = new Realtime({
+			url: () => 'ws://test/api/v1/realtime',
+			create: () => {
+				const socket = new FakeSocket();
+				sockets.push(socket);
+				return socket as unknown as WebSocket;
+			},
+			signedIn: asked,
+			revoked
+		});
+		const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+		onTestFinished(() => onLine.mockRestore());
+		realtime.start();
+		// The attempt never said hello: it was refused, which is when the session is asked after.
+		onLine.mockReturnValue(false);
+		latest().onclose?.();
+		await vi.advanceTimersByTimeAsync(5 * 60_000);
+		expect(asked).not.toHaveBeenCalled();
+		expect(sockets).toHaveLength(1);
+	});
+
+	it('reconnects a page in the background once the network is back', async () => {
+		const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+		const hidden = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+		onTestFinished(() => (onLine.mockRestore(), hidden.mockRestore()));
+		realtime.start();
+		latest().hello();
+		onLine.mockReturnValue(false);
+		latest().onclose?.();
+		onLine.mockReturnValue(true);
+		dispatchEvent(new Event('online'));
+		await vi.advanceTimersByTimeAsync(10 * 60_000);
+		expect(sockets.length).toBeGreaterThan(1);
+	});
+
+	it('started with no network makes no attempt until the browser is back online', () => {
+		const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+		onTestFinished(() => onLine.mockRestore());
+		realtime.start();
+		vi.advanceTimersByTime(60_000);
+		expect(sockets).toHaveLength(0);
+		onLine.mockReturnValue(true);
+		dispatchEvent(new Event('online'));
+		expect(sockets).toHaveLength(1);
+	});
+
+	it('with a network but no server still backs off and asks whether the session is good', async () => {
+		const asked = vi.fn(async () => true);
+		realtime = new Realtime({
+			url: () => 'ws://test/api/v1/realtime',
+			create: () => {
+				const socket = new FakeSocket();
+				sockets.push(socket);
+				return socket as unknown as WebSocket;
+			},
+			signedIn: asked,
+			revoked
+		});
+		realtime.start();
+		latest().onclose?.();
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(sockets).toHaveLength(2);
+		expect(asked).toHaveBeenCalledOnce();
 	});
 
 	it('reconnects at once when the browser is back online', () => {

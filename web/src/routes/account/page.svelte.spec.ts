@@ -97,6 +97,79 @@ it('asks before deleting what has not reached the server, and deletes only on ye
 	await vi.waitFor(() => expect(fake.calls).toEqual(['stop', 'marker true', 'wipe', 'told']));
 });
 
+it('counts what was set aside among what has not reached the server', async () => {
+	connectivity.setWorkOffline(true);
+	const env = memoryEnv();
+	await env.open('1').put('dead', { key: 'd', rev: 'r', owner: 'tab', createdAt: 1, tries: 20 });
+	sender.start('1', { env });
+	sender.enqueue('play', { playId: 'p1' } as never);
+	render(Account, { data: { connectable: [] } } as never);
+	await page.getByRole('button', { name: 'Log out' }).click();
+	await expect
+		.element(
+			page.getByText(
+				"2 plays and changes haven't reached the server, 1 of them set aside. Log out anyway?"
+			)
+		)
+		.toBeVisible();
+});
+
+it('offers to retry or discard a change set aside, but only to discard a queue change', async () => {
+	const env = memoryEnv();
+	const port = env.open('1');
+	const aside = { rev: 'r', owner: 'tab', createdAt: 1, tries: 20, setAsideAt: 2, why: '' };
+	await port.put('dead', {
+		...aside,
+		key: 'm',
+		name: 'mark',
+		scope: 'mark:1/5',
+		args: { library: '1', track: '5', liked: true, what: 'like “Signal”' }
+	} as never);
+	await port.put('dead', {
+		...aside,
+		key: 'q',
+		name: 'startQueue',
+		scope: 'queue',
+		args: {}
+	} as never);
+	sender.start('1', { env });
+	render(Account, { data: { connectable: [] } } as never);
+	const entry = (text: string) => page.getByRole('listitem').filter({ hasText: text });
+	await expect.element(entry('Like “Signal”').getByRole('button', { name: 'Retry' })).toBeVisible();
+	await expect
+		.element(entry('Like “Signal”').getByRole('button', { name: 'Discard' }))
+		.toBeVisible();
+	await expect
+		.element(entry('Start that queue').getByRole('button', { name: 'Discard' }))
+		.toBeVisible();
+	await expect
+		.element(entry('Start that queue').getByRole('button', { name: 'Retry' }))
+		.not.toBeInTheDocument();
+});
+
+it('puts the search sharing switch back when the server refuses it, and keeps it so', async () => {
+	const refuse = (async () =>
+		new Response(JSON.stringify({ status: 404, code: 'not_found', detail: 'Gone.' }), {
+			status: 404
+		})) as typeof fetch;
+	claim('1');
+	sender.start('1', { env: memoryEnv(), fetch: refuse });
+	const plugin = {
+		id: 'scrobbler',
+		name: 'Scrobbler',
+		connected: true,
+		asksForSearches: true,
+		sharesSearches: false
+	};
+	render(Account, { data: { connectable: [plugin] } } as never);
+	const share = page.getByRole('checkbox', { name: /Share my searches with Scrobbler/ });
+	await share.click();
+	await sender.idle();
+	await expect.element(share).not.toBeChecked();
+	const { lastKnown } = await import('$lib/last-known');
+	expect(lastKnown().plugins?.[0].sharesSearches).toBe(false);
+});
+
 it('logs out without asking when everything has been sent', async () => {
 	sender.start('1', { env: memoryEnv() });
 	render(Account, { data: { connectable: [] } } as never);

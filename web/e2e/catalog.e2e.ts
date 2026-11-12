@@ -508,11 +508,16 @@ test('Work offline stops network requests and the library still browses', async 
 
 test('admin pages say they need the server when offline', async ({ page }) => {
 	await page.goto('/account');
+	const sections = page.getByRole('heading', { level: 2 });
+	await expect(page.getByRole('heading', { name: 'Storage' })).toBeVisible();
+	const online = await sections.allTextContents();
 	await page.getByRole('switch', { name: 'Work offline' }).check();
-	// A fresh start offline: the account and library list are the ones kept, and the page opens.
+	// A fresh start offline: the account and library list are the ones kept, and the page opens
+	// laid out as it was online, the plugins it can connect included.
 	await page.reload();
 	await expect(page.getByRole('switch', { name: 'Work offline' })).toBeChecked();
-	await expect(page.getByText('Unavailable offline. This needs the server')).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Storage' })).toBeVisible();
+	expect(await sections.allTextContents()).toEqual(online);
 
 	// Shown, not hidden: the links stay, and each page says why it has nothing.
 	const sidebar = page.getByRole('navigation', { name: 'Library' });

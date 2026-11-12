@@ -134,6 +134,8 @@ const get = async <T>(fetch: Fetch, path: string, query?: Query): Promise<T> =>
  * A state-changing request, with a JSON body or a file. Cookie-authenticated writes must
  * carry `X-Jewelcase-Client` or they are refused (`api/openapi.yaml`, Authentication).
  * With `idempotencyKey`, a retry returns the first attempt's result rather than applying twice.
+ * One that cannot be sent while the device is not online rejects as `unavailable_offline`, as a
+ * read does, so a form says it needs the server rather than how the request failed.
  */
 async function send<T>(
 	fetch: Fetch,
@@ -152,7 +154,11 @@ async function send<T>(
 		headers['Content-Type'] = 'application/json';
 		payload = JSON.stringify(json);
 	}
-	return body(await request(fetch, url(path), { method, headers, body: payload }));
+	return body(
+		await request(fetch, url(path), { method, headers, body: payload }).catch(
+			unavailableIfNotOnline
+		)
+	);
 }
 
 /** How long the layout waits for the server before starting with what was kept. */
@@ -232,7 +238,9 @@ export async function restoreKeptQueue(
 	const headers: Record<string, string> = { 'X-Jewelcase-Client': 'web' };
 	if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
 	const path = `/me/queues/${encodeURIComponent(queueId)}/restore`;
-	const response = await request(f, url(path), { method: 'POST', headers });
+	const response = await request(f, url(path), { method: 'POST', headers }).catch(
+		unavailableIfNotOnline
+	);
 	const queue = await body<RestoredQueue>(response);
 	const run = response.headers.get('ETag')?.replace(/^"/, '').split('.')[0] || null;
 	return { queue, run };
@@ -598,8 +606,19 @@ export const setMyPluginSettings = (f: Fetch, id: string, values: Record<string,
 export const disconnectMyPlugin = (f: Fetch, id: string) => send<void>(f, 'DELETE', mySettings(id));
 
 /** Turns sharing the caller's searches with a plugin on or off (`requirements/search.md` §6). */
-export const setMySearchSharing = (f: Fetch, id: string, sharing: boolean) =>
-	send<void>(f, 'PUT', `/me/plugins/${encodeURIComponent(id)}/search-sharing`, { sharing });
+export const setMySearchSharing = (
+	f: Fetch,
+	id: string,
+	sharing: boolean,
+	idempotencyKey?: string
+) =>
+	send<void>(
+		f,
+		'PUT',
+		`/me/plugins/${encodeURIComponent(id)}/search-sharing`,
+		{ sharing },
+		idempotencyKey
+	);
 
 /** Runs it once now, with the permissions approved for it; answers when it finishes. */
 export const runPlugin = (f: Fetch, id: string) =>

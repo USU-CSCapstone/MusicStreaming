@@ -11,6 +11,7 @@ import {
 	editPlaylistMutation
 } from './playlists';
 import { play } from './plays';
+import { shareSearches } from './plugins';
 import {
 	deleteKeptQueueMutation,
 	editQueueMutation,
@@ -33,7 +34,8 @@ export const registry = {
 	deleteKeptQueue: deleteKeptQueueMutation,
 	recordSearch,
 	deleteSearch,
-	clearSearches
+	clearSearches,
+	shareSearches
 };
 
 /** The name of a kind of mutation. */

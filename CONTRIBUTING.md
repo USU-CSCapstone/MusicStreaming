@@ -77,8 +77,9 @@ on a few seconds from what it has buffered. Close the tab, start the server agai
 address and data folder, and open the app: the like and the play reach the server once it is
 online. Every write goes through the one sync log, so a playlist you create or edit and a queue
 you start while offline reach the server the same way
-([`design/web.md`](design/web.md#the-sync-framework)). Start the server again, on the same
-address and data folder, to come back online if you have not closed the tab.
+([`design/web.md`](design/web.md#the-sync-framework)); `web/e2e/offline-parity.e2e.ts` walks all
+of it. Start the server again, on the same address and data folder, to come back online if you
+have not closed the tab.
 
 ### Plugins
 
