@@ -1,13 +1,22 @@
 // What this browser keeps about who is signed in, so the app starts with no network: the server's
-// public details, the account that owns the device and, for that account alone, its user and
-// library list, and which libraries its files hold. Only that: the catalog itself lives in the
-// worker's files. Cleared by the catalog's sign-out, which the next person to sign in must never
-// see past (`requirements/general.md` §3.6).
+// public details, the account that owns the device and, for that account alone, its user, library
+// list and connectable plugins, which libraries its files hold, and its devices and playback as
+// last heard. Only that: the catalog itself lives in the worker's files. Cleared by the catalog's
+// sign-out, which the next person to sign in must never see past (`requirements/general.md` §3.6).
 
-import type { Library, ServerInfo, User } from '$lib/api/types';
+import type { PersonalPlugin } from '$lib/api/plugins';
+import type { Device, Library, PlayerState, ServerInfo, User } from '$lib/api/types';
 
-/** What the browser keeps: the server's details, and the owner's user and library list. */
-export type LastKnown = { server?: ServerInfo; me?: User; libraries?: { items: Library[] } };
+/**
+ * What the browser keeps: the server's details, and the owner's user, library list and the plugins
+ * it can connect, which the account page shows offline as online.
+ */
+export type LastKnown = {
+	server?: ServerInfo;
+	me?: User;
+	libraries?: { items: Library[] };
+	plugins?: PersonalPlugin[];
+};
 
 /**
  * What each kept key is stored under: the server's details, the owner's ID, and an account's own
@@ -23,6 +32,8 @@ const USER = 'jewelcase-user:';
  * before its owner has said.
  */
 const DEVICE = 'jewelcase-device:';
+/** The start of the key of an account's devices and playback as last heard; the user's ID follows. */
+const PLAYBACK = 'jewelcase-playback:';
 /** The marker of a logout the server has not been told of. */
 export const LOGOUT_PENDING = 'jewelcase-logout-pending';
 
@@ -93,13 +104,34 @@ export function deviceLibraries(user: string): Set<string> {
 }
 
 /**
+ * An account's devices and playback as the server last told them, and the ID it knows this device
+ * by, so an app started with no network shows them as last heard.
+ */
+export type LastPlayback = { devices?: Device[]; player?: PlayerState; deviceId?: string };
+
+/** Keeps `part` of `user`'s devices and playback beside what is kept already. */
+export function rememberPlayback(user: string, part: LastPlayback) {
+	write(PLAYBACK + user, { ...read(PLAYBACK + user), ...part });
+}
+
+/** `user`'s devices and playback as last kept, or nothing. */
+export function lastPlayback(user: string): LastPlayback {
+	return (read(PLAYBACK + user) ?? {}) as LastPlayback;
+}
+
+/**
  * Deletes everything kept of any account and who owns the device; the server's details are not an
  * account's.
  */
 export function forget() {
 	try {
 		for (const key of Object.keys(localStorage)) {
-			if (key === OWNER || key.startsWith(USER) || key.startsWith(DEVICE))
+			if (
+				key === OWNER ||
+				key.startsWith(USER) ||
+				key.startsWith(DEVICE) ||
+				key.startsWith(PLAYBACK)
+			)
 				localStorage.removeItem(key);
 		}
 	} catch {

@@ -73,6 +73,10 @@ describe('adding to a playlist offline', () => {
 	});
 
 	it('gives no duplicate warning where the server cannot be asked, and keeps the add', async () => {
+		// The network is up and the server down.
+		const down = (() => Promise.reject(new TypeError('Failed to fetch'))) as typeof fetch;
+		expect(await alreadyIn(down, playlist, what)).toEqual([]);
+		connectivity.reach();
 		connectivity.setWorkOffline(true);
 		sender.start('1', { env: memoryEnv() });
 		expect(await alreadyIn(fetch, playlist, what)).toEqual([]);

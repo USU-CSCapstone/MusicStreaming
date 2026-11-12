@@ -10,6 +10,10 @@ export const API = `${base}/api/v1`;
 export const loginUrl = () =>
 	`${resolve('/login')}?${new URLSearchParams({ next: location.pathname + location.search })}`;
 
+/** What a page or an action that needs the server says when this device cannot reach it. */
+export const UNAVAILABLE_OFFLINE =
+	'Unavailable offline. This needs the server, which this device can’t reach right now.';
+
 /** A refusal or failure from the API, with its HTTP status and machine-readable `code`. */
 export class ApiError extends Error {
 	constructor(

@@ -750,14 +750,14 @@ export class CatalogClient {
 export const catalog = new CatalogClient();
 
 /**
- * Notes in this tab's session storage how many unsent plays and changes `user`'s log holds, for
- * the login page to tell.
+ * Notes in this tab's session storage how many unsent plays and changes `user`'s log holds, those
+ * set aside included, for the login page to tell.
  */
 async function discarded(user: string) {
 	if (typeof indexedDB === 'undefined') return;
 	const port = new IdbPort(user);
 	try {
-		const count = await unsent(port);
+		const count = (await unsent(port)) + (await port.all('dead')).length;
 		if (count > 0) sessionStorage.setItem(DISCARDED, String(count));
 	} catch {
 		// Nothing could be counted, so nothing is told.

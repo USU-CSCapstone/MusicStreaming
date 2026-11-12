@@ -12,12 +12,9 @@
 // Search is the other way round (`requirements/search.md` §2): the server whenever it is
 // reachable, the device when offline or when the server fails (`readSearch`).
 
-import { ApiError } from '$lib/api/root';
+import { ApiError, UNAVAILABLE_OFFLINE } from '$lib/api/root';
 import { connectivity } from '$lib/connectivity.svelte';
 import { catalog } from './client.svelte';
-
-/** What a page that needs the server says when this device cannot reach it. */
-const UNAVAILABLE = 'This needs the server, which this device cannot reach right now.';
 
 /**
  * How long a server search may take before the device answers instead, where its search index
@@ -31,7 +28,8 @@ export const SLOW_MS = 1500;
  * otherwise rethrows.
  */
 export function unavailableIfNotOnline(error: unknown): never {
-	if (connectivity.state !== 'online') throw new ApiError(503, 'unavailable_offline', UNAVAILABLE);
+	if (connectivity.state !== 'online')
+		throw new ApiError(503, 'unavailable_offline', UNAVAILABLE_OFFLINE);
 	throw error;
 }
 
@@ -90,7 +88,7 @@ export async function read<T>(
 	try {
 		local = JSON.parse(await catalog.query(library, name, params, off()));
 	} catch (error) {
-		if (off()) throw new ApiError(503, 'unavailable_offline', UNAVAILABLE);
+		if (off()) throw new ApiError(503, 'unavailable_offline', UNAVAILABLE_OFFLINE);
 		console.error(error);
 		return server();
 	}
@@ -197,6 +195,6 @@ export async function readSearch<T>(
 		if (late) return late;
 		if (failure) throw failure;
 		console.error(error);
-		throw new ApiError(503, 'unavailable_offline', UNAVAILABLE);
+		throw new ApiError(503, 'unavailable_offline', UNAVAILABLE_OFFLINE);
 	}
 }

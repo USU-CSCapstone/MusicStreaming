@@ -84,6 +84,8 @@ const LIBRARY = 'library';
 const ACCOUNT = 'account';
 /** A file is usable only once this is the signed-in account: its snapshot and playlists are in. */
 const OWNER = 'owner';
+/** The header every signed-in answer names its account in. */
+const USER = 'x-jewelcase-user';
 
 /** A database file's name: `lib-<library>-<generation>.db`, and its journal with `-journal`. */
 const FILE = /^lib-(\d+)-(\d+)\.db(-journal)?$/;
@@ -707,20 +709,13 @@ export class CatalogSync {
 		this.#report(describe(error));
 	}
 
-	/** Throws unless the session is still this worker's account, whose files these are. */
-	async #mine() {
-		const me = await this.#json<{ id: string }>('/me');
-		if (String(me.id) !== this.#user) throw new Error('the session is another account’s');
-	}
-
 	/**
 	 * The account's pull: the library list, then each file's playlists. A library the account
 	 * gained is bootstrapped in the background, so the others' catch-ups do not wait for it.
 	 * Nothing is read while the session is another account's, as in a tab thawed after a
-	 * sign-in elsewhere.
+	 * sign-in elsewhere ([`#get`](#get)).
 	 */
 	async #pullAccount() {
-		await this.#mine();
 		const listed = new Set(
 			(await this.#json<{ items: { id: string }[] }>('/libraries')).items.map(({ id }) => id)
 		);
@@ -820,9 +815,7 @@ export class CatalogSync {
 			if (!damaged(error)) throw error;
 			outcome = 'damaged';
 		}
-		// A session that is another account's pulls nothing of it, and deletes nothing on its 404s. The
-		// file is read next, never while a pool operation is under way, as one may be after the wait.
-		await this.#mine();
+		// The file is read next, never while a pool operation is under way, as one may be after the wait.
 		await this.#queue;
 		for (;;) {
 			let catalog = this.catalogs.get(id);
@@ -1268,7 +1261,6 @@ export class CatalogSync {
 	 * `NoRoom`, downloading nothing, when the device has no room for the snapshot ([`#room`](#room)).
 	 */
 	async #install(id: string, forced: boolean) {
-		await this.#mine();
 		const existing = this.catalogs.get(id);
 		const generation = (await this.#names()).reduce((latest, name) => {
 			const match = FILE.exec(name);
@@ -1543,11 +1535,17 @@ export class CatalogSync {
 		return this.#pool(() => Catalog.open(file));
 	}
 
-	/** Fetches `path` of the API with `method`, and any `headers`. */
+	/**
+	 * Fetches `path` of the API with `method`, and any `headers`. Throws on an answer that names
+	 * another account in `X-Jewelcase-User`, as a session signed in elsewhere since this worker
+	 * started gets, so nothing of it is pulled, applied or deleted, a `404` included. An answer that
+	 * names no account (a `401`) is the caller's to handle.
+	 */
 	async #get(path: string, headers?: Record<string, string>, method = 'GET') {
 		if (this.#closed) throw new Closed();
+		let response: Response;
 		try {
-			return await this.#fetch(`${this.#api}${path}`, {
+			response = await this.#fetch(`${this.#api}${path}`, {
 				method,
 				signal: this.#abort.signal,
 				headers
@@ -1555,6 +1553,12 @@ export class CatalogSync {
 		} catch {
 			throw this.#closed ? new Closed() : new Offline();
 		}
+		const user = response.headers.get(USER);
+		if (user !== null && user !== this.#user) {
+			void response.body?.cancel();
+			throw new Error('the session is another account’s');
+		}
+		return response;
 	}
 
 	/** The body of a successful `response` as JSON. */

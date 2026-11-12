@@ -156,7 +156,7 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 
 ### Stage 10 — Offline & PWA
 
-Stage 10 is two plans. The first makes the catalog, search and queue building work offline and makes the app installable. The second adds audio and the writes that survive a closed app.
+Stage 10 is two plans. The first makes the catalog, search and queue building work offline and makes the app installable. The second adds audio.
 
 #### Part 1: the offline catalog and the installable app ✅ (built)
 
@@ -169,26 +169,26 @@ Stage 10 is two plans. The first makes the catalog, search and queue building wo
 - **One account's data per device.** Logging out, a session the server ends and another account signing in wipe the catalog, art, lists and sync log; logging out offline wipes at once and tells the server when it can ([`requirements/offline.md` §9](requirements/offline.md#9-download-lifecycle)).
 - **Kept queues on the device.** The account's kept queues, their states and lists are kept on the device, filled from the server and by the starts and restores made on it, so the Kept tab lists them and restore and delete work offline ([`design/queue.md` §7](design/queue.md#7-where-it-is-built-and-what-is-not-yet)).
 - **Recent searches on the device.** The account feed carries each library's recent searches to the device, and the search box offers them, records them and removes and clears them the same way online and offline; one recorded offline reaches the plugins the user shares searches with once it reaches the server ([`design/web.md`](design/web.md#the-sync-framework), [`design/hooks.md` §1.2](design/hooks.md#12-searched)).
-- **Writes that survive a closed app.** Every write (plays, likes and hides, playlist creates, edits and deletes, recent searches recorded, removed and cleared, the queue's starts, edits and restores, and kept queues' deletions) is a mutation in one per-account IndexedDB log, shown on the device at once and sent in order when the app is next online, each applied once by the server under its idempotency key ([`design/web.md`](design/web.md#the-sync-framework), [`design/queue.md` §7](design/queue.md#7-where-it-is-built-and-what-is-not-yet)).
+- **Writes that survive a closed app.** Every write (plays, likes and hides, playlist creates, edits and deletes, recent searches recorded, removed and cleared, search sharing, the queue's starts, edits and restores, and kept queues' deletions) is a mutation in one per-account IndexedDB log, shown on the device at once and sent in order when the app is next online, each applied once by the server under its idempotency key. What the log sets aside after repeated failures is listed on the account page, to retry or discard ([`design/web.md`](design/web.md#the-sync-framework), [`design/queue.md` §7](design/queue.md#7-where-it-is-built-and-what-is-not-yet)).
+- **One walk of parity.** `web/e2e/offline-parity.e2e.ts` walks everything [`requirements/offline.md` §6](requirements/offline.md#6-what-works-offline) lists that is built, with Work offline on and the server stopped, then checks the server holds what was done.
+- **The rest of parity.** The devices list and playback state are kept for an app started offline; the catalog worker checks the account each answer names instead of asking first; the realtime connection makes no attempt with no network; and an action only the server can carry out says "Unavailable offline" where it was asked, with the account page laid out the same online and offline ([`design/web.md`](design/web.md#connectivity)).
 - **Left for Part 2 or later**: the feed horizon, lyric search on the device, and the web app's icons, which are a placeholder until the project has artwork.
-- **Accepted until Part 2**: tombstones never age out; a device offline before its first sync says the library is not on it yet; nothing plays offline; a logged mutation can be lost to a browser that clears script-written storage; mutations set aside after repeated failures are not shown.
+- **Accepted until Part 2**: tombstones never age out; a device offline before its first sync says the library is not on it yet; nothing plays offline; a logged mutation can be lost to a browser that clears script-written storage.
 
 **Open questions:**
 1. ~~The on-device catalog and index format~~ Answered: SQLite on the device, with the catalog's SQL shared with the server. A 500,000-track copy is about 360 MB, within [`performance.md` §6](requirements/performance.md#6-client-footprint)'s goal of well under 0.1% of the music.
 2. How long change-feed tombstones are kept, and what triggers a full resync. Carried: nothing is dropped and no horizon exists. A device whose cursor the server refuses (`410`, including one from beyond a restored backup) downloads the snapshot again, keeping its copy until the new one is in, and the same happens when a catch-up would change more than a tenth of a library.
 3. ~~Whether album changes in the feed carry their tracks~~ Answered: no. A device's tables are normalized, so a track's album, artist and tag names are joins and an album change sends only the album.
 
-#### Part 2: downloads and offline writes (next)
+#### Part 2: downloads (next)
 
 - Downloads with a storage budget, choosing between local and stream, a download as a standing instruction, and reconciliation ([`requirements/offline.md`](requirements/offline.md)).
-- **Durable offline writes**: a way to see or retry what the log set aside. Plays, likes and hides, playlist creates, edits and deletes, recent searches, and queue edits are built (*The sync framework*).
-- **The queue works fully offline.** The active queue, a start made offline and the kept queues are kept and sent on reconnect, and a restore works offline (Part 1). IndexedDB holds lists, so they stop depending on Cache Storage. A parity suite compares what a device builds with the server's resolves, since sorts a device cannot reproduce (personal-data sorts, search ranking) always travel as lists.
-- The account feed grows to carry plays, queues and kept queues as the writes need them.
+- IndexedDB holds the queue's lists, so they stop depending on Cache Storage. A parity suite compares what a device builds with the server's resolves, since sorts a device cannot reproduce (personal-data sorts, search ranking) always travel as lists.
+- The account feed grows to carry plays as downloads need them.
 
 **Open questions:**
 1. Where downloaded audio lives (Cache API, OPFS, or IndexedDB), and what iOS's storage limits allow ([`offline.md` §11](requirements/offline.md#11-platform-parity)).
-2. How offline-created entities get server IDs (playlists already use an Idempotency-Key).
-3. Background downloading in a PWA, especially on iOS.
+2. Background downloading in a PWA, especially on iOS.
 
 **End goal:** The web app behaves the same with or without a network, apart from what audio can play and what there is to search. [`general.md` §3.4–3.5](requirements/general.md#34-optimistic-by-default), [`offline.md`](requirements/offline.md), [`search.md` §2](requirements/search.md#2-where-search-runs), and [`libraries.md` §5](requirements/libraries.md#5-staying-current) are met.
 
