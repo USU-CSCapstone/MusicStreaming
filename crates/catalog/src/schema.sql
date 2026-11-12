@@ -260,3 +260,19 @@ CREATE TABLE hidden_tracks (
 
 -- Hidden Songs, newest first
 CREATE INDEX hidden_tracks_by_time ON hidden_tracks (user_id, library_id, hidden_at, track_id);
+
+-- The account's recent searches, per library, which the account feed carries like its hidden
+-- tracks (`requirements/search.md` §6). A library holds a user's 20 newest at most, so a read
+-- goes through them all and needs no index.
+CREATE TABLE recent_searches (
+    id            INTEGER PRIMARY KEY,
+    user_id       INTEGER NOT NULL,
+    library_id    INTEGER NOT NULL,
+    query         TEXT    NOT NULL,
+    -- The query's words as search compares them: searching the same words again replaces the entry
+    folded        TEXT    NOT NULL,
+    -- The result the user acted on, if any: 'track', 'album' or 'artist', and its ID
+    selected_type TEXT,
+    selected_id   INTEGER,
+    searched_at   INTEGER NOT NULL
+) STRICT;

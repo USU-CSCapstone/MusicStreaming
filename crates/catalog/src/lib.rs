@@ -17,6 +17,7 @@ pub mod mutate;
 pub mod page;
 pub mod playlists;
 pub mod query;
+pub mod recent_searches;
 pub mod recipes;
 pub mod refs;
 pub mod search;
@@ -40,7 +41,7 @@ pub struct Invalid(pub String);
 /// the feeds beside it, or what the feeds' positions mean, or which rows a snapshot holds: a
 /// device whose database carries another version deletes it and syncs again, since it is only a
 /// copy of the server's, and the server never serves a snapshot file named for another version.
-pub const SCHEMA_VERSION: i32 = 8;
+pub const SCHEMA_VERSION: i32 = 9;
 
 /// The device schema's DDL: a subset of the server's catalog tables with the same table and
 /// column names and types, minus what never leaves the server.
@@ -65,6 +66,6 @@ mod tests {
             .query_row("SELECT count(*) FROM sqlite_schema WHERE type = 'table'", [], |r| r.get(0))
             .unwrap();
         let version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-        assert_eq!((tables, version), (17, SCHEMA_VERSION));
+        assert_eq!((tables, version), (18, SCHEMA_VERSION));
     }
 }

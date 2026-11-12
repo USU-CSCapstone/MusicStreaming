@@ -89,7 +89,26 @@ fn feed(conn: &Connection) -> Vec<Rows> {
         let rows_of = export_for(conn, USER, LIBRARY, Kind::HiddenTrack, &id.to_string(), 0);
         rows.push(rows_of.unwrap().unwrap());
     }
+    // And its recent searches, which it alone reads too.
+    let searches: Vec<i64> = conn
+        .prepare(
+            "SELECT id FROM recent_searches WHERE user_id = ?1 AND library_id = ?2 ORDER BY id",
+        )
+        .unwrap()
+        .query_map([USER, LIBRARY], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    for id in searches {
+        let rows_of = export_for(conn, USER, LIBRARY, Kind::RecentSearch, &id.to_string(), 0);
+        rows.push(rows_of.unwrap().unwrap());
+    }
     rows
+}
+
+/// Whether `kind` is of the account's own rows, which the account feed carries.
+fn account(kind: Kind) -> bool {
+    matches!(kind, Kind::Playlist | Kind::PlaylistItem | Kind::HiddenTrack | Kind::RecentSearch)
 }
 
 /// A list's query, its sorts, the filters each sort is read with, and the filters it is also
@@ -325,7 +344,6 @@ fn snapshot(rows: &[Rows]) -> Vec<u8> {
     let path = temp.path().join("device.db");
     let conn = Connection::open(&path).unwrap();
     create_schema(&conn).unwrap();
-    let account = |kind| matches!(kind, Kind::Playlist | Kind::PlaylistItem | Kind::HiddenTrack);
     for rows in rows.iter().filter(|r| !account(r.kind)) {
         apply(&conn, rows).unwrap();
     }
@@ -383,6 +401,16 @@ async fn fixture() -> (tempfile::TempDir, Arc<Database>, Router) {
              WHERE user_id = 1 AND library_id = 1 AND kind = 'liked'; \
              UPDATE playlists SET track_count = 1 \
              WHERE user_id = 1 AND library_id = 1 AND kind = 'liked';",
+        )?;
+        // The account's recent searches, one that acted on Abbey Road; and the ones it must not
+        // see: another account's, and one in library 2.
+        tx.execute_batch(
+            "INSERT INTO recent_searches (id, user_id, library_id, query, folded, selected_type, \
+                 selected_id, searched_at) VALUES \
+                 (601, 1, 1, 'Abbey', 'abbey', 'album', 101, 100), \
+                 (602, 1, 1, 'Signal', 'signal', NULL, NULL, 200), \
+                 (603, 2, 1, 'Theirs', 'theirs', NULL, NULL, 300), \
+                 (604, 1, 2, 'Elsewhere', 'elsewhere', NULL, NULL, 400);",
         )
     })
     .await
@@ -550,6 +578,10 @@ async fn every_list_sort_and_filter_and_every_get_give_identical_json_on_the_ser
             }
         }
     }
+    // The recent searches, newest first.
+    let answer = ask(&db, &device, "listRecentSearches", json!({})).await;
+    assert_eq!(answer["items"].as_array().map(Vec::len), Some(2), "{answer}");
+    cases.push(case("listRecentSearches", json!({}), answer));
     // The documents the search index is built from, and what searches find in it.
     let documents = |conn: &Connection| {
         let mut documents = Vec::new();
@@ -604,16 +636,14 @@ async fn every_list_sort_and_filter_and_every_get_give_identical_json_on_the_ser
     golden("recipes.json", &lines(&recipes));
 }
 
-/// The account's own rows of `LIBRARY` (playlists, their items, hidden tracks), as the account
-/// feed sends them, with the times blanked: the server and a device each read their own clock.
+/// The account's own rows of `LIBRARY` (playlists, their items, hidden tracks, recent searches),
+/// as the account feed sends them, with the times blanked: the server and a device each read
+/// their own clock.
 fn account_rows(conn: &Connection) -> Vec<Rows> {
-    let mut rows: Vec<Rows> = feed(conn)
-        .into_iter()
-        .filter(|r| matches!(r.kind, Kind::Playlist | Kind::PlaylistItem | Kind::HiddenTrack))
-        .collect();
+    let mut rows: Vec<Rows> = feed(conn).into_iter().filter(|r| account(r.kind)).collect();
     for table in rows.iter_mut().flat_map(|r| r.tables.values_mut()) {
         for row in table.iter_mut() {
-            for time in ["created_at", "modified_at", "added_at", "hidden_at"] {
+            for time in ["created_at", "modified_at", "added_at", "hidden_at", "searched_at"] {
                 if row.contains_key(time) {
                     row.insert(time.to_owned(), json!(0));
                 }
@@ -635,6 +665,7 @@ type Request = (&'static str, String, Option<Value>);
 async fn each_account_write_leaves_a_device_database_with_the_rows_the_server_then_feeds() {
     const TRACKS: &str = "/api/v1/libraries/1/tracks";
     const PLAYLISTS: &str = "/api/v1/libraries/1/playlists";
+    const SEARCHES: &str = "/api/v1/libraries/1/recent-searches";
     let ids = |tracks: &[i64]| tracks.iter().map(i64::to_string).collect::<Vec<_>>();
     let edit = |playlist: &str, base: i64, extra: Value| {
         let mut body = json!({ "baseVersion": base });
@@ -737,6 +768,23 @@ async fn each_account_write_leaves_a_device_database_with_the_rows_the_server_th
             "appendToPlaylist",
             json!({ "playlistId": "500", "items": ["1002"] }),
         ),
+        (
+            ("POST", SEARCHES.to_owned(), Some(json!({ "id": "9101", "query": " Help " }))),
+            "recordSearch",
+            json!({ "id": "9101", "query": " Help " }),
+        ),
+        (
+            (
+                "POST",
+                SEARCHES.to_owned(),
+                Some(json!({ "id": "9102", "query": "SIGNAL",
+                    "selected": { "type": "track", "id": "1002" } })),
+            ),
+            "recordSearch",
+            json!({ "id": "9102", "query": "SIGNAL", "selected": { "type": "track", "id": "1002" } }),
+        ),
+        (("DELETE", format!("{SEARCHES}/601"), None), "deleteSearch", json!({ "id": "601" })),
+        (("DELETE", SEARCHES.to_owned(), None), "clearSearches", json!({})),
     ];
     // The likes, unlikes and unhides that find nothing to do leave the rows as they were.
     let (mut unchanged, count) = (0, writes.len());
@@ -778,6 +826,7 @@ async fn each_account_write_leaves_a_device_database_with_the_rows_the_server_th
             ("playlists", Kind::Playlist),
             ("playlist_items", Kind::PlaylistItem),
             ("hidden_tracks", Kind::HiddenTrack),
+            ("recent_searches", Kind::RecentSearch),
         ] {
             let held: usize = device
                 .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row.get(0))

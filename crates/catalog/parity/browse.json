@@ -316,5 +316,6 @@
 {"answer":null,"params":{"tagId":"999"},"query":"getTag"},
 {"answer":null,"params":{"tagId":"33"},"query":"getTag"},
 {"answer":null,"params":{"tagId":"35"},"query":"getTag"},
-{"answer":[{"key":"decade","name":"Decade","tagCount":1},{"key":"genre","tagCount":2},{"key":"mood","tagCount":1}],"params":{},"query":"listTagTypes"}
+{"answer":[{"key":"decade","name":"Decade","tagCount":1},{"key":"genre","tagCount":2},{"key":"mood","tagCount":1}],"params":{},"query":"listTagTypes"},
+{"answer":{"items":[{"id":"602","query":"Signal","searchedAt":"1970-01-01T00:00:00.200Z","selected":null},{"id":"601","query":"Abbey","searchedAt":"1970-01-01T00:00:00.100Z","selected":{"id":"101","type":"album"}}]},"params":{},"query":"listRecentSearches"}
 ]

@@ -10,12 +10,12 @@ export const STAND_MS = 2000;
 /** A result the user acted on. Search returns tracks, albums, and artists. */
 export type Selected = { type: 'track' | 'album' | 'artist'; id: string };
 
-/** Records a search; `keepalive` when the page is closing and the request must outlive it. */
+/** Records a search; `closing` when the page is closing. */
 export type Record = (
 	libraryId: string,
 	query: string,
 	selected: Selected | undefined,
-	keepalive: boolean
+	closing: boolean
 ) => void;
 
 export class SearchSettler {

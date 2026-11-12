@@ -22,7 +22,7 @@ use tracing::warn;
 use jewelcase_plugins::Permission;
 use rusqlite::{Result, Transaction, params};
 
-use super::{Database, Text, now_ms};
+use super::{Database, Text, feed, now_ms};
 
 mod catalog;
 #[cfg(test)]
@@ -181,14 +181,23 @@ fn marks(tx: &Transaction<'_>, now: i64, _: &mut i64) -> Result<bool> {
     )
 }
 
-/// Recent searches aged out of the window (`requirements/search.md` §6).
+/// Recent searches aged out of the window (`requirements/search.md` §6), each leaving its
+/// tombstone in its user's account feed, so their devices let it go too.
 fn recent_searches(tx: &Transaction<'_>, now: i64, _: &mut i64) -> Result<bool> {
-    aged(
-        tx,
-        now,
-        "DELETE FROM recent_searches WHERE id IN \
-         (SELECT id FROM recent_searches WHERE searched_at < ?1 LIMIT ?2)",
-    )
+    let aged: Vec<(i64, i64, i64)> = tx
+        .prepare_cached(
+            "DELETE FROM recent_searches WHERE id IN \
+             (SELECT id FROM recent_searches WHERE searched_at < ?1 LIMIT ?2) \
+             RETURNING user_id, library_id, id",
+        )?
+        .query_map(params![now - WINDOW_MS, CHUNK], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect::<Result<_>>()?;
+    for &(user, library, id) in &aged {
+        feed::record_account(tx, user, library, feed::Kind::RecentSearch, id, 0, feed::Op::Delete)?;
+    }
+    Ok(aged.len() < CHUNK)
 }
 
 /// What the `searched` hook noted of searches and their removal, aged out with the searches.
