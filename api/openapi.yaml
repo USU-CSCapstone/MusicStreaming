@@ -1856,16 +1856,36 @@ paths:
         its track cannot be read.
 
         Devices showing the list fetch it again on `queuesChanged`. An expiry sends nothing.
+
+        The first page (no `cursor`) carries an `ETag` over the whole kept set and the `limit`:
+        it changes whenever a queue is kept, saved, restored, deleted or expires, but not when
+        what an entry's `current.trackId` resolves to changes. A request naming it in
+        `If-None-Match` is answered `304` with no body, so a device whose list is current reads
+        nothing more. Later pages carry no tag.
       operationId: listKeptQueues
       parameters:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
+        - name: If-None-Match
+          in: header
+          required: false
+          description: The `ETag` of the first page the device already holds.
+          schema: { type: string }
       responses:
         '200':
           description: OK
+          headers:
+            ETag:
+              description: On the first page only, a tag over the whole kept set.
+              schema: { type: string }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/KeptQueuePage' }
+        '304':
+          description: The kept set has not changed since the tag named.
+          headers:
+            ETag:
+              schema: { type: string }
         default: { $ref: '#/components/responses/Problem' }
 
   /me/queues/{queueId}/restore:
@@ -1875,8 +1895,8 @@ paths:
       description: |
         Makes a kept queue the account's active one, and parks the queue it replaces as a start
         does (kept if it was adjusted). Answers as `getQueue` does, with `position`: the item
-        and point in its track that playback was at when the queue was parked, which only this
-        answer carries. The restoring device resumes there and reports it as a start
+        and point in its track that playback was at when the queue was parked, as
+        `getKeptQueue` answers it too. The restoring device resumes there and reports it as a start
         (`start: true`), since another device may be playing; the server leaves the player state
         alone. A device downloads the queue's lists by hash (`getQueueList`).
 
@@ -1907,6 +1927,28 @@ paths:
         default: { $ref: '#/components/responses/Problem' }
 
   /me/queues/{queueId}:
+    get:
+      tags: [Queue]
+      summary: Get a kept queue
+      description: |
+        A kept queue as `restoreQueue` would make it active, with `position`, where its playback
+        was left, without restoring it, so a device can keep it and restore it while offline. A
+        kept queue changes only when it is restored and parked again, which gives it a new
+        `lastActive` in `listKeptQueues`. A device downloads its lists by hash (`getQueueList`).
+        `404` as `restoreQueue`, and for the active queue.
+      operationId: getKeptQueue
+      parameters:
+        - name: queueId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RestoredQueue' }
+        default: { $ref: '#/components/responses/Problem' }
     delete:
       tags: [Queue]
       summary: Delete a kept queue

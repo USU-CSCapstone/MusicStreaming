@@ -1,11 +1,12 @@
-//! The account's kept queues: `listKeptQueues`, `restoreQueue` and `deleteKeptQueue`
+//! The account's kept queues: `listKeptQueues`, `getKeptQueue`, `restoreQueue` and
+//! `deleteKeptQueue`
 //! (`design/queue.md` §8, §9).
 
 use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use rusqlite::types::Value as Sql;
 use serde::{Deserialize, Serialize};
@@ -19,7 +20,7 @@ use crate::api::scope::Caller;
 use crate::api::time::serialize_rfc3339;
 use crate::api::{Id, Problem, Uuid, cursor, page};
 use crate::db::Database;
-use crate::queue::{Current, Entry, KeepError, Key, Queues};
+use crate::queue::{Current, Entry, KeepError, Key, Queues, names};
 
 /// What names a list's cursor, so one from another list is refused.
 const CURSOR: &str = "queues";
@@ -64,20 +65,38 @@ pub struct KeptPage {
 
 /// The caller's kept queues, most recently active first, a page at a time (`limit` as other
 /// lists have it). Includes an adjusted queue a start has just parked and the save has not
-/// written yet. `422` for a cursor that did not come from this list.
+/// written yet. The first page carries an `ETag` over the whole kept set (`Queues::kept_tag`),
+/// and is `304` when `If-None-Match` names it, so a device whose list is current reads nothing
+/// more. `422` for a cursor that did not come from this list.
 pub async fn list(
     State(db): State<Arc<Database>>,
     State(queues): State<Arc<Queues>>,
     caller: Caller,
+    headers: HeaderMap,
     Query(query): Query<ListQuery>,
-) -> Result<Json<KeptPage>, Problem> {
+) -> Result<Response, Problem> {
     let limit = page::limit(query.limit)?;
     let after = query.cursor.map(|text| after(&text)).transpose()?;
+    // Taken before the page, so a change made meanwhile shows as a tag that no longer matches.
+    let tag = match after {
+        None => Some(queues.kept_tag(&db, caller.user, limit).await?),
+        Some(_) => None,
+    };
+    let known = headers.get(header::IF_NONE_MATCH).and_then(|value| value.to_str().ok());
+    if let (Some(tag), Some(known)) = (&tag, known)
+        && names(known, tag)
+    {
+        return Ok((StatusCode::NOT_MODIFIED, [(header::ETAG, tag.as_str())]).into_response());
+    }
     let listed = queues.kept(&db, caller.user, after, limit).await?;
     let items = listed.entries.into_iter().map(kept).collect();
     let next_cursor =
         listed.next.map(|(at, id)| cursor::encode(CURSOR, &[Sql::Integer(at), Sql::Text(id)]));
-    Ok(Json(KeptPage { items, next_cursor, total: listed.total }))
+    let page = Json(KeptPage { items, next_cursor, total: listed.total });
+    Ok(match tag {
+        Some(tag) => ([(header::ETAG, tag)], page).into_response(),
+        None => page.into_response(),
+    })
 }
 
 /// The key a cursor continues after.
@@ -104,9 +123,23 @@ fn kept(entry: Entry) -> Kept {
     }
 }
 
+/// The caller's kept queue `queue_id` as a restore would make it active, with where its playback
+/// was left, without restoring it, so a device can restore it while offline. `404` for a queue
+/// that is not kept, whoever's it is, the active one included.
+pub async fn get_kept(
+    State(db): State<Arc<Database>>,
+    State(queues): State<Arc<Queues>>,
+    caller: Caller,
+    Path(queue_id): Path<Uuid>,
+) -> Result<Response, Problem> {
+    let body =
+        queues.kept_snapshot(&db, caller.user, queue_id).await?.ok_or_else(Problem::not_found)?;
+    Ok(([(header::CONTENT_TYPE, "application/json")], body).into_response())
+}
+
 /// Makes the caller's kept queue `queue_id` the active one, parking the queue it replaces as a
 /// start does, and answers as `getQueue` does, with the queue's `position`: where its playback
-/// was left, which only this answer carries. The player state is left alone, as a start leaves
+/// was left, as [`get_kept`] answers it too. The player state is left alone, as a start leaves
 /// it. `404` for a queue that is not kept, whoever's it is, `409 queue_active` for the active
 /// one. Sends the account `queueReplaced` and `queuesChanged`.
 pub async fn restore(

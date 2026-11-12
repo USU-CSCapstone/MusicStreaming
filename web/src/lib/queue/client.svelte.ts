@@ -1,19 +1,21 @@
 // The page's side of the queue worker (`worker.ts`): the queue's state to render, and the edits
 // to send it. The queue itself, which can be hundreds of thousands of items, never leaves the
-// worker. The worker's starts, edits and restores go through here to the page's one log, which
-// sends them, and what became of each goes back to it.
+// worker. The worker's starts, edits, restores and kept queues' deletions go through here to the
+// page's one log, which sends them, and what became of each goes back to it. The worker also keeps
+// the account's kept queues, which the Kept tab lists from here.
 
 import { API } from '$lib/api/client';
 import { connectivity } from '$lib/connectivity.svelte';
 import { toast } from '$lib/toast.svelte';
 import wasmUrl from '$lib/core-wasm/jewelcase_core_wasm_bg.wasm?url';
-import type { RealtimeServerMessage, SentEdit } from '$lib/api/types';
+import type { KeptQueue, RealtimeServerMessage, SentEdit } from '$lib/api/types';
 import type { marks as Marks } from '$lib/marks.svelte';
 import type { Realtime } from '$lib/realtime.svelte';
 import type { Mutation } from '$lib/sync/mutation';
 import { type Result, type Settled, sender } from '$lib/sync/sender';
 import type {
 	FromWorker,
+	Parked,
 	QueueMutation,
 	Refusal,
 	RestoreResult,
@@ -25,24 +27,22 @@ import type {
 	ToWorker
 } from './protocol';
 
-/** The realtime messages the queue needs: `hello` says to catch up. */
-const QUEUE_MESSAGES = new Set(['hello', 'queueEdit', 'queueReplaced']);
+/**
+ * The realtime messages the queue needs: `hello` says to catch up, and `queuesChanged` to read the
+ * kept queues again.
+ */
+const QUEUE_MESSAGES = new Set(['hello', 'queueEdit', 'queueReplaced', 'queuesChanged']);
 
 /** Starts the queue worker. */
 const spawn = () => new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
 
 /** The kinds of mutation the worker gives the log, whose outcomes go back to it. */
-const WORKER_MUTATIONS = new Set(['startQueue', 'editQueue', 'restoreQueue']);
+const WORKER_MUTATIONS = new Set(['startQueue', 'editQueue', 'restoreQueue', 'deleteKeptQueue']);
 
-/**
- * What of the page's log the queue uses: where its mutations go, what became of them, and which
- * failed to be sent, which may be taken back.
- */
+/** What of the page's log the queue uses: where its mutations go, and what became of them. */
 export type Log = {
 	enqueue(name: QueueMutation['name'], args: QueueMutation['args']): unknown;
 	onSettled(listener: (rec: Mutation, outcome: Settled, result: Result) => void): () => void;
-	onRetry(listener: (rec: Mutation) => void): () => void;
-	cancel(key: string): Promise<boolean>;
 };
 
 export class QueueClient {
@@ -66,6 +66,11 @@ export class QueueClient {
 	shuffled = $state(false);
 	/** The latest edit that did not stay, for the UI to explain. */
 	refusal = $state<Refusal | null>(null);
+	/**
+	 * The kept queues as the device holds them, most recently active first; null until the worker
+	 * has read them.
+	 */
+	kept = $state.raw<KeptQueue[] | null>(null);
 
 	#spawn: () => Worker;
 	#log: Log;
@@ -84,9 +89,7 @@ export class QueueClient {
 		create: () => Worker = spawn,
 		log: Log = {
 			enqueue: (name, args) => sender.enqueue(name, args as never),
-			onSettled: (listener) => sender.onSettled(listener),
-			onRetry: (listener) => sender.onRetry(listener),
-			cancel: (key) => sender.cancel(key)
+			onSettled: (listener) => sender.onSettled(listener)
 		}
 	) {
 		this.#spawn = create;
@@ -121,16 +124,10 @@ export class QueueClient {
 		 */
 		const hide = () => document.visibilityState === 'hidden' && void this.save();
 		globalThis.document?.addEventListener('visibilitychange', hide);
-		// Kept queues are the server's alone until devices keep them, so a restore that could not
-		// reach it is taken back, once its request is over, and told as unreachable.
-		const unretry = this.#log.onRetry(({ name, key }) => {
-			if (name === 'restoreQueue') queueMicrotask(() => void this.#log.cancel(key));
-		});
 		this.#unsubscribe = () => {
 			unsubscribe();
 			unhear?.();
 			unsettle();
-			unretry();
 			globalThis.document?.removeEventListener('visibilitychange', hide);
 		};
 	}
@@ -158,6 +155,7 @@ export class QueueClient {
 		this.counts = { manual: 0, upNext: 0, history: 0 };
 		this.repeat = 'off';
 		this.shuffled = false;
+		this.kept = null;
 	}
 
 	/**
@@ -185,14 +183,20 @@ export class QueueClient {
 	}
 
 	/**
-	 * Makes a kept queue the account's active one (`QueueStore.restore`): settles once the worker
-	 * has it, and then the queue's state is the restored queue's, or with why it was not: `offline`
-	 * at once while the app counts itself offline, when nothing is restored, and `unreachable` when
-	 * the server could not be reached. Never settles if the worker is stopped first.
+	 * Makes a kept queue the account's active one (`QueueStore.restore`), from the state the device
+	 * holds, online or not: settles once the worker has it, and then the queue's state is the
+	 * restored queue's, or with why it was not. A state not on the device is asked of the server
+	 * unless the app counts itself offline. `parked` is where playback was in the queue it replaces.
+	 * Never settles if the worker is stopped first.
 	 */
-	restore(queueId: string): Promise<RestoreResult> {
+	restore(queueId: string, parked?: Parked): Promise<RestoreResult> {
 		const offline = connectivity.state !== 'online';
-		return this.#ask((id) => ({ type: 'restore', id, queueId, offline }));
+		return this.#ask((id) => ({ type: 'restore', id, queueId, offline, parked }));
+	}
+
+	/** Deletes a kept queue here at once; the log sends the deletion (`QueueStore.deleteKept`). */
+	deleteKept(queueId: string) {
+		this.#send({ type: 'deleteKept', queueId });
 	}
 
 	/**
@@ -258,6 +262,10 @@ export class QueueClient {
 		}
 		if (message.type === 'refused') {
 			this.refusal = message.refusal;
+			return;
+		}
+		if (message.type === 'kept') {
+			this.kept = message.entries;
 			return;
 		}
 		const { summary } = message;

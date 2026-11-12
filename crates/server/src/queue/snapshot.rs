@@ -1,11 +1,14 @@
-//! The snapshot `GET /me/queue` answers: the active queue's state, without tracks.
+//! The snapshots `GET /me/queue` and `GET /me/queues/{queueId}` answer: a queue's state, without
+//! tracks.
 
 use jewelcase_core::QueueState;
 use serde::Serialize;
 use serde_json::Value;
 
+use super::keep::read_kept;
 use super::store::{Position, Queues};
 use crate::api::Uuid;
+use crate::db::{Database, DbError};
 
 /// The spec's `QueueSnapshot`.
 #[derive(Serialize)]
@@ -71,5 +74,43 @@ impl Queues {
         // A state and a context are plain data, so this cannot fail.
         let body = serde_json::to_vec(&snapshot).ok()?;
         Some((etag, Some(body)))
+    }
+}
+
+impl Queues {
+    /// `user`'s kept queue `queue_id` as `getKeptQueue` answers it, a snapshot with where its
+    /// playback was left, or `None` for a queue that is not kept, as `restore` decides it: the
+    /// active queue, a parked one that was not adjusted, and any other account's are not. A queue
+    /// parked and not yet saved is read from memory, any other from the database. Restores nothing.
+    pub async fn kept_snapshot(
+        &self,
+        db: &Database,
+        user: i64,
+        queue_id: Uuid,
+    ) -> Result<Option<Vec<u8>>, DbError> {
+        let parked = match self.lock().get(&user) {
+            Some(account) if account.queue_id == queue_id => return Ok(None),
+            Some(account) => {
+                account.parked.iter().find(|queue| queue.queue_id == queue_id).cloned()
+            }
+            None => None,
+        };
+        let queue = match parked {
+            Some(queue) if queue.state.adjusted => queue,
+            Some(_) => return Ok(None),
+            None => match db.read(move |conn| read_kept(conn, user, &queue_id)).await? {
+                Some(queue) => queue,
+                None => return Ok(None),
+            },
+        };
+        let snapshot = Snapshot {
+            queue_id: &queue.queue_id,
+            version: queue.version,
+            context: &queue.context,
+            state: &queue.state,
+            position: queue.position.as_ref(),
+        };
+        // A state and a context are plain data, so this cannot fail.
+        Ok(serde_json::to_vec(&snapshot).ok())
     }
 }
