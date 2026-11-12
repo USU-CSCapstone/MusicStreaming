@@ -36,7 +36,8 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 				database: browserEnv(),
 				changed: (summary) => post({ type: 'state', summary }),
 				refused: (refusal) => post({ type: 'refused', refusal }),
-				told: (message) => post({ type: 'notice', message })
+				told: (message) => post({ type: 'notice', message }),
+				kept: (entries) => post({ type: 'kept', entries })
 			});
 			// The queue as the app left it is shown before any other message is handled: each waits on
 			// `store`.
@@ -55,8 +56,9 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 				void ready.save().then(() => post({ type: 'saved', id: data.id }));
 			else if (data.type === 'restore')
 				void ready
-					.restore(data.queueId, data.offline)
+					.restore(data.queueId, data.offline, data.parked)
 					.then((result) => post({ type: 'restored', id: data.id, result }));
+			else if (data.type === 'deleteKept') ready.deleteKept(data.queueId);
 			else post({ type: 'rows', id: data.id, window: ready.rows(data) });
 		});
 	}

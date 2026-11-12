@@ -2,16 +2,18 @@
 // framework): one database for each signed-in user, behind a small port so the sender's rules are
 // tested without a browser. IndexedDB is the port in browsers and memory the port in node specs.
 //
-// A store is a keyed set of records: `mutations`, the log; `dead`, the mutations set aside; and
+// A store is a keyed set of records: `mutations`, the log; `dead`, the mutations set aside;
 // `queue`, the account's queue as the server last confirmed it, which the queue worker shows the
-// log's unsent starts and edits on top of when the app opens. A new store joins as a further name in
-// `STORES`; a raised `VERSION` creates it in `onupgradeneeded`. An upgrade from version 2 moves the
-// records of the old lanes (`plays`, `marks`, `playlists`) into the log (`migrate.ts`).
+// log's unsent starts and edits on top of when the app opens; and `kept`, the account's kept queues
+// with their states, which the Kept tab lists and a restore installs offline. A new store joins as
+// a further name in `STORES`; a raised `VERSION` creates it in `onupgradeneeded`. An upgrade from
+// version 2 moves the records of the old lanes (`plays`, `marks`, `playlists`) into the log, and
+// makes what it set aside mutations set aside (`migrate.ts`).
 
 import { type Lanes, migrate, setAsideOf } from './migrate';
 
 /** The stores of a user's database. */
-export const STORES = ['mutations', 'dead', 'queue'] as const;
+export const STORES = ['mutations', 'dead', 'queue', 'kept'] as const;
 /** The name of one of the stores. */
 export type StoreName = (typeof STORES)[number];
 
@@ -68,9 +70,12 @@ export type Env = { open(user: string): Port; tryLock: TryLock };
 const PREFIX = 'jewelcase-outbox-';
 /** The database of `user`; also the name of the channel that tells its connections to close. */
 const databaseName = (user: string) => `${PREFIX}${user}`;
-/** The database's schema version; raised when a store is added to `STORES`. */
-const VERSION = 3;
-/** The stores of version 2, whose records version 3 moves into the log. */
+/**
+ * The database's schema version; raised when a store is added to `STORES`: 3 made the log, 4 added
+ * `kept`.
+ */
+const VERSION = 4;
+/** The stores of version 2, whose records an upgrade from it moves into the log. */
 const LANES = ['plays', 'marks', 'playlists'] as const;
 /** The longest any database call is waited for. */
 export const CALL_MS = 2000;

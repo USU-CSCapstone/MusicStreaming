@@ -71,14 +71,32 @@ describe('the IndexedDB port', () => {
 		port.close();
 	});
 
-	it('has a store for the log, the dead letters and the queue, and nothing is lost by reopening', async () => {
+	it('has a store for the log, the dead letters, the queue and the kept queues, and nothing is lost by reopening', async () => {
 		const port = new IdbPort(user);
-		for (const store of ['mutations', 'dead', 'queue'] as const)
+		for (const store of ['mutations', 'dead', 'queue', 'kept'] as const)
 			await port.put(store, record(store));
 		port.close();
 		const again = new IdbPort(user);
 		expect((await again.all('dead')).map((r) => r.key)).toEqual(['dead']);
 		again.close();
+	});
+
+	it('adds the kept queues to a version 3 database, keeping what it holds', async () => {
+		await new Promise<void>((resolve, reject) => {
+			const request = indexedDB.open(database(), 3);
+			request.onupgradeneeded = () => {
+				for (const store of ['mutations', 'dead', 'queue'])
+					request.result.createObjectStore(store, { keyPath: 'key' }).put(record(store));
+			};
+			request.onsuccess = () => (request.result.close(), resolve());
+			request.onerror = () => reject(request.error);
+		});
+		const port = new IdbPort(user);
+		expect((await port.all('mutations')).map((r) => r.key)).toEqual(['mutations']);
+		expect((await port.all('queue')).map((r) => r.key)).toEqual(['queue']);
+		await port.put('kept', record('kept'));
+		expect((await port.all('kept')).map((r) => r.key)).toEqual(['kept']);
+		port.close();
 	});
 
 	it('moves what the lanes of a version 2 database hold into the log, and sends it', async () => {
@@ -168,7 +186,7 @@ describe('the IndexedDB port', () => {
 			const request = indexedDB.open(database());
 			request.onsuccess = () => resolve(request.result);
 		});
-		expect([...db.objectStoreNames].sort()).toEqual(['dead', 'mutations', 'queue']);
+		expect([...db.objectStoreNames].sort()).toEqual(['dead', 'kept', 'mutations', 'queue']);
 		db.close();
 		port.close();
 
@@ -257,7 +275,7 @@ describe('the IndexedDB port', () => {
 		const port = new IdbPort(user);
 		await port.put('mutations', record('a'));
 		const upgraded = await new Promise<IDBDatabase>((resolve, reject) => {
-			const request = indexedDB.open(database(), 4);
+			const request = indexedDB.open(database(), 5);
 			request.onupgradeneeded = () =>
 				request.result.createObjectStore('queues', { keyPath: 'key' });
 			request.onsuccess = () => resolve(request.result);

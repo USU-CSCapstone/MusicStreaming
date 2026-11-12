@@ -5,30 +5,33 @@
 // hears what the server answered (`settled`). The order is the shared core's, run in
 // WebAssembly, so this holds no rule about it, and it holds no tracks in its state. Tracks come
 // from the lists, which it downloads by hash in the background and attaches to the core, and
-// meanwhile from pages of rows (`design/queue.md` §3). Plain TypeScript so it runs in a worker
-// and in tests; `worker.ts` is its shell.
+// meanwhile from pages of rows (`design/queue.md` §3). It also keeps the account's kept queues,
+// with their states and lists, so the Kept tab lists them and a restore installs one with no
+// connection (`design/queue.md` §7). Plain TypeScript so it runs in a worker and in tests;
+// `worker.ts` is its shell.
 
 import type { CatalogRouter } from '$lib/catalog/router';
-import { Queue } from '$lib/core-wasm/jewelcase_core_wasm.js';
+import { listHash, Queue } from '$lib/core-wasm/jewelcase_core_wasm.js';
 import type {
 	AppliedEdit,
+	KeptQueue,
 	PlayContext,
 	QueueEdit,
 	QueueRecipe,
 	QueueSnapshot,
 	RealtimeServerMessage,
-	RestoredQueue,
 	SentEdit,
 	StartedQueue,
 	TrackPage
 } from '$lib/api/types';
 import type { Mutation } from '$lib/sync/mutation';
-import type { EditArgs, StartArgs } from '$lib/sync/mutations/queue';
+import type { EditArgs, RestoreArgs, StartArgs } from '$lib/sync/mutations/queue';
 import type { Result, Settled } from '$lib/sync/sender';
 import { wipeChannel, type Env, type Port, type Stored } from '$lib/sync/store';
 import { download, ListCache } from './lists';
 import { PAGE, RowPages } from './rows';
 import type {
+	Parked,
 	QueueMutation,
 	QueueRow,
 	Refusal,
@@ -72,6 +75,8 @@ export type Options = {
 	 * kept.
 	 */
 	told?: (message: string) => void;
+	/** Called with the kept queues, most recently active first, whenever they change. */
+	kept?: (entries: KeptQueue[]) => void;
 };
 
 /** An edit this device made that the server has not confirmed. */
@@ -121,11 +126,37 @@ export type QueueRecord = Stored & {
 	state: string | null;
 };
 
+/** A kept queue's state, as `GET /me/queues/{queueId}` answers it, or as this device parked it. */
+type KeptState = Omit<QueueSnapshot, 'context'> & {
+	context: PlayContext;
+	/** Where its playback was left, if known. */
+	position?: Parked | null;
+};
+
 /**
- * A restore this device asked for and the server has not answered: the `#epoch` it was asked at,
- * which a later start or restore moves on, and who waits for its answer, if anyone still does.
+ * A kept queue in the database's `kept` store, keyed by its ID: the entry the Kept tab shows, and
+ * the state a restore installs, once held.
  */
-type Restoring = { epoch: number; settle: ((result: RestoreResult) => void) | null };
+export type KeptRecord = Stored & {
+	entry: KeptQueue;
+	/**
+	 * For a queue parked here that the server has not listed yet: the start or restore that parked
+	 * it, as `#own` names it. It is kept while that is unsent, and the server's list decides after.
+	 */
+	parkedBy?: string;
+	snapshot?: KeptState;
+	/** The `lastActive` of the entry the state was had for: another one is asked for again. */
+	snapshotOf?: string;
+};
+
+/** How long a kept queue is kept without being active (`requirements/queue.md` §6). */
+export const KEPT_MS = 30 * 86_400_000;
+
+/** How many kept queues one request of the list asks for. */
+const KEPT_PAGE = 200;
+
+/** A restore this device made and the server has not answered: `replayed` as for `Pending`. */
+type Restoring = { queueId: string; replayed: boolean };
 
 /**
  * A start this device made that the server has not answered: the request, how long the view said
@@ -221,8 +252,30 @@ export class QueueStore {
 	#draining = false;
 	/** The start of the queue shown, until the server answers it. */
 	#starting: Starting | null = null;
-	/** The restores this device asked for that the server has not answered, by kept queue. */
-	#restores = new Map<string, Restoring>();
+	/** The queue a restore installed here, until the server answers it. */
+	#restoring: Restoring | null = null;
+	/** A restore is being made, which a second one waits behind. */
+	#restoreBusy = false;
+	/** The kept queues, by ID. */
+	#kept = new Map<string, KeptRecord>();
+	/** The hashes the kept queues' states reference, whose lists are kept for them. */
+	#keptHashes = new Set<string>();
+	/** Tells the page the kept queues (`Options.kept`). */
+	#keptOut: (entries: KeptQueue[]) => void;
+	/** The kept queues this instance deleted whose deletion is not settled. */
+	#deleting = new Set<string>();
+	/**
+	 * The read of the kept list from the server under way, if any; one asked for meanwhile waits for
+	 * it, and it reads again once done.
+	 */
+	#filling: Promise<void> | null = null;
+	#fillAgain = false;
+	/** The server's kept list as last read whole, and the tag its first page carried. */
+	#listed: { tag: string; entries: KeptQueue[] } | null = null;
+	/** States of kept queues are being fetched, one at a time. */
+	#fetchingStates = false;
+	/** The queue shown as the kept queues were last told, which they leave out. */
+	#keptFor: string | null = null;
 	/** The rows of the view a start came from, by position, for the source it started (`rows`). */
 	#viewRows = new Map<string, string[]>();
 	/** The item a recipe start played, until the server's snapshot says whether it is the one it made current. */
@@ -282,7 +335,8 @@ export class QueueStore {
 		changed,
 		refused,
 		database,
-		told = () => {}
+		told = () => {},
+		kept = () => {}
 	}: Options) {
 		this.catalog = catalog;
 		this.#api = api;
@@ -292,6 +346,7 @@ export class QueueStore {
 		this.#changed = changed;
 		this.#refused = refused;
 		this.#notice = told;
+		this.#keptOut = kept;
 		if (database) {
 			this.#port = database.open(user);
 			const channel = wipeChannel(user);
@@ -452,11 +507,15 @@ export class QueueStore {
 	 * position of the source. The new queue keeps the repeat mode shown, as the server's takes the
 	 * active queue's (`requirements/queue.md` §5), which any repeat change unsent goes to first.
 	 * A start of a recipe is also resolved on the device (see `#attachResolved`); `offline` says
-	 * whether the app counts itself offline, and is not sent to the server.
+	 * whether the app counts itself offline, and is not sent to the server. The queue it replaces is
+	 * kept here at once if it was adjusted, as the server keeps it, with `parked`, where its
+	 * playback was (`#parkRecord`).
 	 */
-	start({ total, loaded, offline, ...body }: StartRequest): boolean {
+	start({ total, loaded, offline, parked, ...body }: StartRequest): boolean {
 		const args: StartArgs = { body, total, loaded };
+		const kept = this.#parkRecord(parked, `start:${body.queueId}`);
 		if (!this.#begin(args, !!offline)) return false;
+		if (kept) this.#putKept(kept);
 		this.#enqueue({ name: 'startQueue', args });
 		this.#emit();
 		return true;
@@ -586,28 +645,60 @@ export class QueueStore {
 	}
 
 	/**
-	 * Makes the kept queue `queueId` the account's active one (`POST /me/queues/{id}/restore`),
-	 * given to the log after what was made before it. Nothing shows until the server answers, since
-	 * only it holds the queue; the answer is then installed as a fetch's is, unless a start or
-	 * restore made since replaced it. Settles with where playback was left, or why the queue was not
-	 * restored; one restore at a time. Kept queues are the server's alone until devices keep them,
-	 * so with `offline` (the app counts itself offline) nothing is logged and it settles at once as
-	 * `offline`; one the page takes back from the log because the server could not be reached
-	 * settles as `unreachable` (`client.svelte.ts`).
+	 * Makes the kept queue `queueId` the account's active one at once, from the state the device
+	 * holds, and gives the restore to the log after what was made before it
+	 * (`POST /me/queues/{id}/restore`), so the edits made after it reach the restored queue. A state
+	 * not yet on the device is asked of the server first, after the list if the queue is not in it,
+	 * unless `offline` (the app counts itself offline). The queue it replaces is kept here if it was
+	 * adjusted, as for a start, with `parked`. Settles with where playback was left, or why it was
+	 * not restored; one restore at a time.
 	 */
-	restore(queueId: string, offline = false): Promise<RestoreResult> {
-		if (offline) {
-			const message = 'Kept queues can be restored once you’re back online.';
-			return Promise.resolve({ ok: false, code: 'offline', message });
+	async restore(queueId: string, offline = false, parked?: Parked): Promise<RestoreResult> {
+		if (this.#restoreBusy)
+			return { ok: false, code: 'busy', message: 'Another restore is under way.' };
+		this.#restoreBusy = true;
+		try {
+			if (!this.#kept.get(queueId)?.snapshot && !offline) {
+				if (!this.#kept.has(queueId)) await this.#fillKept();
+				const gone = (await this.#fetchState(queueId)) === 'gone';
+				if (gone) return { ok: false, code: 'not_found', message: 'That queue is no longer kept.' };
+			}
+			const snapshot = this.#kept.get(queueId)?.snapshot;
+			if (!snapshot) {
+				const message = 'This kept queue can be restored once you’re back online.';
+				return { ok: false, code: offline ? 'offline' : 'unreachable', message };
+			}
+			const epoch = ++this.#epoch;
+			// Kept before the install, so the lists it shares with the restored queue are not let go of.
+			const kept = this.#parkRecord(parked, `restore:${queueId}`);
+			if (kept) this.#putKept(kept);
+			if (!(await this.#install(snapshot, epoch, true))) {
+				// A start made meanwhile may have kept the same queue anew.
+				if (kept && this.#kept.get(kept.key) === kept) this.#removeKept(kept.key);
+				return { ok: false, code: 'superseded', message: 'Another queue replaced this one.' };
+			}
+			this.#restored(queueId, false);
+			this.#enqueue({ name: 'restoreQueue', args: { queueId } });
+			this.#rebuild();
+			return { ok: true, position: snapshot.position ?? null };
+		} finally {
+			this.#restoreBusy = false;
 		}
-		if (this.#restores.size > 0) {
-			return Promise.resolve({ ok: false, code: 'busy', message: 'Another restore is under way.' });
-		}
-		// A fetch under way is of the queue this replaces.
-		const restoring: Restoring = { epoch: ++this.#epoch, settle: null };
-		this.#restores.set(queueId, restoring);
-		this.#enqueue({ name: 'restoreQueue', args: { queueId } });
-		return new Promise((settle) => (restoring.settle = settle));
+	}
+
+	/**
+	 * Makes the queue just installed from a kept state the restored one, waiting for the server's
+	 * answer: it is no longer listed, and it is shown as the server's only once that answer comes.
+	 * `replayed` for one shown again from the log as the app opens.
+	 */
+	#restored(queueId: string, replayed: boolean) {
+		this.#run = null;
+		this.#startItem = null;
+		this.#viewRows.clear();
+		this.#restoring = { queueId, replayed };
+		// Kept until the server answers, for the app to restore it again if it closes first; the
+		// queue shown is never listed.
+		this.#emitKept();
 	}
 
 	/**
@@ -660,20 +751,26 @@ export class QueueStore {
 	/**
 	 * Takes in what became of a start, edit or restore the log held, as the page's sender heard it:
 	 * sent, with the server's answer, or dropped, with why. One this instance no longer shows, as
-	 * the start of a queue another start replaced, changes nothing here.
+	 * the start of a queue another start replaced, changes nothing here. One that parked a kept
+	 * queue here has the kept list read again, so the server's entry and state replace the device's.
 	 */
 	settled(mutation: QueueMutation, outcome: Settled, result: Result) {
 		if (outcome === 'sent') this.#reached++;
 		const id = idOf(mutation);
 		this.#own.delete(id);
 		this.#replayed.delete(id);
+		// A queue parked here by it is the server's to list now, or, refused, never will be.
+		if ([...this.#kept.values()].some(({ parkedBy }) => parkedBy === id)) void this.#fillKept();
 		if (mutation.name === 'startQueue') {
 			this.#started(mutation.args, outcome, result);
 		} else if (mutation.name === 'editQueue') {
 			this.#edited(mutation.args, outcome, result);
+		} else if (mutation.name === 'restoreQueue') {
+			this.#restoreAnswered(mutation.args.queueId, outcome, result);
 		} else {
-			void this.#restored(mutation.args.queueId, outcome, result).finally(() => this.#drain());
-			return;
+			this.#deleting.delete(mutation.args.queueId);
+			// Whether the server still keeps it is the server's to say.
+			if (outcome !== 'sent') void this.#fillKept();
 		}
 		this.#drain();
 	}
@@ -746,73 +843,383 @@ export class QueueStore {
 	}
 
 	/**
-	 * A restore answered: installed as a fetch's answer is, unless a start or restore made since it
-	 * was asked for replaced it, and settled for who waits. One taken back from the log is
-	 * `unreachable`. One this instance did not ask for, as one a closed tab left, has the queue
-	 * fetched.
+	 * A restore answered. The queue was installed here when it was made, so one sent is now the
+	 * server's: it is fetched once the edits made on it are settled, which answers `304` if the
+	 * device's copy is the server's. One refused is taken back with the edits made on it, as a
+	 * refused start is, and the server's queue is fetched. One this instance did not install, as one
+	 * a closed tab left, has the queue fetched.
 	 */
-	async #restored(queueId: string, outcome: Settled, result: Result) {
-		const restoring = this.#restores.get(queueId);
-		this.#restores.delete(queueId);
-		const settle = restoring?.settle ?? (() => {});
-		if (outcome === 'cancelled') {
-			this.#refetch = true;
-			return settle({
-				ok: false,
-				code: 'unreachable',
-				message: 'The server could not be reached.'
-			});
-		}
-		if (outcome !== 'sent') {
-			// Whether another queue is active now is the server's to say.
-			this.#refetch = true;
-			const { code = 'failed', message = 'That queue wasn’t restored.' } = result;
-			return settle({ ok: false, code, message });
-		}
-		if (!restoring) {
-			this.#refetch = true;
+	#restoreAnswered(queueId: string, outcome: Settled, result: Result) {
+		this.#refetch = true;
+		const restoring = this.#restoring;
+		if (restoring?.queueId !== queueId) return;
+		this.#restoring = null;
+		if (outcome === 'sent') {
+			this.#run = (result.answer as { run: string | null }).run ?? this.#run;
+			// Unless a start since has parked it here again, which is a record of its own.
+			if (this.#queueId === queueId) this.#removeKept(queueId);
+			this.#emit();
 			return;
 		}
-		if (restoring.epoch !== this.#epoch) {
-			return settle({ ok: false, code: 'superseded', message: 'Another queue replaced this one.' });
+		this.#pending = this.#pending.filter((pending) => pending.queueId !== queueId);
+		void this.#fillKept();
+		const { code = 'failed', message = 'That queue wasn’t restored.', dead } = result;
+		// One set aside was told by the log.
+		if (!dead) this.#refused({ code, message, edit: null });
+	}
+
+	// ── Kept queues ───────────────────────────
+
+	/**
+	 * Deletes the kept queue `queueId` here at once and gives the deletion to the log, which sends it
+	 * in its turn; one the server refuses shows again once its list is read.
+	 */
+	deleteKept(queueId: string) {
+		this.#deleting.add(queueId);
+		if (this.#kept.has(queueId)) this.#removeKept(queueId);
+		this.#log.enqueue({ name: 'deleteKeptQueue', args: { queueId } });
+	}
+
+	/**
+	 * The queue shown, as a kept record the start or restore `by` (as `#own` names it) parks it as,
+	 * or null if it is not kept: one never adjusted is replaced, as the server replaces it
+	 * (`requirements/queue.md` §6). It holds the view, so the edits made on it are kept with it, and
+	 * the lists of sources only this device holds, the tracks of an add or a start not yet answered,
+	 * attached under the hash the server will give them, so it restores with no connection.
+	 * `parked` is where playback was, kept if it names the item playing.
+	 */
+	#parkRecord(parked: Parked | undefined, by: string): KeptRecord | null {
+		const view = this.#view;
+		const queueId = this.#queueId;
+		const context = this.#context;
+		if (!view || !queueId || !context) return null;
+		const copy = view.copy();
+		try {
+			const read = () => JSON.parse(copy.toJson()) as KeptState['state'];
+			let state = read();
+			if (!state.adjusted) return null;
+			let attached = false;
+			for (const { key, libraryId, list } of state.sources) {
+				const body = list === undefined ? this.#heldBody(key, libraryId) : null;
+				if (!body) continue;
+				try {
+					const hash = listHash(body);
+					copy.attachSource(key, hash, body);
+					void this.#lists.put(hash, body);
+					attached = true;
+				} catch {
+					// Not a list the core takes: the source waits for the server's, as it would here.
+				}
+			}
+			if (attached) state = read();
+			const row = copy.currentRow();
+			const current = row ? (JSON.parse(row) as CoreRow) : null;
+			const track = current ? (current.track ?? this.#fromPageOrOwn(current)) : null;
+			const now = new Date();
+			const entry: KeptQueue = {
+				queueId,
+				context,
+				lastActive: now.toISOString(),
+				upNext: copy.upNextLen(),
+				history: copy.historyLen()
+			};
+			if (current) {
+				const libraryId = this.#sources.get(current.source)?.libraryId ?? '';
+				entry.current = { libraryId, trackId: track ?? null };
+			}
+			const position = parked && parked.item === state.current ? parked : null;
+			return {
+				key: queueId,
+				rev: crypto.randomUUID(),
+				owner: this.#instance,
+				createdAt: now.getTime(),
+				tries: 0,
+				entry,
+				parkedBy: by,
+				snapshot: { queueId, version: this.#version, context, state, position },
+				snapshotOf: entry.lastActive
+			};
+		} catch {
+			// A queue the core cannot copy or read is the server's to keep.
+			return null;
+		} finally {
+			copy.free();
 		}
-		const { queue, run } = result.answer as { queue: RestoredQueue; run: string | null };
-		const epoch = ++this.#epoch;
-		this.#run = run ?? this.#run;
-		this.#startItem = null;
-		this.#viewRows.clear();
-		if (!(await this.#install(queue, epoch))) {
-			return settle({ ok: false, code: 'superseded', message: 'Another queue replaced this one.' });
+	}
+
+	/**
+	 * The list of source `key` that only this device holds, as a list's download gives it: the
+	 * tracks of a pending add, or the list it resolved for one, or of the start not yet answered.
+	 */
+	#heldBody(key: string, libraryId: string): string | null {
+		for (const { edit, device } of this.#pending) {
+			if (edit.type !== 'add' || edit.source.key !== key) continue;
+			if (edit.source.tracks?.length)
+				return JSON.stringify({ libraryId, tracks: edit.source.tracks });
+			return device?.body ?? null;
 		}
-		// An edit heard before this was installed named another queue, so a fetch follows for it.
-		this.#caughtUp([]);
-		settle({ ok: true, position: queue.position ?? null });
+		const start = this.#starting?.body.source;
+		return start?.key === key && start.tracks
+			? JSON.stringify({ libraryId, tracks: start.tracks })
+			: null;
+	}
+
+	/**
+	 * Keeps `record` in place of the kept queue it names; with `emit` false the page is not told, as
+	 * when only its state changed, which the page does not show.
+	 */
+	#putKept(record: KeptRecord, emit = true) {
+		this.#setKept(new Map(this.#kept).set(record.key, record), false, emit);
+	}
+
+	/** Forgets the kept queue `queueId`. */
+	#removeKept(queueId: string) {
+		const next = new Map(this.#kept);
+		if (next.delete(queueId)) this.#setKept(next);
+	}
+
+	/**
+	 * Makes `next` the kept queues: writes the records that changed and deletes those gone, unless
+	 * `written` (they were just read), lets go of the lists only the queues gone used, and tells the
+	 * page unless `emit` is false.
+	 */
+	#setKept(next: Map<string, KeptRecord>, written = false, emit = true) {
+		const before = this.#kept;
+		this.#kept = next;
+		const hashes = new Set<string>();
+		for (const { snapshot } of next.values())
+			for (const { list } of snapshot?.state.sources ?? []) if (list) hashes.add(list);
+		for (const hash of this.#keptHashes)
+			if (!hashes.has(hash) && !this.#referenced.has(hash)) void this.#lists.delete(hash);
+		this.#keptHashes = hashes;
+		const port = this.#port;
+		if (port && !written) {
+			const put = [...next.values()].filter((record) => before.get(record.key) !== record);
+			const gone = [...before.keys()].filter((key) => !next.has(key));
+			if (put.length > 0 || gone.length > 0)
+				this.#tail = this.#tail
+					.then(async () => {
+						if (this.#wiped) return;
+						for (const record of put) await port.put('kept', record);
+						for (const key of gone) await port.remove('kept', key);
+					})
+					.catch((error) => this.#unkept(error));
+		}
+		if (emit) this.#emitKept();
+	}
+
+	/** Tells the page the kept queues, most recently active first; the queue shown is not one. */
+	#emitKept() {
+		this.#keptFor = this.#queueId;
+		const entries = [...this.#kept.values()]
+			.filter(({ key }) => key !== this.#queueId)
+			.map(({ entry }) => entry)
+			.sort(
+				(a, b) => b.lastActive.localeCompare(a.lastActive) || b.queueId.localeCompare(a.queueId)
+			);
+		this.#keptOut(entries);
+	}
+
+	/**
+	 * Reads the kept queues from the server, every page, and makes them the device's, then fetches
+	 * the states it lacks. A queue whose deletion is unsent is left out, and one parked or being
+	 * restored here by a mutation still unsent is kept though the server does not list it yet; what
+	 * the server no longer lists, as one that expired, goes. An entry that agrees with the one held
+	 * is left as it is. Nothing changes if a page cannot be read. Asked for while it runs, it reads
+	 * again once done; settles once the reads are done, before the states are fetched.
+	 */
+	#fillKept(): Promise<void> {
+		if (this.#filling) {
+			this.#fillAgain = true;
+			return this.#filling;
+		}
+		this.#filling = (async () => {
+			try {
+				do {
+					this.#fillAgain = false;
+					await this.#fillOnce();
+				} while (this.#fillAgain && !this.#wiped);
+			} finally {
+				this.#filling = null;
+			}
+			void this.#fetchStates();
+		})();
+		return this.#filling;
+	}
+
+	/**
+	 * One read of the kept queues (`#fillKept`). The first page names the tag of the list last read
+	 * whole, and a `304` takes that list again, so an unchanged list costs one answer with no body;
+	 * what is unsent here is weighed against it afresh either way.
+	 */
+	async #fillOnce() {
+		const before = await this.#unsentKept();
+		let entries: KeptQueue[] = [];
+		let tag: string | null = null;
+		let cursor: string | null = null;
+		do {
+			const after = cursor ? `&cursor=${encodeURIComponent(cursor)}` : '';
+			const known = !cursor && this.#listed ? { 'If-None-Match': this.#listed.tag } : undefined;
+			const response = await this.#get(`/me/queues?limit=${KEPT_PAGE}${after}`, known);
+			if (response?.status === 304 && this.#listed) {
+				entries = this.#listed.entries;
+				break;
+			}
+			if (!response?.ok) return;
+			if (!cursor) tag = response.headers.get('ETag');
+			try {
+				const page = (await response.json()) as { items: KeptQueue[]; nextCursor: string | null };
+				entries.push(...page.items);
+				cursor = page.nextCursor;
+			} catch {
+				return;
+			}
+		} while (cursor);
+		if (this.#wiped) return;
+		if (tag) this.#listed = { tag, entries };
+		const unsent = new Set([...before, ...(await this.#unsentKept())]);
+		const next = new Map<string, KeptRecord>();
+		for (const entry of entries) {
+			const id = entry.queueId;
+			if (unsent.has(`delete:${id}`)) continue;
+			const held = this.#kept.get(id);
+			// Parked here by a start or restore not yet sent: the server's entry is older.
+			const parking = held?.parkedBy !== undefined && unsent.has(held.parkedBy);
+			if (
+				parking ||
+				(held && !held.parkedBy && JSON.stringify(held.entry) === JSON.stringify(entry))
+			) {
+				next.set(id, held);
+				continue;
+			}
+			next.set(id, {
+				key: id,
+				rev: crypto.randomUUID(),
+				owner: this.#instance,
+				createdAt: Date.now(),
+				tries: 0,
+				entry,
+				snapshot: held?.snapshot,
+				snapshotOf: held?.snapshotOf
+			});
+		}
+		for (const held of this.#kept.values()) {
+			const parking = held.parkedBy !== undefined && unsent.has(held.parkedBy);
+			if (!next.has(held.key) && (parking || unsent.has(`restore:${held.key}`)))
+				next.set(held.key, held);
+		}
+		this.#setKept(next);
+	}
+
+	/**
+	 * The starts, restores and kept queues' deletions not yet settled, this instance's and the log's,
+	 * as `keptId` names them. The sender tells of one settled once the log has let go of it.
+	 */
+	async #unsentKept(): Promise<Set<string>> {
+		const ids = new Set<string>(this.#own);
+		for (const queueId of this.#deleting) ids.add(`delete:${queueId}`);
+		try {
+			for (const mutation of (await this.#port?.all<Mutation>('mutations')) ?? [])
+				ids.add(keptId(mutation as unknown as QueueMutation));
+		} catch {
+			// Only this instance's are known.
+		}
+		return ids;
+	}
+
+	/**
+	 * Fetches, one at a time, the state of each kept queue the server lists whose state is not held
+	 * for its `lastActive`, with its lists, so it restores with no connection. Stops at the first
+	 * that cannot be had, until the next read of the list.
+	 */
+	async #fetchStates() {
+		if (this.#fetchingStates) return;
+		this.#fetchingStates = true;
+		try {
+			const tried = new Set<string>();
+			for (;;) {
+				const due = [...this.#kept.values()].find(
+					(record) =>
+						!record.parkedBy &&
+						record.snapshotOf !== record.entry.lastActive &&
+						!tried.has(record.key)
+				);
+				if (!due || this.#wiped) return;
+				tried.add(due.key);
+				if ((await this.#fetchState(due.key)) === 'failed') return;
+			}
+		} finally {
+			this.#fetchingStates = false;
+		}
+	}
+
+	/**
+	 * Fetches the state of the kept queue `queueId` (`GET /me/queues/{queueId}`) and the lists it
+	 * lacks, and keeps them with it: `gone` if the server does not keep it (or the device no longer
+	 * lists it), `failed` if it could not be had. A state whose lists could not all be had is kept,
+	 * and asked for again later.
+	 */
+	async #fetchState(queueId: string): Promise<'ok' | 'gone' | 'failed'> {
+		const response = await this.#get(`/me/queues/${encodeURIComponent(queueId)}`);
+		if (response?.status === 404) return 'gone';
+		if (!response?.ok) return 'failed';
+		let snapshot: KeptState;
+		try {
+			snapshot = (await response.json()) as KeptState;
+		} catch {
+			return 'failed';
+		}
+		const held = this.#kept.get(queueId);
+		if (!held || this.#wiped) return 'gone';
+		// Kept before its lists are looked for, so an install meanwhile does not let go of them.
+		const record = { ...held, rev: crypto.randomUUID(), snapshot, snapshotOf: undefined };
+		this.#putKept(record, false);
+		let complete = true;
+		for (const { list } of snapshot.state.sources) {
+			if (!list || (await this.#lists.get(list)) !== null) continue;
+			const got = await download((path) => this.#get(path), list);
+			if (got === 'failed') complete = false;
+			else if (got !== 'gone') await this.#lists.put(list, got.body);
+		}
+		if (!complete) return 'failed';
+		// Had for the entry held as it was asked for; a newer entry asks again.
+		const now = this.#kept.get(queueId);
+		if (now?.snapshot === snapshot && !this.#wiped)
+			this.#putKept({ ...now, rev: crypto.randomUUID(), snapshotOf: held.entry.lastActive }, false);
+		return 'ok';
 	}
 
 	// ── Kept for the next time the app opens ───────────────────────────
 
 	/**
 	 * Shows the queue as the app left it: the queue the account's record holds, which the server
-	 * confirmed, with the starts and edits of the log not yet sent on top, in the order they were
-	 * made, whichever tab made them (`#replay`). The server's queue replaces it as soon as it is
-	 * heard. Call it once, before the queue is used. Does nothing with no database, and one that
-	 * cannot be read leaves the queue to load from the server.
+	 * confirmed, with the starts, edits and restores of the log not yet sent on top, in the order
+	 * they were made, whichever tab made them (`#replay`), and the kept queues as the device holds
+	 * them, less those inactive for longer than kept queues are kept. The server's queue replaces it
+	 * as soon as it is heard. Call it once, before the queue is used. Does nothing with no database,
+	 * and one that cannot be read leaves the queue to load from the server.
 	 */
 	async resume() {
 		const port = this.#port;
 		if (!port) return;
 		try {
-			const [records, log] = await Promise.all([
+			const [records, log, kept] = await Promise.all([
 				port.all<QueueRecord>('queue'),
-				port.all<Mutation>('mutations')
+				port.all<Mutation>('mutations'),
+				port.all<KeptRecord>('kept')
 			]);
+			const since = Date.now() - KEPT_MS;
+			const live = (record: KeptRecord) => new Date(record.entry.lastActive).getTime() >= since;
+			this.#setKept(new Map(kept.filter(live).map((record) => [record.key, record])), true);
+			for (const record of kept)
+				if (!live(record)) await port.remove('kept', record.key, record.rev).catch(console.error);
 			const record = records.find((record) => record.key === RECORD);
 			if (record?.state) await this.#show(record);
 			for (const mutation of log) {
 				const id = idOf(mutation as unknown as QueueMutation);
 				if (id) this.#replayed.add(id);
 			}
-			this.#replay(log.sort((a, b) => a.seq - b.seq));
+			await this.#replay(log.sort((a, b) => a.seq - b.seq));
 			this.#rebuild();
 			// Any other record is one kept for an instance, which the account's one record replaces.
 			for (const { key, rev } of records)
@@ -831,15 +1238,21 @@ export class QueueStore {
 	/**
 	 * Shows the starts and edits of the queue in `log`, in order, on top of the queue shown: a start
 	 * replaces it unless it is that queue, which the server then has, and an edit goes on the queue
-	 * it was made on, if that is the one shown. What a restore makes active only the server holds,
-	 * so the edits made on it show once it is fetched. Each stays in the log, to be sent by this tab
-	 * or another, and the queue is fetched only once all have left it (`#replayed`).
+	 * it was made on, if that is the one shown. A restore installs the kept queue's state the device
+	 * holds; without it, what the restore makes active is the server's, and the edits made on it show
+	 * once it is fetched. Each stays in the log, to be sent by this tab or another, and the queue is
+	 * fetched only once all have left it (`#replayed`).
 	 */
-	#replay(log: Mutation[]) {
+	async #replay(log: Mutation[]) {
 		for (const { name, args } of log) {
 			if (name === 'startQueue') {
 				const start = args as StartArgs;
 				if (start.body.queueId !== this.#queueId) this.#begin(start, false, true);
+			} else if (name === 'restoreQueue') {
+				const { queueId } = args as RestoreArgs;
+				const snapshot = this.#kept.get(queueId)?.snapshot;
+				if (snapshot && (await this.#install(snapshot, this.#epoch, true)))
+					this.#restored(queueId, true);
 			} else if (name === 'editQueue') {
 				const edit = args as EditArgs;
 				if (edit.queueId !== this.#queueId) continue;
@@ -851,14 +1264,14 @@ export class QueueStore {
 	/**
 	 * Writes the queue the server confirmed to the database now, after any write already begun, and
 	 * settles once it is written or has failed. What the server has not answered is the log's to
-	 * keep, so a queue started here is not written until its start is answered. A queue that has not
-	 * changed since it was last written is not written again, so the record's time is that of its
-	 * last change. Nothing is written once the database is being wiped.
+	 * keep, so a queue started or restored here is not written until the server answers. A queue
+	 * that has not changed since it was last written is not written again, so the record's time is
+	 * that of its last change. Nothing is written once the database is being wiped.
 	 */
 	async save() {
 		const port = this.#port;
 		if (!port) return;
-		if (this.#starting || this.#signature() === this.#savedSignature)
+		if (this.#starting || this.#restoring || this.#signature() === this.#savedSignature)
 			return void (await this.#tail);
 		const record: QueueRecord = {
 			key: RECORD,
@@ -884,8 +1297,8 @@ export class QueueStore {
 
 	/**
 	 * The user's database is being deleted, as the account's session ended: nothing more is written,
-	 * and nothing more is fetched, since the next request may carry another account's session. A
-	 * restore waited for is settled. It does nothing more until it is replaced.
+	 * and nothing more is fetched, since the next request may carry another account's session. It
+	 * does nothing more until it is replaced.
 	 */
 	#wipe() {
 		this.#wiped = true;
@@ -895,9 +1308,10 @@ export class QueueStore {
 		this.#refetch = false;
 		this.#own.clear();
 		this.#replayed.clear();
-		for (const { settle } of this.#restores.values())
-			settle?.({ ok: false, code: 'unreachable', message: 'The session ended.' });
-		this.#restores.clear();
+		this.#restoring = null;
+		this.#kept.clear();
+		this.#keptHashes.clear();
+		this.#listed = null;
 	}
 
 	/** Lets go of the database: nothing more is written once writes already begun are done. */
@@ -955,6 +1369,9 @@ export class QueueStore {
 			this.#refetch = true;
 			this.#drain();
 			this.#sync();
+			void this.#fillKept();
+		} else if (message.type === 'queuesChanged') {
+			void this.#fillKept();
 		} else if (message.type === 'queueReplaced') {
 			// A fetch under way may answer with the queue this replaces, so it is fetched again. One
 			// shown from the log is fetched too: another tab's start of it may be what was heard.
@@ -1113,7 +1530,7 @@ export class QueueStore {
 		// What clean-up dropped, the view's rows for it go too.
 		for (const key of this.#viewRows.keys())
 			if (!this.#sources.has(key)) this.#viewRows.delete(key);
-		const heldRow = this.#starting ? null : this.#confirmed?.currentRow();
+		const heldRow = this.#starting || this.#restoring ? null : this.#confirmed?.currentRow();
 		this.#holding = view ? this.#holdingIn(view) : { upNext: [], history: [] };
 		const manual = view?.manualLen() ?? 0;
 		this.#changed({
@@ -1132,6 +1549,7 @@ export class QueueStore {
 		});
 		this.#sync();
 		this.#changedForSave();
+		if (this.#queueId !== this.#keptFor) this.#emitKept();
 	}
 
 	/**
@@ -1177,7 +1595,7 @@ export class QueueStore {
 			this.#attached.delete(hash);
 			this.#problems.delete(hash);
 			this.#hits.delete(hash);
-			void this.#lists.delete(hash);
+			if (!this.#keptHashes.has(hash)) void this.#lists.delete(hash);
 		}
 		this.#referenced = referenced;
 		for (const { libraryId } of this.#sources.values()) {
@@ -1361,22 +1779,25 @@ export class QueueStore {
 		this.#referenced.clear();
 		this.#problems.clear();
 		this.#pages.reset(null);
-		void this.#lists.keep(new Set());
+		void this.#lists.keep(new Set(this.#keptHashes));
 		this.#pending = [];
 		this.#starting = null;
+		this.#restoring = null;
 		this.#emit();
 	}
 
 	/**
 	 * Makes the snapshot the confirmed queue, with its lists attached again, since a new core
 	 * queue holds none: those the confirmed queue holds are shared from it, and only the others
-	 * are read from storage. Pending edits for another queue go. Stored lists the snapshot does
-	 * not use are deleted: after a reload nothing else knows they were kept. False if a start
-	 * since `epoch` made the snapshot out of date, which then changes nothing.
+	 * are read from storage. Pending edits for another queue go, said as superseded unless `quiet`
+	 * (a restore made here, after which the log still sends them). Stored lists neither the snapshot
+	 * nor a kept queue uses are deleted: after a reload nothing else knows they were kept. False if a
+	 * start since `epoch` made the snapshot out of date, which then changes nothing.
 	 */
 	async #install(
 		{ queueId, version, context, state }: QueueSnapshot,
-		epoch: number
+		epoch: number,
+		quiet = false
 	): Promise<boolean> {
 		const next = Queue.fromJson(JSON.stringify(state));
 		const hashes = hashesOf(next);
@@ -1395,7 +1816,7 @@ export class QueueStore {
 			}
 		}
 		if (epoch !== this.#epoch) return false;
-		void this.#lists.keep(new Set(hashes));
+		void this.#lists.keep(new Set([...hashes, ...this.#keptHashes]));
 		this.#release();
 		// A start the server moved: its current is not the row the view clicked.
 		if (this.#startItem !== null) {
@@ -1411,7 +1832,12 @@ export class QueueStore {
 		// the server has it. An edit made here for another queue, not answered, will be refused.
 		this.#pending = this.#pending.filter((pending) => {
 			if (pending.queueId === queueId && !pending.replayed) return true;
-			if (pending.queueId !== queueId && !pending.replayed && pending.version === undefined)
+			if (
+				pending.queueId !== queueId &&
+				!pending.replayed &&
+				pending.version === undefined &&
+				!quiet
+			)
 				this.#drop(
 					pending,
 					'superseded',
@@ -1420,6 +1846,7 @@ export class QueueStore {
 			return false;
 		});
 		if (this.#starting?.replayed || this.#starting?.body.queueId !== queueId) this.#starting = null;
+		if (this.#restoring?.replayed || this.#restoring?.queueId !== queueId) this.#restoring = null;
 		return true;
 	}
 
@@ -1455,6 +1882,15 @@ function idOf({ name, args }: QueueMutation): string {
 	if (name === 'editQueue') return `edit:${args.editId}`;
 	if (name === 'restoreQueue') return `restore:${args.queueId}`;
 	return '';
+}
+
+/**
+ * How a start, restore or kept queue's deletion is named among those unsent that the kept list
+ * waits for: `start:`, `restore:` or `delete:` and the queue's ID; empty for any other mutation.
+ */
+function keptId(mutation: QueueMutation): string {
+	if (mutation.name === 'deleteKeptQueue') return `delete:${mutation.args.queueId}`;
+	return mutation.name === 'editQueue' ? '' : idOf(mutation);
 }
 
 /** Applies `edit` to `queue`; the core's refusal code if it refuses, `invalid` for a malformed edit. */

@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 
 use jewelcase_core::{QueueError, QueueState, Recipe, Recover, Source};
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::Value;
 
 use super::save::{delete_unused_lists, write_account};
@@ -334,8 +334,12 @@ impl Queues {
 }
 
 /// The kept queue `queue_id` of `user`, if it is stored as one and can be read.
-fn read_kept(tx: &Transaction, user: i64, queue_id: &Uuid) -> rusqlite::Result<Option<Queue>> {
-    let row = tx
+pub(super) fn read_kept(
+    conn: &Connection,
+    user: i64,
+    queue_id: &Uuid,
+) -> rusqlite::Result<Option<Queue>> {
+    let row = conn
         .prepare_cached(
             "SELECT version, context, state, position FROM queues \
              WHERE user_id = ?1 AND queue_id = ?2 AND active = 0",

@@ -1,95 +1,45 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { ApiError, getAlbum, getArtist, getPlaylist, listKeptQueues } from '$lib/api/client';
+	import { untrack } from 'svelte';
+	import { getAlbum, getArtist, getPlaylist } from '$lib/api/client';
 	import type { KeptQueue, TrackSummary } from '$lib/api/types';
 	import { plural } from '$lib/format';
 	import { player } from '$lib/player.svelte';
+	import { queue } from '$lib/queue/client.svelte';
 	import { ago, contextLabel, namedBy } from '$lib/queue/kept';
 	import { lookup, trackKey } from '$lib/queue/summaries';
-	import { realtime } from '$lib/realtime.svelte';
-	import { sender } from '$lib/sync/sender';
 	import Icon from './Icon.svelte';
 
 	// The account's kept queues, the ones a start or a restore replaced after they were adjusted
 	// (`requirements/queue.md` §6): each shows what it was playing, how much it holds and when it
-	// was last active. Restoring one makes it the active queue and plays it here where it was left;
-	// deleting is one press, a change the log sends in its turn with the queue's others. The list is
-	// the server's, so it needs the connection: it is fetched again when the server says it changed
-	// (`queuesChanged`) and when the connection returns.
+	// was last active. The list is the device's (`QueueClient.kept`), online and offline: the queue
+	// worker keeps it from the server's and from the queues replaced here. Restoring one makes it the
+	// active queue at once and plays it here where it was left; deleting is one press, a change the
+	// log sends in its turn with the queue's others.
 
 	let { onrestored }: { onrestored?: () => void } = $props();
 
-	let items = $state<KeptQueue[]>([]);
-	/** The cursor of the next page; null at the end. */
-	let more = $state<string | null>(null);
-	let status = $state<'loading' | 'ready' | 'failed'>('loading');
-	/** Why the list could not be had, in words. */
-	let failure = $state('');
+	/** How many entries are drawn at first, and added by each "Show more". */
+	const STEP = 50;
+
+	/** How many entries are drawn. */
+	let shown = $state(STEP);
 	/** What each entry was playing, by `trackKey`; null for a song that cannot be read. */
 	let tracks = $state.raw(new Map<string, TrackSummary | null>());
 	/** The names of albums, artists and playlists, by `<kind>/<id>`. */
 	let names = $state<Record<string, string>>({});
 	/** The queue being restored, so a second press waits. */
 	let restoring = $state<string | null>(null);
-	/** Why the last restore or delete did not happen. */
+	/** Why the last restore did not happen. */
 	let problem = $state('');
-	let loadingMore = $state(false);
-	/** Counts loads, so an answer to an earlier one is ignored. */
-	let loads = 0;
-	/** The queues deleted here that the server may not have heard of yet, left out of every load. */
-	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- not shown, only read by a load
-	const deleted = new Set<string>();
 
-	/** Why a request failed, in words: the connection, or the server's own message. */
-	const whyNot = (error: unknown) =>
-		error instanceof ApiError ? error.message : 'Kept queues need a connection to the server.';
+	const items = $derived(queue.kept ?? []);
+	const drawn = $derived(items.slice(0, shown));
 
-	/**
-	 * Loads the list from its first page, as far as it was already shown, so a change does not send
-	 * the person back to the top. The answer is ignored if a later load began.
-	 */
-	async function load() {
-		const load = ++loads;
-		const wanted = Math.max(items.length, 1);
-		try {
-			const got: KeptQueue[] = [];
-			let cursor: string | undefined;
-			let next: string | null = null;
-			do {
-				const page = await listKeptQueues(fetch, cursor);
-				got.push(...page.items);
-				next = page.nextCursor;
-				cursor = next ?? undefined;
-			} while (next && got.length < wanted);
-			if (load !== loads) return;
-			items = got.filter((entry) => !deleted.has(entry.queueId));
-			more = next;
-			status = 'ready';
-			void describe(got);
-		} catch (error) {
-			if (load !== loads) return;
-			failure = whyNot(error);
-			status = 'failed';
-		}
-	}
-
-	/** Loads the page after the last one. */
-	async function loadMore() {
-		if (!more || loadingMore) return;
-		loadingMore = true;
-		const load = loads;
-		try {
-			const page = await listKeptQueues(fetch, more);
-			if (load !== loads) return;
-			items = [...items, ...page.items.filter((entry) => !deleted.has(entry.queueId))];
-			more = page.nextCursor;
-			void describe(page.items);
-		} catch (error) {
-			problem = whyNot(error);
-		} finally {
-			loadingMore = false;
-		}
-	}
+	// Only the entries drawn are followed: what `describe` reads and learns is not.
+	$effect(() => {
+		const entries = drawn;
+		untrack(() => void describe(entries));
+	});
 
 	/** Looks up the songs and the names of `entries`, for what is not already known. */
 	async function describe(entries: KeptQueue[]) {
@@ -148,26 +98,8 @@
 	 */
 	function remove(entry: KeptQueue) {
 		problem = '';
-		deleted.add(entry.queueId);
-		items = items.filter((other) => other.queueId !== entry.queueId);
-		sender.enqueue('deleteKeptQueue', { queueId: entry.queueId });
+		queue.deleteKept(entry.queueId);
 	}
-
-	onMount(() => {
-		void load();
-		const unhear = realtime.on((message) => {
-			if (message.type === 'queuesChanged' || message.type === 'hello') void load();
-		});
-		const unsettle = sender.onSettled(({ name, args }, outcome) => {
-			if (name !== 'deleteKeptQueue') return;
-			deleted.delete((args as { queueId: string }).queueId);
-			if (outcome !== 'sent') void load();
-		});
-		return () => {
-			unhear();
-			unsettle();
-		};
-	});
 </script>
 
 <div class="kept">
@@ -179,20 +111,15 @@
 			</button>
 		</div>
 	{/if}
-	{#if status === 'loading'}
+	{#if queue.kept === null}
 		<p class="muted note">Loading…</p>
-	{:else if status === 'failed' && items.length === 0}
-		<div class="note" role="status">
-			<p class="muted">{failure}</p>
-			<button type="button" class="retry" onclick={() => load()}>Try again</button>
-		</div>
 	{:else if items.length === 0}
 		<p class="muted note">
 			Queues you leave behind are kept here for 30 days, to go back to where you were.
 		</p>
 	{:else}
 		<ul aria-label="Kept queues">
-			{#each items as entry (entry.queueId)}
+			{#each drawn as entry (entry.queueId)}
 				<li>
 					<button
 						type="button"
@@ -220,10 +147,8 @@
 				</li>
 			{/each}
 		</ul>
-		{#if more}
-			<button type="button" class="retry" disabled={loadingMore} onclick={loadMore}>
-				Show more
-			</button>
+		{#if items.length > shown}
+			<button type="button" class="retry" onclick={() => (shown += STEP)}>Show more</button>
 		{/if}
 	{/if}
 </div>
@@ -326,10 +251,6 @@
 		margin: 0;
 		padding: var(--space-3);
 		font-size: 14px;
-	}
-
-	.note p {
-		margin: 0;
 	}
 
 	.retry {

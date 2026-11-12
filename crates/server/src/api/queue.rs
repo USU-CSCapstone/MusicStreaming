@@ -24,7 +24,7 @@ use super::scope::Caller;
 use super::{Problem, plays};
 use crate::queue::Queues;
 pub use edits::edit;
-pub use kept::{delete, list, restore};
+pub use kept::{delete, get_kept, list, restore};
 pub use lists::get_list;
 pub use resolve::{Recipe, resolve};
 pub use rows::get_rows;
