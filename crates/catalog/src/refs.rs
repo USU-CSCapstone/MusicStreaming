@@ -7,7 +7,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::Id;
+use crate::Id;
 
 /// The spec's `ArtistRef`. Read from [`artists_json!`]'s `[id, name]`.
 #[derive(Clone, Serialize, Deserialize)]
@@ -98,16 +98,18 @@ pub fn availability(available: bool) -> &'static str {
 }
 
 /// SQL for the placeholder of the image whose ID is the SQL `$image_id`, for [`ImageRef::new`].
+#[macro_export]
 macro_rules! placeholder {
     ($image_id:literal) => {
         concat!("(SELECT placeholder FROM images WHERE images.id = ", $image_id, ")")
     };
 }
-pub(crate) use placeholder;
+pub use crate::placeholder;
 
 /// SQL for a JSON array of the SQL `$value`, read from each artist `credited` on an `album` or a
 /// `track` whose ID is the SQL `$id`, in credit order. Two such arrays for the same owner line up
 /// by position.
+#[macro_export]
 macro_rules! credits_json {
     ($value:literal, $owner:literal, $id:literal) => {
         concat!(
@@ -123,25 +125,23 @@ macro_rules! credits_json {
         )
     };
 }
-pub(crate) use credits_json;
+pub use crate::credits_json;
 
 /// SQL for the artists credited on an `album` or a `track` whose ID is the SQL `$id`, as JSON
 /// that reads as `Vec<Credit>`, in credit order. Part of the row, so a page is one query.
+#[macro_export]
 macro_rules! artists_json {
     ($owner:literal, $id:literal) => {
-        $crate::api::refs::credits_json!(
-            "json_array(CAST(credited.id AS TEXT), credited.name)",
-            $owner,
-            $id
-        )
+        $crate::credits_json!("json_array(CAST(credited.id AS TEXT), credited.name)", $owner, $id)
     };
 }
-pub(crate) use artists_json;
+pub use crate::artists_json;
 
 /// SQL for the tags of an `album`, an `artist`, or a `track` whose ID is the SQL `$id`, as JSON
 /// that reads as [`TagsByType`]: `[type, id, name]`s in type, then name order. `CROSS JOIN`
 /// keeps the entity's own links the outer loop, so statistics showing few tags never have every
 /// row scan the library's tags.
+#[macro_export]
 macro_rules! tags_json {
     ($owner:literal, $id:literal) => {
         concat!(
@@ -156,4 +156,4 @@ macro_rules! tags_json {
         )
     };
 }
-pub(crate) use tags_json;
+pub use crate::tags_json;

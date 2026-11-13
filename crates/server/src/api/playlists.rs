@@ -5,16 +5,16 @@
 //! A playlist is its user's own, in one library (`design/database.md` §6). Everything here is
 //! scoped to the caller's account as well as the library, so another account, an admin
 //! included, finds a playlist as absent as one that never was (`requirements/users.md` §10).
-//! A playlist's items are kept in order under sparse keys [`KEY_GAP`] apart. Its artwork is
-//! an ID kept on the row (`artwork`) and served by `getImage`.
+//! A playlist's items are kept in order under sparse keys [`KEY_GAP`] apart
+//! (`jewelcase_catalog::mutate`). Its artwork is an ID kept on the row (`artwork`) and served by
+//! `getImage`.
 
 mod announce;
 mod artwork;
 mod edit;
 mod items;
-mod keys;
 mod liked;
-mod representation;
+mod record;
 
 use std::sync::Arc;
 
@@ -22,69 +22,32 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use jewelcase_core::playlist::Op;
-use jewelcase_core::{sort_key, words};
-use rusqlite::types::Value;
-use rusqlite::{OptionalExtension, params};
+use jewelcase_catalog::mutate::{Deleted, Writer};
+use rusqlite::params;
 use serde::Deserialize;
 
 pub use announce::Change;
 pub use artwork::{all_mosaics, held as holds_artwork, mosaics_of};
 pub use edit::edit;
-pub use items::{all_items, duplicates, list_items};
-pub use liked::{announce as announce_liked, like, take_out as unlike_in, unlike};
-pub use representation::Playlist;
-use representation::{SELECT, playlist};
+pub use items::{duplicates, list_items};
+pub use jewelcase_catalog::playlists::Playlist;
+#[cfg(test)]
+use jewelcase_catalog::playlists::source;
+use jewelcase_catalog::playlists::{self, PlaylistSort, get as get_playlist};
+pub use liked::{announce as announce_liked, like, removal, unlike};
+pub use record::record;
 
 use super::extract::{self, Path, Query};
-use super::page::{Order, Page, Request, Sort, Source, Total, Unknown};
+use super::page::{Order, Page, Request};
 use super::playables::{self, Playable};
 use super::realtime::{Hub, ServerMessage};
 use super::scope::Scope;
 use super::{Code, Id, Images, Problem};
-use crate::db::feed::{self, Kind, Op as FeedOp};
-use crate::db::{Database, catalog, new_id, now_ms};
+use crate::db::feed;
+use crate::db::{Database, new_id, now_ms};
 
-/// How far apart the keys of a playlist's items start, so an item put between two takes the
-/// midpoint, 20 times over, before the playlist is renumbered.
-pub const KEY_GAP: i64 = 1 << 20;
-
-/// The `sort` values `listPlaylists` supports.
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-enum PlaylistSort {
-    Name,
-    Created,
-    #[default]
-    Modified,
-    // The spec's `playCount` needs listening data, which is not kept per playlist yet, so it
-    // answers `422`.
-}
-
-impl PlaylistSort {
-    /// The keyset this sort pages by. A pinned playlist's `pin_rank` is 1 and the rest's NULL,
-    /// the unknown part of the list, so the pinned come first in either order. Each sort's
-    /// columns are one of `playlists`' indexes after `user_id` and `library_id`.
-    fn sort(self) -> &'static Sort {
-        match self {
-            PlaylistSort::Name => &Sort {
-                label: "playlists.name",
-                columns: &["p.pin_rank", "p.sort_key", "p.id"],
-                unknown: Unknown::Null,
-            },
-            PlaylistSort::Created => &Sort {
-                label: "playlists.created",
-                columns: &["p.pin_rank", "p.created_at", "p.id"],
-                unknown: Unknown::Null,
-            },
-            PlaylistSort::Modified => &Sort {
-                label: "playlists.modified",
-                columns: &["p.pin_rank", "p.modified_at", "p.id"],
-                unknown: Unknown::Null,
-            },
-        }
-    }
-}
+#[cfg(test)]
+use jewelcase_catalog::mutate::KEY_GAP;
 
 /// The parameters `listPlaylists` supports. Any other answers `422` rather than being ignored.
 #[derive(Deserialize)]
@@ -99,27 +62,6 @@ pub struct ListQuery {
     limit: Option<u32>,
 }
 
-/// The playlists `user` has in `library`, those whose title holds all of `q`'s words, in order
-/// if `q` has any.
-fn source(user: i64, library: i64, q: Option<&str>) -> Source {
-    let mut filter = "p.user_id = ? AND p.library_id = ?".to_owned();
-    let mut params = vec![Value::from(user), Value::from(library)];
-    let folded = words(q.unwrap_or("")).join(" ");
-    if !folded.is_empty() {
-        filter += " AND instr(p.folded, ?) > 0";
-        params.push(Value::from(folded));
-    }
-    // Counted for every page: a user has hundreds of playlists at most, all in one index range.
-    Source {
-        select: SELECT,
-        from: "playlists p".to_owned(),
-        joins: "",
-        filter,
-        params,
-        total: Total::Counted,
-    }
-}
-
 /// The caller's playlists in `library`, pinned first, a page at a time.
 pub async fn list(
     State(db): State<Arc<Database>>,
@@ -128,18 +70,8 @@ pub async fn list(
 ) -> Result<Json<Page<Playlist>>, Problem> {
     let request = Request::new(query.sort.sort(), query.order, query.cursor, query.limit)?;
     let q = query.q;
-    let page = db
-        .read(move |conn| {
-            let mut page = request.read(conn, &source(user, library, q.as_deref()), playlist)?;
-            let lost = super::hidden::playlists(conn, user, library)?;
-            for playlist in &mut page.items {
-                if let Some(&lost) = lost.get(&playlist.id.0) {
-                    playlist.lose(lost);
-                }
-            }
-            Ok(page)
-        })
-        .await?;
+    let page =
+        db.read(move |conn| playlists::list(conn, user, library, request, q.as_deref())).await?;
     Ok(Json(page))
 }
 
@@ -185,50 +117,22 @@ pub async fn create(
     let created = settle(async move {
         let (body, change) = db
             .try_write(move |tx| {
-                let now = now_ms();
                 let id = match chosen {
-                    Some(id) => {
-                        let taken = tx
-                            .prepare_cached("SELECT 1 FROM playlists WHERE id = ?1")?
-                            .exists([id])?;
-                        if taken {
-                            return Err(Problem::new(Code::IdTaken));
-                        }
-                        id
-                    }
+                    Some(id) => id,
                     None => new_id()?,
                 };
-                tx.execute(
-                    "INSERT INTO playlists (id, library_id, user_id, title, folded, sort_key, \
-                 description, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
-                    params![
-                        id,
-                        library,
-                        user,
-                        title,
-                        words(&title).join(" "),
-                        sort_key(&title, None).as_bytes(),
-                        description,
-                        now
-                    ],
+                let mut effects = |effect| record(tx, user, library, effect);
+                Writer::new(tx, user, library, now_ms(), &mut effects).create_playlist(
+                    id,
+                    &title,
+                    description.as_deref(),
+                    tracks,
                 )?;
-                // In the writer, unlike an edit's plan: the playlist is new, so the work is one
-                // add, and no track can be purged between the plan and the write.
-                let add = vec![Op::Add { at: None, items: tracks }];
-                let plan = edit::plan(tx, library, id, add, now)?;
-                edit::write(tx, user, library, id, 1, &plan)?;
-                let (count, duration) = plan.totals.unwrap_or_default();
-                tx.execute(
-                    "UPDATE playlists SET track_count = ?2, duration_us = ?3 WHERE id = ?1",
-                    params![id, count, duration],
-                )?;
-                catalog::playlist_artwork(tx, id)?;
-                feed::record_account(tx, user, library, Kind::Playlist, id, 0, FeedOp::Upsert)?;
                 // The row was just inserted in this transaction.
                 let created =
-                    representation::get(tx, user, library, id)?.ok_or_else(Problem::not_found)?;
+                    get_playlist(tx, user, library, id)?.ok_or_else(Problem::not_found)?;
                 let body = serde_json::to_value(&created)?;
-                Ok((body, Change::of(created, Vec::new())))
+                Ok::<_, Problem>((body, Change::of(created, Vec::new())))
             })
             .await?;
         announce(&hub, user, Some(change));
@@ -263,7 +167,7 @@ pub async fn get(
     Scope { user, library }: Scope,
     Path((_, Id(id))): Path<(Id, Id)>,
 ) -> Result<Json<Playlist>, Problem> {
-    db.read(move |conn| representation::get(conn, user, library, id))
+    db.read(move |conn| get_playlist(conn, user, library, id))
         .await?
         .map(Json)
         .ok_or_else(Problem::not_found)
@@ -282,7 +186,7 @@ pub async fn delete(
 ) -> Result<StatusCode, Problem> {
     settle(async move {
         let version = db
-            .write(move |tx| {
+            .try_write(move |tx| {
                 // Deleting their Liked Songs unlikes everything in it, which its items name
                 // until the delete takes them.
                 tx.prepare_cached(
@@ -293,28 +197,22 @@ pub async fn delete(
                      ORDER BY i.key",
                 )?
                 .execute(params![id, user, library, now_ms()])?;
-                let deleted = tx
-                    .prepare_cached(
-                        "DELETE FROM playlists WHERE id = ?1 AND user_id = ?2 AND library_id = ?3 \
-                         RETURNING version, kind = 'liked'",
-                    )?
-                    .query_row(params![id, user, library], |row| {
-                        Ok((row.get::<_, i64>(0)?, row.get::<_, bool>(1)?))
-                    })
-                    .optional()?;
+                let mut effects = |effect| record(tx, user, library, effect);
+                let deleted =
+                    Writer::new(tx, user, library, now_ms(), &mut effects).delete_playlist(id)?;
                 if deleted.is_some() {
                     feed::record_playlist_deleted(tx, user, library, id)?;
                 }
                 // A Liked Songs deleted, which unliked everything in it, is not made again until
                 // the next like (`requirements/playlists.md` §11).
-                if let Some((_, true)) = deleted {
+                if let Some(Deleted { liked: true, .. }) = deleted {
                     tx.prepare_cached(
                         "INSERT OR IGNORE INTO liked_songs_deleted (user_id, library_id) \
                          VALUES (?1, ?2)",
                     )?
                     .execute([user, library])?;
                 }
-                Ok(deleted.map(|(version, _)| version))
+                Ok::<_, Problem>(deleted.map(|deleted| deleted.version))
             })
             .await?
             .ok_or_else(Problem::not_found)?;

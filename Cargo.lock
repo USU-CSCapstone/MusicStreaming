@@ -1467,9 +1467,11 @@ name = "jewelcase-catalog"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "jewelcase-core",
  "rusqlite",
  "serde",
  "serde_json",
+ "time",
 ]
 
 [[package]]
@@ -1477,7 +1479,10 @@ name = "jewelcase-catalog-wasm"
 version = "0.1.0"
 dependencies = [
  "jewelcase-catalog",
+ "jewelcase-core",
  "rusqlite",
+ "serde",
+ "serde_json",
  "sqlite-wasm-rs",
  "sqlite-wasm-vfs",
  "wasm-bindgen",

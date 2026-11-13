@@ -30,6 +30,7 @@ pub struct Lead {
 }
 
 /// A condition each row of a page meets, such as being on one album.
+#[derive(Clone)]
 pub struct Check {
     /// The condition on a row of the table, with a `?` for each of `params`.
     pub condition: String,
@@ -47,10 +48,23 @@ impl Check {
 }
 
 impl Table {
+    /// The condition on a row of the table that it is in `library` and meets `check`, if there is
+    /// one, with its parameters. `library` comes from the caller's `Scope`, so the caller reaches
+    /// it.
+    pub fn filter(&self, library: i64, check: Option<Check>) -> (String, Vec<Value>) {
+        let mut filter = format!("{}.library_id = ?", self.alias);
+        let mut params = vec![Value::from(library)];
+        if let Some(Check { condition, params: more }) = check {
+            filter += &format!(" AND {condition}");
+            params.extend(more);
+        }
+        (filter, params)
+    }
+
     /// The rows of the table in `library`, or those of `lead`, that meet `check` if there is
     /// one. The total is the library's stored count, or the lead's size, and is counted only
-    /// where there is a check. `library` comes from the caller's `Scope`, so the caller reaches
-    /// it.
+    /// where there is a check. A page of a lead sorts its IDs and sort keys and joins the
+    /// columns back after ([`Source::back`]).
     pub fn source(
         &self,
         conn: &Connection,
@@ -64,20 +78,28 @@ impl Table {
             (Some(lead), None) => Total::Stored(lead.size),
             (_, Some(_)) => Total::Counted,
         };
-        let (from, mut params) = match lead {
+        let (from, mut params, back) = match lead {
             // The page sorts the lead's rows rather than walking the sort's index for them;
             // `CROSS JOIN` fixes that order. The library condition still applies to every row.
-            Some(Lead { ids, params, .. }) => {
-                (format!("({ids}) lead CROSS JOIN {name} {alias} ON {alias}.id = lead.id"), params)
-            }
-            None => (format!("{name} {alias}"), Vec::new()),
+            Some(Lead { ids, params, .. }) => (
+                format!("({ids}) lead CROSS JOIN {name} {alias} ON {alias}.id = lead.id"),
+                params,
+                Some((name, alias)),
+            ),
+            None => (format!("{name} {alias}"), Vec::new(), None),
         };
-        let mut filter = format!("{alias}.library_id = ?");
-        params.push(library.into());
-        if let Some(Check { condition, params: more }) = check {
-            filter += &format!(" AND {condition}");
-            params.extend(more);
-        }
-        Ok(Source { select: self.select, from, joins: self.joins, filter, params, total })
+        let (filter, more) = self.filter(library, check);
+        params.extend(more);
+        Ok(Source {
+            select: self.select,
+            from,
+            joins: self.joins,
+            filter,
+            params,
+            total,
+            counting: None,
+            back,
+            walk: None,
+        })
     }
 }

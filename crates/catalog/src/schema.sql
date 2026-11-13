@@ -8,6 +8,15 @@
 -- A sort index ends at its sort keys, where the server's end in `id`: here `id` is the rowid,
 -- which every index already ends in, so it orders ties and serves a cursor's seek either way.
 
+-- The library's own counts, which the unfiltered lists' totals and the tag filters' plans read.
+-- One row per library, kept by the library feed's `library` changes; no name, root or path.
+CREATE TABLE libraries (
+    id           INTEGER PRIMARY KEY,
+    track_count  INTEGER NOT NULL DEFAULT 0,
+    album_count  INTEGER NOT NULL DEFAULT 0,
+    artist_count INTEGER NOT NULL DEFAULT 0
+) STRICT;
+
 CREATE TABLE images (
     id          INTEGER PRIMARY KEY,
     library_id  INTEGER NOT NULL,
@@ -194,11 +203,12 @@ CREATE TABLE artist_tags (
 CREATE INDEX artist_tags_by_tag ON artist_tags (tag_id, artist_id);
 
 -- The account's own playlists, which the account feed (`GET /me/changes`) carries: only the
--- signed-in user's, so the rows have no owner. Never in a library's snapshot, which every
--- account that reaches the library shares.
+-- signed-in user's, so `user_id` is always that user's own. Never in a library's snapshot, which
+-- every account that reaches the library shares.
 CREATE TABLE playlists (
     id          INTEGER PRIMARY KEY,
     library_id  INTEGER NOT NULL,
+    user_id     INTEGER NOT NULL,
     -- 'liked' for the user's Liked Songs, whose items are their likes, and 'saved' for the rest
     kind        TEXT    NOT NULL DEFAULT 'saved' CHECK (kind IN ('saved', 'liked')),
     title       TEXT    NOT NULL,
@@ -213,8 +223,16 @@ CREATE TABLE playlists (
     track_count INTEGER NOT NULL DEFAULT 0,
     duration_us INTEGER NOT NULL DEFAULT 0,
     -- The artwork's key as the API gives it: an image ID, or a mosaic of four
-    image_key   TEXT
+    image_key   TEXT,
+    -- 1 for a pinned playlist and NULL for the rest, so a list puts the pinned first in both orders
+    pin_rank    INTEGER GENERATED ALWAYS AS (nullif(pinned, 0)) VIRTUAL
 ) STRICT;
+
+CREATE INDEX playlists_by_name ON playlists (user_id, library_id, pin_rank, sort_key);
+-- A user has one Liked Songs in a library at most
+CREATE UNIQUE INDEX playlists_liked ON playlists (user_id, library_id) WHERE kind = 'liked';
+CREATE INDEX playlists_by_created ON playlists (user_id, library_id, pin_rank, created_at);
+CREATE INDEX playlists_by_modified ON playlists (user_id, library_id, pin_rank, modified_at);
 
 -- A playlist's tracks in the user's order: `key` orders an item among its playlist's items
 CREATE TABLE playlist_items (

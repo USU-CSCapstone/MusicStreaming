@@ -26,6 +26,8 @@ use rusqlite::{Connection, params_from_iter};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::Id;
+
 /// A row as it travels: its cells by column name.
 pub type Row = Map<String, Value>;
 
@@ -33,6 +35,8 @@ pub type Row = Map<String, Value>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Kind {
+    /// The library's own counts.
+    Library,
     Artist,
     Album,
     Track,
@@ -101,6 +105,9 @@ const TRACK: &[Part] = &[
     shared("images", "id = (SELECT image_id FROM tracks WHERE id = ?1 AND library_id = ?2)"),
 ];
 
+/// The tables a library's rows are in.
+const LIBRARY: &[Part] = &[own("libraries", "id = ?1", "id")];
+
 /// The tables a playlist's rows are in.
 const PLAYLIST: &[Part] = &[own("playlists", "id = ?1", "id")];
 
@@ -121,6 +128,7 @@ impl Kind {
     /// and a tag's type travel with it.
     fn parts(self) -> &'static [Part] {
         match self {
+            Kind::Library => LIBRARY,
             Kind::Artist => ARTIST,
             Kind::Album => ALBUM,
             Kind::Track => TRACK,
@@ -204,11 +212,6 @@ fn is_id(column: &str) -> bool {
     column == "id" || column.ends_with("_id")
 }
 
-/// Reads an ID in its one canonical spelling, as the API does.
-fn parse_id(id: &str) -> Option<i64> {
-    id.parse::<i64>().ok().filter(|n| n.to_string() == id)
-}
-
 /// Reads the rows of the entity `id` of `kind` in `library`, or `None` if there is no such
 /// entity there; `key` is a playlist item's and 0 for every other kind. `conn` may be the
 /// server's database or a device's: both have the device columns, and only those are read. A
@@ -247,13 +250,19 @@ fn read(
     id: &str,
     key: i64,
 ) -> rusqlite::Result<Option<Rows>> {
-    let Some(entity) = parse_id(id) else { return Ok(None) };
+    let Some(Id(entity)) = Id::canonical(id) else { return Ok(None) };
     let params = [entity, library, key, user.unwrap_or(0)];
     let mut tables = BTreeMap::new();
     for Part { table, by, order, owned, .. } in kind.parts() {
         let cols = columns(table);
         let names: Vec<&str> = cols.iter().map(|c| c.name.as_str()).collect();
-        let mut scope = if *table == "tag_types" { "" } else { " AND library_id = ?2" }.to_owned();
+        let mut scope = match *table {
+            "tag_types" => "",
+            // A library's row is its own entity: the entity must be the library asked for.
+            "libraries" => " AND id = ?2",
+            _ => " AND library_id = ?2",
+        }
+        .to_owned();
         if *owned {
             if user.is_none() {
                 return Ok(None);
@@ -301,7 +310,7 @@ fn to_sql(col: &Column, cell: &Value) -> Result<Sql, Error> {
     Ok(match (col.ty.as_str(), cell) {
         (_, Value::Null) => Sql::Null,
         ("INTEGER", Value::String(s)) if is_id(&col.name) => {
-            Sql::Integer(parse_id(s).ok_or(Error::Invalid("an ID is not an ID"))?)
+            Sql::Integer(Id::canonical(s).ok_or(Error::Invalid("an ID is not an ID"))?.0)
         }
         ("INTEGER", Value::Number(n)) if !is_id(&col.name) => {
             Sql::Integer(n.as_i64().ok_or(Error::Invalid("a number is not an integer"))?)
@@ -324,7 +333,7 @@ pub fn apply(conn: &Connection, rows: &Rows) -> Result<(), Error> {
     if rows.tables.keys().any(|name| parts.iter().all(|part| part.table != name)) {
         return Err(Error::Invalid("a table is not one of the entity's"));
     }
-    let id = parse_id(&rows.id).ok_or(Error::Invalid("the entity's ID is not an ID"))?;
+    let Id(id) = Id::canonical(&rows.id).ok_or(Error::Invalid("the entity's ID is not an ID"))?;
     clear(conn, rows.kind, id, rows.key)?;
     for Part { table, shared, .. } in parts {
         let Some(list) = rows.tables.get(*table) else { continue };

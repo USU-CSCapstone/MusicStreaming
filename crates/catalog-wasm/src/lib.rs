@@ -3,22 +3,33 @@
 //! dedicated worker or in memory (node, the unit tests). Natively this crate is empty.
 #![cfg(target_family = "wasm")]
 
+use jewelcase_catalog::page::Totals;
 use jewelcase_catalog::{SCHEMA_VERSION, create_schema};
+use jewelcase_core::Index;
 use rusqlite::{Connection, OpenFlags};
 use sqlite_wasm_rs::WasmOsCallback;
 use sqlite_wasm_vfs::sahpool::{OpfsSAHPoolCfg, install};
 use wasm_bindgen::prelude::*;
 
 mod bench;
+mod feed;
+mod mutate;
+mod query;
 
 /// The sahpool VFS's registered name, which `open` names when opening the file.
 const VFS: &str = "opfs-sahpool";
 
-/// The device database, held in WebAssembly memory and (for `open`) on OPFS. Call `free()` when
-/// done with one.
+/// The device database, held in WebAssembly memory and (for `open`) on OPFS, with the search
+/// index built from it once `buildIndex` has run, and the counted totals of lists it has answered,
+/// which every write to the file lets go of. A file holds one library. Call `free()` when done
+/// with one.
 #[wasm_bindgen]
 pub struct Catalog {
     conn: Connection,
+    /// The search index, once built.
+    index: Option<Index>,
+    /// The memo of counted totals, which every write to the file must clear.
+    totals: Totals,
 }
 
 #[wasm_bindgen]
@@ -81,15 +92,16 @@ impl Catalog {
     }
 
     /// Tunes the connection (see `tune`), creates the schema in a new database, and checks the
-    /// version of an existing one.
+    /// version of an existing one. Either way the feed state tables exist afterwards.
     fn ready(conn: Connection) -> Result<Catalog, JsError> {
         Self::tune(&conn)?;
-        let catalog = Catalog { conn };
+        let catalog = Catalog { conn, index: None, totals: Totals::default() };
         match catalog.schema_version()? {
             0 => create_schema(&catalog.conn)?,
             SCHEMA_VERSION => {}
             other => return Err(JsError::new(&format!("catalog schema version {other}"))),
         }
+        catalog.conn.execute_batch(feed::FEED_STATE)?;
         Ok(catalog)
     }
 }

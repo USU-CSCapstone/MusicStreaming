@@ -1,126 +1,32 @@
-//! Tracks: `listTracks` and `getTrack` (`api/openapi.yaml`).
-
-mod representation;
+//! Tracks: `listTracks` and `getTrack` (`api/openapi.yaml`). The queries are the catalog's
+//! (`jewelcase_catalog::tracks`), which a device runs too.
 
 use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
-use rusqlite::Connection;
+use jewelcase_catalog::tracks;
 use serde::Deserialize;
 
-pub use representation::{
-    JOINS, LOUDNESS, Loudness, SELECT, Track, TrackSummary, list_summary, loudness, mark_hidden,
-    mark_liked, sort_keys,
+pub use jewelcase_catalog::tracks::{
+    CREDITS, LOUDNESS, Loudness, TRACK_NUMBER, Track, TrackOrder, TrackSort, TrackSummary, loudness,
 };
+#[cfg(test)]
+pub use jewelcase_catalog::tracks::{SELECT, list_summary};
+#[cfg(test)]
+pub use jewelcase_catalog::tracks::{TAGGED, TRACKS};
+#[cfg(test)]
+use jewelcase_catalog::tracks::{WITHIN_ALBUM, source};
 
-use super::credit::{ArtistCredit, Credits};
+use super::credit::ArtistCredit;
 use super::extract::{Path, Query};
-use super::hidden;
-use super::page::{self, Check, Order, Page, Request, Sort, Source, Table, Total, Unknown};
+use super::page::{Order, Page, Request};
 use super::scope::Scope;
-use super::tag_filter::{self, LEAD_SHARE, RESOLVE_SHARE, TagFilter, Tagged};
+#[cfg(test)]
+use super::tag_filter::LEAD_SHARE;
+use super::tag_filter::TagFilter;
 use super::{AnyId, Id, Problem};
-use crate::db::{self, Database};
-
-/// A track with no number sorts last on its disc. This matches the indexes' expression
-/// (`0003_catalog.sql`), which keeps NULL out of the keyset.
-pub const TRACK_NUMBER: &str = "ifnull(t.track_number, 9223372036854775807)";
-
-/// Album order within one album: disc, then number. `tracks_by_album_order` holds exactly this
-/// after `album_id`, where the library-wide album order would sort the album on every page.
-const WITHIN_ALBUM: Sort = Sort {
-    label: "tracks.album.withinAlbum",
-    columns: &["t.disc_number", TRACK_NUMBER, "t.id"],
-    unknown: Unknown::Never,
-};
-
-/// The `sort` values `listTracks` supports, and so a recipe.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum TrackSort {
-    #[default]
-    Name,
-    Artist,
-    Album,
-    DateAdded,
-    ReleaseDate,
-    Duration,
-    // The spec's `playCount`, `lastPlayed`, and `top` are not implemented, so they answer `422`.
-}
-
-impl TrackSort {
-    /// The name `listTracks` and a recipe spell this sort by.
-    fn name(self) -> &'static str {
-        match self {
-            TrackSort::Name => "name",
-            TrackSort::Artist => "artist",
-            TrackSort::Album => "album",
-            TrackSort::DateAdded => "dateAdded",
-            TrackSort::ReleaseDate => "releaseDate",
-            TrackSort::Duration => "duration",
-        }
-    }
-
-    /// The keyset this sort pages by. Each one's columns are one of `tracks`' indexes after
-    /// `library_id`.
-    fn sort(self) -> &'static Sort {
-        match self {
-            TrackSort::Name => &Sort {
-                label: "tracks.name",
-                columns: &["t.sort_key", "t.id"],
-                unknown: Unknown::Empty,
-            },
-            TrackSort::Artist => &Sort {
-                label: "tracks.artist",
-                columns: &["t.artist_sort_key", "t.sort_key", "t.id"],
-                unknown: Unknown::Empty,
-            },
-            TrackSort::Album => &Sort {
-                label: "tracks.album",
-                columns: &["t.album_sort_key", "t.album_id", "t.disc_number", TRACK_NUMBER, "t.id"],
-                unknown: Unknown::Empty,
-            },
-            TrackSort::DateAdded => &Sort {
-                label: "tracks.dateAdded",
-                columns: &["t.added_at", "t.id"],
-                unknown: Unknown::Never,
-            },
-            TrackSort::ReleaseDate => &Sort {
-                label: "tracks.releaseDate",
-                columns: &[
-                    "t.release_date",
-                    "t.album_sort_key",
-                    "t.album_id",
-                    "t.disc_number",
-                    TRACK_NUMBER,
-                    "t.id",
-                ],
-                unknown: Unknown::Null,
-            },
-            TrackSort::Duration => &Sort {
-                label: "tracks.duration",
-                columns: &["t.duration_us", "t.id"],
-                unknown: Unknown::Never,
-            },
-        }
-    }
-}
-
-/// A track list's sort and direction, as `listTracks` takes them and a recipe keeps them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TrackOrder {
-    pub sort: TrackSort,
-    pub order: Order,
-}
-
-impl TrackOrder {
-    /// The sort's and the direction's names, as `listTracks` and a recipe spell them.
-    pub fn names(self) -> (&'static str, &'static str) {
-        let order = if self.order == Order::Asc { "asc" } else { "desc" };
-        (self.sort.name(), order)
-    }
-}
+use crate::db::Database;
 
 /// The most `ids` one request may name: a default page.
 const MAX_IDS: usize = super::page::DEFAULT_LIMIT as usize;
@@ -176,17 +82,7 @@ async fn by_ids(
     if text.split(',').count() > MAX_IDS {
         return Err(Problem::invalid(format!("ids names at most {MAX_IDS} tracks")));
     }
-    let items = db
-        .read(move |conn| {
-            let mut items =
-                db::by_ids(conn, SELECT, "tracks t", JOINS, library, &ids, list_summary)?;
-            mark_liked(conn, user, library, &mut items)?;
-            mark_hidden(conn, user, library, &mut items)?;
-            Ok(items)
-        })
-        .await?;
-    let total = i64::try_from(items.len()).unwrap_or(i64::MAX);
-    Ok(Json(Page { items, next_cursor: None, total }))
+    Ok(Json(db.read(move |conn| tracks::by_ids(conn, user, library, &ids)).await?))
 }
 
 /// The library's tracks, or those on `albumId`, credited to `artistId` as `artistCredit` says,
@@ -208,50 +104,9 @@ pub async fn list(
     let (album, artist) = (query.album_id, query.artist_id);
     let tags = TagFilter::new(query.tag_all.as_deref(), query.tag_any.as_deref())?;
     let page = db
-        .read(move |conn| {
-            let mut source = source(conn, library, album, artist, credit, &tags, LEAD_SHARE)?;
-            hidden::leave_out(conn, &mut source, user, library)?;
-            let mut page = request.read(conn, &source, list_summary)?;
-            mark_liked(conn, user, library, &mut page.items)?;
-            Ok(page)
-        })
+        .read(move |conn| tracks::list(conn, user, library, request, album, artist, credit, &tags))
         .await?;
     Ok(Json(page))
-}
-
-impl TrackOrder {
-    /// The keyset and direction to page by. An album's own track listing, the common case,
-    /// reads straight from its index.
-    fn keyset(self, one_album: bool) -> (&'static Sort, Order) {
-        match (self.sort, one_album) {
-            (TrackSort::Album, true) => (&WITHIN_ALBUM, self.order),
-            (sort, _) => (sort.sort(), self.order),
-        }
-    }
-}
-
-/// The ID of every track in `library` that `list` pages through for `user` with the same
-/// `album`, `artist`, `credit`, `tags` and `order`, in the same order, so without those `user`
-/// hid, read at once: one statement for each part of the sort's index, not a page at a time.
-/// Being read whole, it starts from a larger tag's tracks than a page does ([`RESOLVE_SHARE`]).
-#[expect(clippy::too_many_arguments, reason = "a list's own parameters, and whose it is")]
-pub fn resolve(
-    conn: &Connection,
-    user: i64,
-    library: i64,
-    album: Option<AnyId>,
-    artist: Option<AnyId>,
-    credit: ArtistCredit,
-    tags: &TagFilter,
-    order: TrackOrder,
-) -> rusqlite::Result<Vec<u64>> {
-    let (sort, order) = order.keyset(album.is_some());
-    let source = source(conn, library, album, artist, credit, tags, RESOLVE_SHARE)?;
-    // Only the IDs are wanted, so the columns and joins for summaries are left out, and with them
-    // the total, which a stored count would cost a query to correct for what the user hid.
-    let mut source = Source { select: &["t.id"], joins: "", total: Total::Counted, ..source };
-    hidden::leave_out(conn, &mut source, user, library)?;
-    page::ids(conn, &source, sort, order)
 }
 
 /// `getTrack`: the track, or not found when the library has no such track.
@@ -260,63 +115,10 @@ pub async fn get(
     Scope { user, library }: Scope,
     Path((_, Id(track))): Path<(Id, Id)>,
 ) -> Result<Json<Track>, Problem> {
-    db.read(move |conn| {
-        let mut found = representation::track(conn, library, track)?;
-        if let Some(track) = &mut found {
-            track.mark(conn, user, library)?;
-        }
-        Ok(found)
-    })
-    .await?
-    .map(Json)
-    .ok_or_else(Problem::not_found)
-}
-
-/// The tracks a list reads.
-pub const TRACKS: Table =
-    Table { name: "tracks", alias: "t", select: SELECT, joins: JOINS, count: "track_count" };
-
-/// How tracks are credited to an artist.
-pub const CREDITS: Credits = Credits {
-    owned: "SELECT tracks.id FROM album_artists \
-         JOIN tracks ON tracks.album_id = album_artists.album_id WHERE album_artists.artist_id = ?",
-    on_tracks: "SELECT track_id AS id FROM track_artists WHERE artist_id = ?",
-    owned_count: OWNED_TRACKS,
-    featured_count: FEATURED_TRACKS,
-};
-
-/// An expression over `artists` (aliased `ar`) counting the tracks on the albums that list the
-/// artist.
-const OWNED_TRACKS: &str = "(SELECT ifnull(sum(g.track_count), 0) FROM album_artists aa \
-     JOIN album_groups g ON g.album_id = aa.album_id WHERE aa.artist_id = ar.id)";
-
-/// An expression over `artists` (aliased `ar`) counting the tracks that credit the artist on
-/// albums that do not list it.
-pub const FEATURED_TRACKS: &str = "(SELECT ifnull(sum(ac.track_count), 0) FROM album_credits ac \
-     WHERE ac.artist_id = ar.id AND NOT EXISTS (SELECT 1 FROM album_artists aa \
-         WHERE aa.album_id = ac.album_id AND aa.artist_id = ac.artist_id))";
-
-/// How tracks carry tags.
-pub const TAGGED: Tagged = Tagged { links: "track_tags", owner: "track_id", count: "track_count" };
-
-/// The tracks `list` pages through in `library`: every one, or those on `album`, credited to
-/// `artist` as `credit` says, and carrying the tags `tags` names. An artist's
-/// tracks lead a page; failing that, the tags' may, by `share` ([`tag_filter::source`]).
-fn source(
-    conn: &Connection,
-    library: i64,
-    album: Option<AnyId>,
-    artist: Option<AnyId>,
-    credit: ArtistCredit,
-    tags: &TagFilter,
-    share: i64,
-) -> rusqlite::Result<Source> {
-    let lead = artist.map(|artist| credit.lead(conn, library, &CREDITS, artist)).transpose()?;
-    let album = album.map(|album| Check {
-        condition: "t.album_id = ?".to_owned(),
-        params: vec![album.0.into()],
-    });
-    tag_filter::source(conn, library, &TRACKS, &TAGGED, lead, album, tags, share)
+    db.read(move |conn| tracks::track(conn, user, library, track))
+        .await?
+        .map(Json)
+        .ok_or_else(Problem::not_found)
 }
 
 #[cfg(test)]
