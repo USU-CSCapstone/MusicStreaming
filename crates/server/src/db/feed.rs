@@ -63,13 +63,14 @@ pub enum Kind {
     Playlist,
     PlaylistItem,
     HiddenTrack,
+    RecentSearch,
 }
 
 /// Records that `user`'s `entity` changed in `library_id`: their playlist for `Kind::Playlist`
-/// and `Kind::PlaylistItem`, whose item's key `item_key` names (`0` for the other kinds), or a
-/// track for `Kind::HiddenTrack`. It takes the account's next position, and its earlier row, if
-/// any, is replaced, so the account feed carries only the latest position for each. Call it in
-/// the transaction of the change itself.
+/// and `Kind::PlaylistItem`, whose item's key `item_key` names (`0` for the other kinds), a
+/// track for `Kind::HiddenTrack`, or a search for `Kind::RecentSearch`. It takes the account's
+/// next position, and its earlier row, if any, is replaced, so the account feed carries only the
+/// latest position for each. Call it in the transaction of the change itself.
 pub fn record_account(
     conn: &Connection,
     user: i64,

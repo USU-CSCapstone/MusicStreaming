@@ -22,7 +22,7 @@ import type { LibraryState } from './protocol';
 /** The page size asked of both feeds: the API's largest. */
 const PAGE = 1000;
 /** The kinds of rows the device's own writes change: what taking them back may change. */
-const REWOUND: readonly Kind[] = ['playlists', 'liked', 'hidden'];
+const REWOUND: readonly Kind[] = ['playlists', 'liked', 'hidden', 'searches'];
 /** A catch-up of more than this share of a library's entities downloads its snapshot again. */
 const REDOWNLOAD_SHARE = 0.1;
 /** Downloads of a snapshot that did not match its ETag or would not inflate, before giving up. */
@@ -1026,13 +1026,13 @@ export class CatalogSync {
 		rewound = false
 	) {
 		const calls = [...(JSON.parse(catalog.answeredCalls()) as Call[]), ...pending];
-		let made = 0;
+		const kinds = new Set<Kind>();
 		let limit = APPLY_CHUNK;
 		for (let done = 0; done < calls.length;) {
 			if (stale()) return;
 			const started = performance.now();
 			const batch = calls.slice(done, done + limit);
-			made += this.#make(id, catalog, batch).made;
+			for (const kind of this.#make(id, catalog, batch).kinds) kinds.add(kind);
 			done += batch.length;
 			limit = Math.max(APPLY_CHUNK, slice(limit, performance.now() - started, APPLY_MAX));
 			if (done < calls.length) {
@@ -1041,37 +1041,25 @@ export class CatalogSync {
 			}
 		}
 		// What was taken back and not made again changed too, in any kind a write makes.
-		if ((rewound || made > 0) && this.catalogs.get(id) === catalog)
-			this.#changed(id, rewound ? REWOUND : this.#kinds(id, catalog, calls));
+		if ((rewound || kinds.size > 0) && this.catalogs.get(id) === catalog)
+			this.#changed(id, rewound ? REWOUND : [...kinds]);
 	}
 
 	/**
 	 * Makes those of `calls`, writes of mutations in library `id`, that `catalog` does not hold, in
-	 * one transaction, and answers how many were made. A write the device refuses, as one made on
-	 * a version the feed has since replaced, is not shown; the server's answer decides it. One that
-	 * breaks a constraint, as a client-minted ID that is taken would, is that write's failure
-	 * alone. With `answered`, the server has them: nothing is made, and those the file holds are
-	 * kept for a rewind to make again until the account feed brings them.
+	 * one transaction, and answers what was made: how many, and the kinds of rows they changed. A
+	 * write the device refuses, as one made on a version the feed has since replaced, is not shown;
+	 * the server's answer decides it. One that breaks a constraint, as a client-minted ID that is
+	 * taken would, is that write's failure alone. With `answered`, the server has them: nothing is
+	 * made, and those the file holds are kept for a rewind to make again until the account feed
+	 * brings them.
 	 */
 	#make(id: string, catalog: Catalog, calls: Call[], answered = false) {
 		const answer = JSON.parse(
 			catalog.applyCalls(this.#user, id, JSON.stringify(calls), answered)
-		) as { made: number; failed: string[] };
+		) as { made: number; kinds: Kind[]; failed: string[] };
 		for (const failure of answer.failed) console.error(failure);
 		return answer;
-	}
-
-	/** The kinds of rows `calls` change in library `id`'s `catalog`, as a list depends on them. */
-	#kinds(id: string, catalog: Catalog, calls: Call[]): Kind[] {
-		const kinds = new Set<Kind>(['playlists']);
-		const liked = catalog.liked(this.#user, id);
-		for (const { name, args } of calls) {
-			if (name === 'hide' || name === 'unhide') kinds.add('hidden');
-			const playlist = (args as { playlistId?: string }).playlistId;
-			if (name === 'like' || name === 'unlike' || name === 'hide' || playlist === liked)
-				kinds.add('liked');
-		}
-		return [...kinds];
 	}
 
 	/**
@@ -1093,8 +1081,8 @@ export class CatalogSync {
 				continue;
 			}
 			try {
-				if (this.#make(library, catalog, calls, answered).made > 0)
-					this.#changed(library, this.#kinds(library, catalog, calls));
+				const { kinds } = this.#make(library, catalog, calls, answered);
+				if (kinds.length > 0) this.#changed(library, kinds);
 			} catch (error) {
 				void this.#run(`lib:${library}`, () => this.#rebuild(library));
 				throw error;

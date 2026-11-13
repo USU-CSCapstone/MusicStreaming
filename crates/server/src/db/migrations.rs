@@ -316,6 +316,56 @@ mod tests {
     }
 
     #[test]
+    fn recent_searches_kept_before_join_the_account_feed_after_each_head() {
+        use crate::db::testing::User;
+
+        let mut conn = configured();
+        let before = MIGRATIONS.iter().position(|m| m.name.starts_with("0014")).unwrap();
+        migrate(&mut conn, &MIGRATIONS[..before]).unwrap();
+        User::new(1, "owner").insert(&conn).unwrap();
+        User::new(2, "user").insert(&conn).unwrap();
+        older_library(&conn, 1);
+        conn.execute_batch(
+            "INSERT INTO account_changes (user_id, library_id, kind, entity_id, op, position)
+             VALUES (1, 1, 'hiddenTrack', 5, 'upsert', 1);
+             UPDATE users SET feed_head = 1 WHERE id = 1;
+             INSERT INTO recent_searches (id, user_id, library_id, query, folded, searched_at)
+             VALUES (7, 1, 1, 'Later', 'later', 20), (8, 1, 1, 'Sooner', 'sooner', 10),
+                    (9, 2, 1, 'Theirs', 'theirs', 30);",
+        )
+        .unwrap();
+
+        migrate(&mut conn, MIGRATIONS).unwrap();
+
+        type Row = (i64, String, i64, i64);
+        let feed: Vec<Row> = conn
+            .prepare("SELECT user_id, kind, entity_id, position FROM account_changes ORDER BY seq")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        let row = |user, kind: &str, id, position| (user, kind.to_owned(), id, position);
+        assert_eq!(
+            feed,
+            [
+                row(1, "hiddenTrack", 5, 1),
+                row(1, "recentSearch", 8, 2),
+                row(1, "recentSearch", 7, 3),
+                row(2, "recentSearch", 9, 1),
+            ]
+        );
+        let heads: Vec<(i64, i64)> = conn
+            .prepare("SELECT id, feed_head FROM users ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(heads, [(1, 3), (2, 1)]);
+    }
+
+    #[test]
     fn answers_stored_before_content_types_were_kept_replay_as_json() {
         use crate::db::testing::User;
 

@@ -27,5 +27,10 @@ pub fn record(tx: &Connection, user: i64, library: i64, effect: Effect) -> rusql
             let mark = if liked { Mark::Liked } else { Mark::Unliked };
             marks::record(tx, user, library, [track], mark)
         }
+        // What the `searched` hook is told is the recent searches' own (`api/recent_searches.rs`).
+        Effect::Search { id, kept, .. } => {
+            let op = if kept { Op::Upsert } else { Op::Delete };
+            feed::record_account(tx, user, library, Kind::RecentSearch, id, 0, op)
+        }
     }
 }

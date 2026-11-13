@@ -3,7 +3,7 @@
 
 /**
  * The kinds of rows a commit changes. A like is a change to `liked` and to `playlists`: Liked
- * Songs is a playlist.
+ * Songs is a playlist. `searches` are the account's recent searches.
  */
 export const KINDS = [
 	'tracks',
@@ -12,7 +12,8 @@ export const KINDS = [
 	'tags',
 	'playlists',
 	'liked',
-	'hidden'
+	'hidden',
+	'searches'
 ] as const;
 
 /** One kind of rows a commit changes. */
@@ -42,6 +43,7 @@ export function collect(found: Set<Kind>, changes: readonly Entry[], liked?: str
 		else if (kind === 'artist') found.add('artists');
 		else if (kind === 'tag') found.add('tags');
 		else if (kind === 'hiddenTrack') found.add('hidden');
+		else if (kind === 'recentSearch') found.add('searches');
 		else if (kind === 'playlist' || kind === 'playlistItem') {
 			found.add('playlists');
 			if (id === liked || rows?.playlists?.[0]?.kind === 'liked') found.add('liked');

@@ -1,6 +1,6 @@
 //! An entity's device rows: what the library change feed carries for one changed track, album,
-//! artist or tag, what the account feed carries for one playlist or playlist item, and how a
-//! device writes them (`design/general.md` §3).
+//! artist or tag, what the account feed carries for one playlist, playlist item, hidden track or
+//! recent search, and how a device writes them (`design/general.md` §3).
 //!
 //! The rows are the entity's own table row and the join rows that hang off it (a track's
 //! artists and tags, an album's artists, credits, discs and tags), with exactly the columns of
@@ -47,6 +47,8 @@ pub enum Kind {
     PlaylistItem,
     /// A track the account hid, from the account feed, named by the track's ID.
     HiddenTrack,
+    /// One of the account's recent searches, from the account feed.
+    RecentSearch,
 }
 
 /// A table of an entity's rows.
@@ -117,6 +119,9 @@ const PLAYLIST_ITEM: &[Part] = &[own("playlist_items", "playlist_id = ?1 AND key
 /// The tables a hidden track's rows are in.
 const HIDDEN_TRACK: &[Part] = &[owned("hidden_tracks", "track_id = ?1", "track_id")];
 
+/// The tables a recent search's rows are in.
+const RECENT_SEARCH: &[Part] = &[owned("recent_searches", "id = ?1", "id")];
+
 /// The tables a tag's rows are in.
 const TAG: &[Part] = &[
     own("tags", "id = ?1", "id"),
@@ -136,6 +141,7 @@ impl Kind {
             Kind::Playlist => PLAYLIST,
             Kind::PlaylistItem => PLAYLIST_ITEM,
             Kind::HiddenTrack => HIDDEN_TRACK,
+            Kind::RecentSearch => RECENT_SEARCH,
         }
     }
 }
@@ -218,8 +224,8 @@ fn is_id(column: &str) -> bool {
 /// entity there; `key` is a playlist item's and 0 for every other kind. `conn` may be the
 /// server's database or a device's: both have the device columns, and only those are read. A
 /// playlist is read whoever owns it, so a caller on the server reads only what the account feed
-/// named for its account. Rows a user owns, such as a hidden track, are read only by
-/// [`export_for`]: here they are `None`.
+/// named for its account. Rows a user owns, such as a hidden track or a recent search, are read
+/// only by [`export_for`]: here they are `None`.
 pub fn export(
     conn: &Connection,
     library: i64,

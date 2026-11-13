@@ -29,5 +29,7 @@
 {"id":"502","key":100,"kind":"playlistItem","tables":{"playlist_items":[{"added_at":1000,"key":100,"library_id":"1","playlist_id":"502","track_id":"1003"}]}},
 {"id":"502","key":200,"kind":"playlistItem","tables":{"playlist_items":[{"added_at":6000,"key":200,"library_id":"1","playlist_id":"502","track_id":"1006"}]}},
 {"id":"1004","key":0,"kind":"hiddenTrack","tables":{"hidden_tracks":[{"hidden_at":10,"library_id":"1","track_id":"1004","user_id":"1"}]}},
-{"id":"1006","key":0,"kind":"hiddenTrack","tables":{"hidden_tracks":[{"hidden_at":20,"library_id":"1","track_id":"1006","user_id":"1"}]}}
+{"id":"1006","key":0,"kind":"hiddenTrack","tables":{"hidden_tracks":[{"hidden_at":20,"library_id":"1","track_id":"1006","user_id":"1"}]}},
+{"id":"601","key":0,"kind":"recentSearch","tables":{"recent_searches":[{"folded":"abbey","id":"601","library_id":"1","query":"Abbey","searched_at":100,"selected_id":"101","selected_type":"album","user_id":"1"}]}},
+{"id":"602","key":0,"kind":"recentSearch","tables":{"recent_searches":[{"folded":"signal","id":"602","library_id":"1","query":"Signal","searched_at":200,"selected_id":null,"selected_type":null,"user_id":"1"}]}}
 ]

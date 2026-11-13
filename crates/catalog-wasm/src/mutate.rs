@@ -5,7 +5,10 @@
 //! write it cannot take back, nor an undo of a write it does not hold. A write the server answered
 //! is kept, rewound, to be made again, until a rewind for the account feed drops it.
 
-use jewelcase_catalog::mutate::{self, Undo};
+use std::collections::BTreeSet;
+
+use jewelcase_catalog::liked;
+use jewelcase_catalog::mutate::{self, Effect, Undo};
 use jewelcase_catalog::query::number;
 use rusqlite::{ErrorCode, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -33,6 +36,20 @@ struct Call {
     at: f64,
 }
 
+/// The kinds of rows a list depends on (`web/src/lib/catalog/kinds.ts`) that `effect` changed, given
+/// the user's Liked Songs, `liked`.
+fn kinds(effect: Effect, liked: Option<i64>) -> &'static [&'static str] {
+    match effect {
+        Effect::Playlist { id } | Effect::Item { playlist: id, .. } if Some(id) == liked => {
+            &["playlists", "liked"]
+        }
+        Effect::Playlist { .. } | Effect::Item { .. } => &["playlists"],
+        Effect::Hidden { .. } => &["hidden"],
+        Effect::Liked { .. } => &["liked"],
+        Effect::Search { .. } => &["searches"],
+    }
+}
+
 /// Whether a failed write's database error is that one write's, as a constraint it breaks, rather
 /// than the file's.
 fn its_own(error: &rusqlite::Error) -> bool {
@@ -41,56 +58,9 @@ fn its_own(error: &rusqlite::Error) -> bool {
 
 #[wasm_bindgen]
 impl Catalog {
-    /// Applies the write `name` (`like`, `unlike`, `hide`, `unhide`, `createPlaylist`,
-    /// `editPlaylist`, `appendToPlaylist` or `deletePlaylist`) with `args`, JSON text spelled as
-    /// `jewelcase_catalog::mutate::apply` describes, for `user` in `library` (decimal IDs), at
-    /// `now`, milliseconds since the epoch, which the caller keeps with the write so that applying
-    /// it again makes the same rows. `call` names this application: one the file holds already is
-    /// not applied again. The write and its undo, kept until `rewind`, are one transaction.
-    /// Answers JSON text: `{"applied": true}`, `{"applied": false}` for a call held already, or
-    /// `{"refused": {"code", "message", "currentVersion"?}}` for a refusal (`not_found`,
-    /// `version_conflict`, `id_taken`, `invalid`), with nothing changed. A database failure throws,
-    /// also with nothing changed.
-    #[wasm_bindgen(js_name = applyCall)]
-    pub fn apply_call(
-        &self,
-        user: &str,
-        library: &str,
-        call: &str,
-        name: &str,
-        args: &str,
-        now: f64,
-    ) -> Result<String, JsError> {
-        self.totals.clear();
-        let (user, library) = (number(user, "user")?, number(library, "library")?);
-        let tx = self.conn.unchecked_transaction()?;
-        let held = tx
-            .prepare_cached("SELECT 1 FROM mutation_undo WHERE call = ?1")?
-            .query_row([call], |_| Ok(()))
-            .optional()?
-            .is_some();
-        if held {
-            return Ok(r#"{"applied":false}"#.to_owned());
-        }
-        // A failure drops `tx`, which rolls back whatever the write made before it failed.
-        let answer = match mutate::apply_in(&tx, user, library, name, args, now as i64) {
-            Ok(undo) => {
-                tx.prepare_cached("INSERT INTO mutation_undo (call, undo) VALUES (?1, ?2)")?
-                    .execute(params![call, serde_json::to_string(&undo)?])?;
-                tx.commit()?;
-                serde_json::json!({ "applied": true })
-            }
-            Err(error) => match error.refusal() {
-                Some(refusal) => serde_json::json!({ "refused": refusal }),
-                None => return Err(error.into()),
-            },
-        };
-        Ok(answer.to_string())
-    }
-
     /// Applies `calls`, JSON text of `[{id, name, args, at}]` in order, each the write `name`
-    /// (`like`, `unlike`, `hide`, `unhide`, `createPlaylist`, `editPlaylist`, `appendToPlaylist`
-    /// or `deletePlaylist`) with `args` spelled as
+    /// (`like`, `unlike`, `hide`, `unhide`, `createPlaylist`, `editPlaylist`, `appendToPlaylist`,
+    /// `deletePlaylist`, `recordSearch`, `deleteSearch` or `clearSearches`) with `args` spelled as
     /// `jewelcase_catalog::mutate::apply` describes, for `user` in `library` (decimal IDs), at
     /// `at`, milliseconds since the epoch, which the caller keeps with the write so that applying
     /// it again makes the same rows. `id` names the call: one the file holds already is not
@@ -99,8 +69,9 @@ impl Catalog {
     /// call breaks changes nothing of that call alone. With `answered`, the server has the calls,
     /// and nothing is applied: each the file holds is kept to be made again after a rewind that
     /// does not drop it, and one it lacks is left to the feed, which may have brought it already.
-    /// Answers JSON text: `{"made", "failed"}`, how many were applied, and the messages of the
-    /// constraints broken. Any other database failure throws, with nothing
+    /// Answers JSON text:
+    /// `{"made", "kinds", "failed"}`, how many were applied, the kinds of rows they changed, and
+    /// the messages of the constraints broken. Any other database failure throws, with nothing
     /// changed.
     #[wasm_bindgen(js_name = applyCalls)]
     pub fn apply_calls(
@@ -113,7 +84,9 @@ impl Catalog {
         self.totals.clear();
         let (user, library) = (number(user, "user")?, number(library, "library")?);
         let calls: Vec<Call> = serde_json::from_str(calls)?;
+        let liked = liked::find(&self.conn, user, library)?.map(|(id, _)| id);
         let (mut made, mut failed) = (0, Vec::new());
+        let mut changed: BTreeSet<&str> = BTreeSet::new();
         let mut tx = self.conn.unchecked_transaction()?;
         for Call { id, name, args, at } in &calls {
             if answered {
@@ -133,7 +106,13 @@ impl Catalog {
             let args = args.to_string();
             // Dropped unreleased after a failure, which rolls back what the call wrote.
             let point = tx.savepoint()?;
-            match mutate::apply_in(&point, user, library, name, &args, *at as i64) {
+            let mut effects = Vec::new();
+            let applied =
+                mutate::apply_in(&point, user, library, name, &args, *at as i64, &mut |e| {
+                    effects.push(e);
+                    Ok(())
+                });
+            match applied {
                 Ok(undo) => {
                     point
                         .prepare_cached(
@@ -150,6 +129,7 @@ impl Catalog {
                         ])?;
                     point.commit()?;
                     made += 1;
+                    changed.extend(effects.into_iter().flat_map(|e| kinds(e, liked)));
                 }
                 Err(error) if error.refusal().is_some() => {}
                 Err(mutate::Error::Sql(error)) if its_own(&error) => failed.push(error.to_string()),
@@ -157,7 +137,7 @@ impl Catalog {
             }
         }
         tx.commit()?;
-        Ok(serde_json::json!({ "made": made, "failed": failed }).to_string())
+        Ok(serde_json::json!({ "made": made, "kinds": changed, "failed": failed }).to_string())
     }
 
     /// Takes back the newest `limit` writes `applyCalls` applied that are applied still, newest

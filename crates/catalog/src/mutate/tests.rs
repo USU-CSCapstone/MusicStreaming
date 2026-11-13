@@ -8,7 +8,8 @@ const LIBRARY: i64 = 1;
 
 /// A device database holding tracks 1 to 4 of library 1, the user's Liked Songs 50 (track 1), their
 /// playlist 10 at version 4 whose items 1, 2 and 3 have adjacent keys, so an item put between them
-/// renumbers the playlist, and the track 4 they hid.
+/// renumbers the playlist, the track 4 they hid, and their recent searches 60 ("aurora", which
+/// selected track 2) and 61 ("signal").
 fn device() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     crate::create_schema(&conn).unwrap();
@@ -29,7 +30,11 @@ fn device() -> Connection {
                 (10, 1, 7, 'saved', 'Mix', 'mix', x'6d6978', 0, 4, 0, 6, 3, 3000);
          INSERT INTO playlist_items (playlist_id, key, library_id, track_id, added_at)
          VALUES (50, 100, 1, 1, 5), (10, 1, 1, 1, 6), (10, 2, 1, 2, 6), (10, 3, 1, 3, 6);
-         INSERT INTO hidden_tracks (user_id, library_id, track_id, hidden_at) VALUES (7, 1, 4, 9);",
+         INSERT INTO hidden_tracks (user_id, library_id, track_id, hidden_at) VALUES (7, 1, 4, 9);
+         INSERT INTO recent_searches (id, user_id, library_id, query, folded, selected_type,
+             selected_id, searched_at)
+         VALUES (60, 7, 1, 'Aurora', 'aurora', 'track', 2, 10),
+                (61, 7, 1, 'signal', 'signal', NULL, NULL, 11);",
     )
     .unwrap();
     conn
@@ -38,7 +43,7 @@ fn device() -> Connection {
 /// Every account row of the database, as text, in order.
 fn dump(conn: &Connection) -> Vec<String> {
     let mut rows = Vec::new();
-    for table in ["playlists", "playlist_items", "hidden_tracks"] {
+    for table in ["playlists", "playlist_items", "hidden_tracks", "recent_searches"] {
         let mut stmt = conn.prepare(&format!("SELECT * FROM {table} ORDER BY 1, 2")).unwrap();
         let columns = stmt.column_count();
         let found = stmt
@@ -102,6 +107,14 @@ fn revert_restores_exactly_the_rows_before_each_write() {
             json!({ "playlistId": "50", "baseVersion": 2,
                 "ops": [{ "op": "add", "items": ["3", "4"] }] }),
         ),
+        ("recordSearch", json!({ "id": "62", "query": "new" })),
+        (
+            "recordSearch",
+            json!({ "id": "62", "query": " AURORA ",
+            "selected": { "type": "track", "id": "3" } }),
+        ),
+        ("deleteSearch", json!({ "id": "60" })),
+        ("clearSearches", json!({})),
     ];
     for (name, args) in writes {
         let conn = device();
@@ -225,4 +238,53 @@ fn a_refusal_names_its_code_and_a_conflict_its_current_version() {
     assert_eq!(code("createPlaylist", json!({ "id": "10", "title": "A" }))["code"], "id_taken");
     assert_eq!(code("bogus", json!({}))["code"], "invalid");
     assert!(Error::Sql(rusqlite::Error::InvalidQuery).refusal().is_none());
+}
+
+/// The user's recent searches in library 1 as `(id, query)`, newest first.
+fn searches(conn: &Connection) -> Vec<(i64, String)> {
+    conn.prepare(
+        "SELECT id, query FROM recent_searches WHERE user_id = 7 AND library_id = 1 \
+         ORDER BY searched_at DESC, id DESC",
+    )
+    .unwrap()
+    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+    .unwrap()
+    .map(Result::unwrap)
+    .collect()
+}
+
+#[test]
+fn a_search_replaces_the_same_words_and_only_the_newest_are_kept() {
+    let conn = device();
+    run(&conn, "recordSearch", json!({ "id": "62", "query": " Àurora " })).unwrap();
+    assert_eq!(searches(&conn), [(62, "Àurora".to_owned()), (61, "signal".to_owned())]);
+    for n in 0..crate::recent_searches::KEPT {
+        let args = json!({ "id": (100 + n).to_string(), "query": format!("search {n}") });
+        apply(&conn, USER, LIBRARY, "recordSearch", &args.to_string(), 200 + n).unwrap();
+    }
+    let kept = searches(&conn);
+    assert_eq!(kept.len(), crate::recent_searches::KEPT as usize);
+    assert_eq!(kept[0].1, format!("search {}", crate::recent_searches::KEPT - 1));
+    assert!(!kept.iter().any(|(id, _)| *id == 62 || *id == 61), "pushed out by newer ones");
+}
+
+#[test]
+fn a_search_that_cannot_be_kept_is_refused_and_one_not_held_is_no_change_to_delete() {
+    let conn = device();
+    let code = |args: serde_json::Value| {
+        run(&conn, "recordSearch", args).unwrap_err().refusal().expect("a refusal")["code"].clone()
+    };
+    for invalid in [
+        json!({ "id": "62", "query": "  ...  " }),
+        json!({ "id": "62", "query": "x".repeat(501) }),
+        json!({ "id": "0", "query": "a" }),
+        json!({ "id": "62", "query": "a", "selected": { "type": "playlist", "id": "10" } }),
+        json!({ "id": "62", "query": "a", "selected": { "type": "track", "id": "9" } }),
+    ] {
+        assert_eq!(code(invalid.clone()), "invalid", "{invalid}");
+    }
+    assert_eq!(code(json!({ "id": "61", "query": "other" })), "id_taken");
+    let before = dump(&conn);
+    run(&conn, "deleteSearch", json!({ "id": "99" })).unwrap();
+    assert_eq!(dump(&conn), before);
 }

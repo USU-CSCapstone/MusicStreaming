@@ -1,5 +1,6 @@
 //! `listAccountChanges` (`api/openapi.yaml`): the caller's own change feed with each changed
-//! playlist's, playlist item's and hidden track's device rows (`design/database.md` §5).
+//! playlist's, playlist item's, hidden track's and recent search's device rows
+//! (`design/database.md` §5).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -53,7 +54,7 @@ fn read(
     current: i64,
 ) -> Result<Changes<Change>, Problem> {
     let head = head(conn, Feed::Account(caller.user), epoch, after)?;
-    // A library the caller lost is stepped over; its playlists are not theirs to read now.
+    // A library the caller lost is stepped over; its rows are not theirs to read now.
     let listed: Vec<(i64, i64, String, i64, i64, String)> = conn
         .prepare_cached(&format!(
             "SELECT c.position, c.library_id, c.kind, c.entity_id, c.item_key, c.op \
@@ -71,6 +72,7 @@ fn read(
         let (kind, key) = match kind.as_str() {
             "playlist" => (Kind::Playlist, None),
             "hiddenTrack" => (Kind::HiddenTrack, None),
+            "recentSearch" => (Kind::RecentSearch, None),
             _ => (Kind::PlaylistItem, Some(item_key)),
         };
         let (op, rows) = if op == "delete" {
