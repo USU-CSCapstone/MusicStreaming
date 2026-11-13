@@ -1,6 +1,7 @@
 //! Listing an account's kept queues (`design/queue.md` §8, §9).
 
 use std::collections::{HashMap, HashSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use jewelcase_core::QueueState;
@@ -139,6 +140,22 @@ impl Queues {
         Ok(Listed { entries, next, total: unsaved + counted })
     }
 
+    /// The `ETag` of the first page of `limit` of `user`'s kept queues: a hash of which queues
+    /// it lists and when each was parked, so it changes whenever a queue is kept, restored,
+    /// deleted, saved or expired, and with `limit`. A queue parked and not yet saved counts by
+    /// its ID alone, since its listed time is the request's. What each queue's current track
+    /// resolves to is not part of it. Reads only the kept queues' index, as the total does.
+    pub async fn kept_tag(&self, db: &Database, user: i64, limit: u32) -> Result<String, DbError> {
+        let Parked { drafts, hidden, .. } = self.parked(user);
+        let mut parked: Vec<String> =
+            drafts.into_iter().map(|draft| draft.queue_id.as_str().to_owned()).collect();
+        parked.sort();
+        let stored = db.read(move |conn| kept_times(conn, user, &hidden)).await?;
+        let mut hasher = DefaultHasher::new();
+        (limit, parked, stored).hash(&mut hasher);
+        Ok(format!("\"k{:016x}\"", hasher.finish()))
+    }
+
     /// Under the lock: what the account has parked and not yet saved, and its held lists.
     fn parked(&self, user: i64) -> Parked {
         let accounts = self.lock();
@@ -173,6 +190,28 @@ fn count(conn: &Connection, user: i64, hidden: &HashSet<String>) -> rusqlite::Re
         }
     }
     Ok(count)
+}
+
+/// Each of `user`'s stored kept queues not in `hidden`, as its ID and when it was parked, in ID
+/// order. Reads only the kept queues' index.
+fn kept_times(
+    conn: &Connection,
+    user: i64,
+    hidden: &HashSet<String>,
+) -> rusqlite::Result<Vec<(String, i64)>> {
+    let mut select = conn.prepare_cached(
+        "SELECT queue_id, last_active FROM queues WHERE user_id = ?1 AND active = 0 \
+         ORDER BY queue_id",
+    )?;
+    let rows = select.query_map([user], |row| Ok((row.get::<_, String>(0)?, row.get(1)?)))?;
+    let mut times = Vec::new();
+    for row in rows {
+        let (id, at) = row?;
+        if !hidden.contains(&id) {
+            times.push((id, at));
+        }
+    }
+    Ok(times)
 }
 
 /// A page of `?1`'s stored kept queues after `(?2, ?3)` (from the start for null), newest first,

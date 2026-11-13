@@ -35,7 +35,11 @@ pub fn router() -> Router<AppState> {
         // Not gzipped: the idempotency layer stores the answer as the handler made it, and a
         // compressed body has no size it can know.
         .route("/me/queues/{queue_id}/restore", post(queue::restore))
-        .route("/me/queues/{queue_id}", delete(queue::delete))
+        // A kept queue's state is gzipped like the snapshot; a GET is never stored as an answer.
+        .route(
+            "/me/queues/{queue_id}",
+            get(queue::get_kept).layer(CompressionLayer::new()).merge(delete(queue::delete)),
+        )
         .route("/me/plays", post(plays::record))
         .route("/me/plugins", get(connections::list))
         .route(

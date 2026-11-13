@@ -1,37 +1,34 @@
 import { page } from 'vitest/browser';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
-import type { KeptQueue, RealtimeServerMessage } from '$lib/api/types';
+import type { KeptQueue } from '$lib/api/types';
+import type { FromWorker, ToWorker } from '$lib/queue/protocol';
 
 const fake = vi.hoisted(() => ({
-	listeners: [] as ((message: RealtimeServerMessage) => void)[],
-	list: (async () => ({ items: [], nextCursor: null })) as (
-		cursor?: string
-	) => Promise<{ items: unknown[]; nextCursor: string | null }>,
 	restore: (async () => null) as (id: string) => Promise<string | null>,
-	/** What was given to the log, and who hears what became of it. */
-	logged: [] as { name: string; args: { queueId: string } }[],
-	settled: [] as ((rec: { name: string; args: unknown }, outcome: string) => void)[]
-}));
-
-vi.mock('$lib/sync/sender', () => ({
-	sender: {
-		enqueue: (name: string, args: { queueId: string }) => void fake.logged.push({ name, args }),
-		onSettled: (listener: (rec: { name: string; args: unknown }, outcome: string) => void) => {
-			fake.settled.push(listener);
-			return () => fake.settled.splice(fake.settled.indexOf(listener), 1);
+	/** What the page told the queue worker, and how the test speaks for it. */
+	worker: {
+		sent: [] as unknown[],
+		onmessage: null as ((event: MessageEvent) => void) | null,
+		postMessage(message: unknown) {
+			this.sent.push(message);
+		},
+		terminate() {},
+		say(message: unknown) {
+			this.onmessage?.({ data: message } as MessageEvent);
 		}
 	}
 }));
 
-vi.mock('$lib/realtime.svelte', () => ({
-	realtime: {
-		on: (listener: (message: RealtimeServerMessage) => void) => {
-			fake.listeners.push(listener);
-			return () => fake.listeners.splice(fake.listeners.indexOf(listener), 1);
-		}
-	}
-}));
+vi.mock('$lib/queue/client.svelte', async (actual) => {
+	const module = await actual<typeof import('$lib/queue/client.svelte')>();
+	const queue = new module.QueueClient(() => fake.worker as unknown as Worker, {
+		enqueue: () => {},
+		onSettled: () => () => {}
+	});
+	queue.connect({ on: () => () => {} }, '7');
+	return { ...module, queue };
+});
 vi.mock('$lib/player.svelte', () => ({ player: { restore: (id: string) => fake.restore(id) } }));
 vi.mock('$lib/queue/summaries', () => ({
 	trackKey: (libraryId: string, trackId: string) => `${libraryId}/${trackId}`,
@@ -45,7 +42,6 @@ vi.mock('$lib/queue/summaries', () => ({
 }));
 vi.mock('$lib/api/client', async (actual) => ({
 	...(await actual<typeof import('$lib/api/client')>()),
-	listKeptQueues: (_: unknown, cursor?: string) => fake.list(cursor),
 	getAlbum: async () => ({ title: 'Signal' }),
 	getArtist: async () => ({ name: 'Nobody' }),
 	getPlaylist: async () => ({ title: 'Mix' })
@@ -64,24 +60,19 @@ const kept = (n: number, changes: Partial<KeptQueue> = {}): KeptQueue => ({
 	...changes
 });
 
-/** Delivers a realtime message to every listener the component registered. */
-const hear = (message: object) =>
-	fake.listeners.forEach((listener) => listener(message as RealtimeServerMessage));
+/** The worker says the kept queues are `entries`. */
+const hold = (entries: KeptQueue[]) =>
+	fake.worker.say({ type: 'kept', entries } satisfies FromWorker);
 
 beforeEach(() => {
-	fake.listeners.length = 0;
-	fake.list = async () => ({ items: [kept(1), kept(2)], nextCursor: null });
 	fake.restore = async () => null;
-	fake.logged = [];
-	fake.settled.length = 0;
+	fake.worker.sent = [];
+	hold([kept(1), kept(2)]);
 });
 
 describe('KeptQueues', () => {
 	it('shows what each queue was playing, where from, how much it holds, and when', async () => {
-		fake.list = async () => ({
-			items: [kept(1), kept(2, { current: undefined, context: { type: 'library' } })],
-			nextCursor: null
-		});
+		hold([kept(1), kept(2, { current: undefined, context: { type: 'library' } })]);
 		render(KeptQueues);
 		const list = page.getByRole('list', { name: 'Kept queues' });
 		const first = list.getByRole('listitem').first();
@@ -95,61 +86,37 @@ describe('KeptQueues', () => {
 		await expect.element(second).toHaveTextContent('Your library');
 	});
 
-	it('refetches on queuesChanged, and when the connection returns', async () => {
-		const asked = vi.fn(fake.list);
-		fake.list = asked;
+	it("shows the device's list as it changes, an entry that stays kept in place", async () => {
 		render(KeptQueues);
 		await expect.element(page.getByText('Song 2')).toBeInTheDocument();
-		expect(asked).toHaveBeenCalledTimes(1);
-
-		fake.list = async () => ({ items: [kept(3)], nextCursor: null });
-		hear({ type: 'queuesChanged' });
+		const second = page.getByRole('listitem').nth(1).element();
+		hold([kept(3), kept(1), kept(2)]);
 		await expect.element(page.getByText('Song 3')).toBeInTheDocument();
+		expect(page.getByRole('listitem').nth(2).element()).toBe(second);
+		hold([kept(3)]);
 		await expect.element(page.getByText('Song 2')).not.toBeInTheDocument();
-
-		hear({ type: 'devices', devices: [] });
-		fake.list = async () => ({ items: [kept(4)], nextCursor: null });
-		hear({ type: 'hello', deviceId: '1', serverTime: '' });
-		await expect.element(page.getByText('Song 4')).toBeInTheDocument();
 	});
 
-	it('pages with the cursor, and a refetch keeps the pages shown', async () => {
-		const cursors: (string | undefined)[] = [];
-		fake.list = async (cursor) => {
-			cursors.push(cursor);
-			return cursor
-				? { items: [kept(3)], nextCursor: null }
-				: { items: [kept(1), kept(2)], nextCursor: 'c1' };
-		};
+	it('draws the list a part at a time', async () => {
+		hold(Array.from({ length: 60 }, (_, i) => kept(i + 1)));
 		render(KeptQueues);
-		await expect.element(page.getByText('Song 2')).toBeInTheDocument();
-		await expect.element(page.getByText('Song 3')).not.toBeInTheDocument();
+		await expect
+			.element(page.getByRole('button', { name: /^Restore Song 50\b/ }))
+			.toBeInTheDocument();
+		await expect
+			.element(page.getByRole('button', { name: /^Restore Song 51\b/ }))
+			.not.toBeInTheDocument();
 		await page.getByRole('button', { name: 'Show more' }).click();
-		await expect.element(page.getByText('Song 3')).toBeInTheDocument();
+		await expect
+			.element(page.getByRole('button', { name: /^Restore Song 60\b/ }))
+			.toBeInTheDocument();
 		await expect.element(page.getByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
-		expect(cursors).toEqual([undefined, 'c1']);
-
-		hear({ type: 'queuesChanged' });
-		await expect.poll(() => cursors).toEqual([undefined, 'c1', undefined, 'c1']);
-		await expect.element(page.getByText('Song 3')).toBeInTheDocument();
 	});
 
-	it('deletes with one press through the log, and shows again one the server refused', async () => {
+	it('deletes with one press through the queue worker', async () => {
 		render(KeptQueues);
 		await page.getByRole('button', { name: /Delete Song 1/ }).click();
-		expect(fake.logged).toEqual([{ name: 'deleteKeptQueue', args: { queueId: 'q1' } }]);
-		await expect.element(page.getByText('Song 1')).not.toBeInTheDocument();
-		// A load before the server has it leaves it out.
-		hear({ type: 'queuesChanged' });
-		await new Promise((resolve) => setTimeout(resolve, 50));
-		await expect.element(page.getByText('Song 1')).not.toBeInTheDocument();
-
-		await page.getByRole('button', { name: /Delete Song 2/ }).click();
-		await expect.element(page.getByText('Song 2')).not.toBeInTheDocument();
-		// The log told the user why; the list is the server's again.
-		for (const heard of fake.settled)
-			heard({ name: 'deleteKeptQueue', args: { queueId: 'q2' } }, 'dropped');
-		await expect.element(page.getByText('Song 2')).toBeInTheDocument();
+		expect(fake.worker.sent).toContainEqual({ type: 'deleteKept', queueId: 'q1' } as ToWorker);
 	});
 
 	it('restores the queue pressed, and says why one was not', async () => {
@@ -166,21 +133,8 @@ describe('KeptQueues', () => {
 		expect(onrestored).toHaveBeenCalledTimes(1);
 	});
 
-	it('says kept queues need the server when it cannot be reached, and tries again', async () => {
-		fake.list = async () => {
-			throw new TypeError('offline');
-		};
-		render(KeptQueues);
-		await expect
-			.element(page.getByRole('status'))
-			.toHaveTextContent('Kept queues need a connection to the server.');
-		fake.list = async () => ({ items: [kept(1)], nextCursor: null });
-		await page.getByRole('button', { name: 'Try again' }).click();
-		await expect.element(page.getByText('Song 1')).toBeInTheDocument();
-	});
-
 	it('says what kept queues are when there are none', async () => {
-		fake.list = async () => ({ items: [], nextCursor: null });
+		hold([]);
 		render(KeptQueues);
 		await expect.element(page.getByText(/kept here for 30 days/)).toBeInTheDocument();
 	});
