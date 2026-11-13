@@ -20,6 +20,9 @@
 		"format:check": "oxfmt --check",
 		"gen:api": "openapi-typescript ../api/openapi.yaml -o src/lib/api/schema.d.ts"
 	},
+	"dependencies": {
+		"thumbhash": "0.1.1"
+	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
 		"@playwright/test": "^1.60.0",

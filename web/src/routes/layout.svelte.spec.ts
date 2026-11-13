@@ -16,14 +16,15 @@ import Layout from './+layout.svelte';
 const children = createRawSnippet(() => ({ render: () => '<p>page</p>' }));
 
 describe('the app layout', () => {
-	it('deletes the device copy of the catalog where nobody is signed in', async () => {
+	it('leaves the catalog’s election, and keeps its files, where nobody is signed in', async () => {
 		route.id = '/login';
 		await render(Layout, {
 			data: { me: null, library: null, tagTypes: [] },
 			children
 		} as never);
 
-		expect(catalog.signOut).toHaveBeenCalled();
+		expect(catalog.disconnect).toHaveBeenCalled();
+		expect(catalog.signOut).not.toHaveBeenCalled();
 		expect(catalog.connect).not.toHaveBeenCalled();
 	});
 });

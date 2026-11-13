@@ -5,6 +5,9 @@
 // at, and the owner tells every tab, which holds it: `onDevice` asks no one.
 
 import { API } from '$lib/api/root';
+import { clearImageCache, tellServiceWorker } from '$lib/image-cache';
+import { clearQueueLists } from '$lib/queue/lists';
+import { forget } from '$lib/last-known';
 import wasmUrl from '$lib/catalog-wasm/jewelcase_catalog_wasm_bg.wasm?url';
 import type { RealtimeServerMessage } from '$lib/api/types';
 import type { Realtime } from '$lib/realtime.svelte';
@@ -231,11 +234,21 @@ export class CatalogClient {
 
 	/**
 	 * Deletes every file of the catalog from this device, from every tab: the next person to
-	 * sign in must see nothing of the last. A tab that owns the catalog does it; if none does,
+	 * sign in must see nothing of the last, nor the account and library list kept for starting
+	 * offline, nor the images and queue lists kept for it, and the service worker keeps no more
+	 * images until it is told who is signed in. A tab that owns the catalog does it; if none does,
 	 * this tab starts a worker for it.
 	 */
 	signOut() {
-		return (this.#signingOut = this.#signOut());
+		// A tab owning the catalog lets go of it first, or the wipe would wait on its own lock.
+		this.disconnect();
+		forget();
+		return (this.#signingOut = Promise.all([
+			clearImageCache(),
+			clearQueueLists(),
+			tellServiceWorker(null),
+			this.#signOut()
+		]));
 	}
 
 	/**

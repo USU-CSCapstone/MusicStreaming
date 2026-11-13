@@ -3,6 +3,8 @@
 // (`design/general.md` §7.1).
 
 import { redirect } from '@sveltejs/kit';
+import { catalog } from '$lib/catalog/client.svelte';
+import { type LastKnown, lastKnown, owner, remember } from '$lib/last-known';
 import {
 	knownOffline,
 	offline,
@@ -64,17 +66,37 @@ function url(path: string, query: Query = {}): string {
 	return `${API}${path}${qs ? `?${qs}` : ''}`;
 }
 
+/** Set once a session that was good has ended here and the page is to reload at the login page. */
+let ending = false;
+
+/**
+ * Whether the page is about to reload at the login page because a session that was good ended,
+ * so the login page shown meanwhile leaves what it would tell once for the page after the reload.
+ */
+export const sessionEnding = () => ending;
+
 /**
  * The response's JSON, or its Problem as an `ApiError` whose message is safe to show. A
- * request the session no longer covers redirects to the login page; that takes effect where
- * a page is loading, and is an error like any other elsewhere.
+ * request the session no longer covers redirects to the login page. If the session had been
+ * good, the device is wiped and the page then reloads at the login page, so nothing of the
+ * session, playback above all, outlives it. Without one, the redirect takes effect where a page
+ * is loading, and is an error like any other elsewhere.
  */
 async function body<T>(res: Response): Promise<T> {
 	if (res.status === 204) return undefined as T;
 	if (!res.ok) {
 		const problem = await res.json().catch(() => null);
 		if (problem?.code === 'unauthenticated' || problem?.code === 'session_revoked') {
-			redirect(307, loginUrl());
+			const login = loginUrl();
+			// A session that was good has ended: the device keeps nothing of it.
+			if (owner() && !ending) {
+				ending = true;
+				void catalog
+					.signOut()
+					.catch(console.error)
+					.finally(() => location.assign(login));
+			}
+			redirect(307, login);
 		}
 		const message = problem?.detail ?? problem?.title ?? res.statusText;
 		const retryAfter = Number(res.headers.get('Retry-After')) || undefined;
@@ -112,7 +134,21 @@ async function send<T>(
 	return body(await fetch(url(path), { method, headers, body: payload }));
 }
 
-export const getServerInfo = (f: Fetch) => get<ServerInfo>(f, '/server');
+/**
+ * `answer`, kept for the next start with no network; with the server unreachable, what was kept
+ * of `key` instead, if anything. Only the layout's own reads use it, so the app can start offline.
+ */
+const kept = <K extends keyof LastKnown>(key: K, answer: Promise<NonNullable<LastKnown[K]>>) =>
+	answer.then(
+		(value) => (remember({ [key]: value }), value),
+		(error) => {
+			const value = lastKnown()[key];
+			if (value && unreachable(error)) return value;
+			throw error;
+		}
+	);
+
+export const getServerInfo = (f: Fetch) => kept('server', get<ServerInfo>(f, '/server'));
 
 /** Creates the owner and logs this browser in: the server sets the session cookie. */
 export const completeSetup = (f: Fetch, request: SetupRequest) =>
@@ -133,7 +169,7 @@ export const listKeptQueues = (f: Fetch, cursor?: string) =>
 export const deleteKeptQueue = (f: Fetch, queueId: string) =>
 	send<void>(f, 'DELETE', `/me/queues/${encodeURIComponent(queueId)}`);
 
-export const getMe = (f: Fetch) => get<User>(f, '/me');
+export const getMe = (f: Fetch) => kept('me', get<User>(f, '/me'));
 
 /** Records plays. With `keepalive`, the request outlives the page, for one closing. */
 export const recordPlays = (f: Fetch, items: PlayReport[], keepalive = false) =>
@@ -161,7 +197,8 @@ const device = <T>(
 	return fresh ? server() : read<T>(name, libraryId, { ...ids, ...query }, server);
 };
 
-export const listLibraries = (f: Fetch) => get<{ items: Library[] }>(f, '/libraries');
+export const listLibraries = (f: Fetch) =>
+	kept('libraries', get<{ items: Library[] }>(f, '/libraries'));
 
 /** A page of the library's albums. */
 export const listAlbums = (f: Fetch, libraryId: string, query: Query = {}) =>

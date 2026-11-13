@@ -19,6 +19,7 @@ export class Harness {
 	private reports: Report[] = [];
 	private changed: string[] = [];
 	private kinds: (readonly Kind[])[] = [];
+	private gone: string[] = [];
 	private told: Record<string, LibraryState>[] = [];
 	private heavies: boolean[] = [];
 	/** The `limit` of each `commit` since the last reset. */
@@ -40,6 +41,7 @@ export class Harness {
 		this.reports = [];
 		this.changed = [];
 		this.kinds = [];
+		this.gone = [];
 		this.told = [];
 		this.heavies = [];
 		this.commitLimits = [];
@@ -60,7 +62,8 @@ export class Harness {
 				this.kinds.push(kinds);
 			},
 			state: (libraries) => this.told.push(libraries),
-			heavy: (heavy) => this.heavies.push(heavy)
+			heavy: (heavy) => this.heavies.push(heavy),
+			lost: (library) => void this.gone.push(library)
 		});
 		await this.#sync.start();
 	}
@@ -88,6 +91,11 @@ export class Harness {
 	/** The times the sync said it entered (true) and left (false) a call that holds the worker. */
 	heavy() {
 		return this.heavies;
+	}
+
+	/** The libraries the sync has said the account no longer reaches, in order. */
+	lost() {
+		return this.gone;
 	}
 
 	/** Closes the sync, leaving the files. */

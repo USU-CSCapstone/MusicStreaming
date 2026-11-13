@@ -3,6 +3,8 @@
 // is the page's side; `protocol.ts` is what they say.
 
 import init from '$lib/catalog-wasm/jewelcase_catalog_wasm.js';
+import { dropLibraryImages } from '$lib/image-cache';
+import { dropLibraryLists } from '$lib/queue/lists';
 import { CatalogSync, describe } from './sync';
 import type { FromWorker, ToWorker } from './protocol';
 
@@ -43,7 +45,11 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 					report: (r) => post({ type: 'error', ...r }),
 					changed: (libraryId, kinds) => post({ type: 'changed', libraryId, kinds }),
 					state: (libraries) => post({ type: 'state', libraries }),
-					heavy: (on) => post({ type: 'heavy', on })
+					heavy: (on) => post({ type: 'heavy', on }),
+					lost: async (libraryId) => {
+						await dropLibraryImages(data.user, libraryId, data.api);
+						await dropLibraryLists(data.user, libraryId);
+					}
 				})),
 			(error) => {
 				post({ type: 'error', ...describe(error) });

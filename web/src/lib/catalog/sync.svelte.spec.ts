@@ -249,7 +249,9 @@ describe('catalog sync', () => {
 
 		await h.message(libraryChanged(BASE + 2));
 		await h.idle();
+		// Who is signed in is asked first: only this worker's account pulls.
 		expect((await h.api.asked('/')).slice(asked)).toEqual([
+			'/me',
 			`/libraries/1/changes?after=${BASE}&limit=1000`,
 			`/libraries/1/changes?after=${BASE + 1}&limit=1000`
 		]);
@@ -259,7 +261,7 @@ describe('catalog sync', () => {
 		// A hint of a position the device already holds asks for nothing.
 		await h.message(libraryChanged(BASE + 2));
 		await h.idle();
-		expect((await h.api.asked('/')).length).toBe(asked + 2);
+		expect((await h.api.asked('/')).length).toBe(asked + 3);
 	});
 
 	it('a catch-up interrupted mid-way resumes from its last page', async () => {
@@ -438,7 +440,20 @@ describe('catalog sync', () => {
 		expect(await dbs()).toHaveLength(1);
 	});
 
-	it('a database of another schema version is deleted and bootstrapped again', async () => {
+	it('a database of an older schema version is deleted and bootstrapped again', async () => {
+		await started('1');
+		await h.stop();
+		const [file] = await dbs();
+		await h.run(file, ['PRAGMA user_version = 1']);
+
+		await h.start();
+		await h.idle();
+		expect(await h.libraries()).toEqual(['1']);
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
+		expect(await total('listTracks')).toBe(SHOWN);
+	});
+
+	it('a database of a newer schema version is kept for the build that wrote it, and its library left to the server', async () => {
 		await started('1');
 		await h.stop();
 		const [file] = await dbs();
@@ -446,9 +461,9 @@ describe('catalog sync', () => {
 
 		await h.start();
 		await h.idle();
-		expect(await h.libraries()).toEqual(['1']);
-		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
-		expect(await total('listTracks')).toBe(SHOWN);
+		expect(await dbs()).toEqual([file]);
+		expect(await h.libraries()).toEqual([]);
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(1);
 	});
 
 	it('a corruption error from a query bootstraps that library again', async () => {
@@ -575,6 +590,18 @@ describe('catalog sync', () => {
 		expect(await h.libraries()).toEqual(['1']);
 	});
 
+	it('a worker whose session is now another account’s asks no library feed for anything', async () => {
+		await started('1');
+		const before = (await h.api.asked('/libraries/1/changes')).length;
+		await h.api.setSession('2');
+		await h.message(libraryChanged(SEQ + 1));
+		await h.idle();
+
+		expect(await h.api.asked('/libraries/1/changes')).toHaveLength(before);
+		expect(await h.libraries()).toEqual(['1']);
+		expect(await dbs()).toHaveLength(1);
+	});
+
 	it('a worker whose session is now another account’s downloads no library again', async () => {
 		await started('1');
 		await h.api.setSession('2');
@@ -608,6 +635,42 @@ describe('catalog sync', () => {
 
 		expect(await h.libraries()).toEqual(['1']);
 		expect(await dbs()).toHaveLength(1);
+		expect(await h.lost()).toEqual(['2']);
+	});
+
+	it('a library the account’s list no longer holds is deleted and reported lost', async () => {
+		await started('1', '2');
+		await h.api.setLibraries(['1']);
+		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.idle();
+
+		expect(await h.libraries()).toEqual(['1']);
+		expect(await h.lost()).toEqual(['2']);
+	});
+
+	it('a library whose snapshot the server refuses is reported lost', async () => {
+		await started('1');
+		await serve('1', '2');
+		await h.api.hold('/catalog');
+		await h.message(hello);
+		await expect.poll(() => h.api.holding()).toBe(true);
+		// The account loses the library while its snapshot is being asked for.
+		await h.api.setLibraries(['1']);
+		await h.api.release();
+		await h.idle();
+
+		expect(await h.lost()).toEqual(['2']);
+		expect(await h.libraries()).toEqual(['1']);
+	});
+
+	it('a library downloaded again because its feed expired is not reported lost', async () => {
+		await started('1');
+		await h.api.setSeq('1', 5);
+		await h.api.setFeed('1', [], 5);
+		await h.message(libraryChanged(SEQ + 1));
+		await h.idle();
+
+		expect(await h.lost()).toEqual([]);
 	});
 
 	it('410 from the account feed bootstraps the library again', async () => {

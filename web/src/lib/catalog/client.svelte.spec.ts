@@ -578,6 +578,38 @@ describe('CatalogClient', () => {
 		expect(workers[0].terminated).toBe(true);
 	});
 
+	it('sign-out empties every account’s image cache and queue lists, and what the app starts from', async () => {
+		for (const user of ['1', '2']) {
+			const images = await caches.open(`images-${user}`);
+			await images.put('/api/v1/libraries/1/images/9?size=96', new Response('jpeg'));
+			const lists = await caches.open(`queue-lists-${user}`);
+			await lists.put('/api/v1/me/queue/lists/abc', new Response('{}'));
+		}
+		localStorage.setItem('jewelcase-owner', '1');
+		localStorage.setItem('jewelcase-user:1', '{"me":{"id":"1"}}');
+		const b = browser();
+		await b.tab('a').client.signOut();
+		for (const user of ['1', '2']) {
+			expect(await caches.has(`images-${user}`)).toBe(false);
+			expect(await caches.has(`queue-lists-${user}`)).toBe(false);
+		}
+		expect(localStorage.getItem('jewelcase-owner')).toBeNull();
+		expect(localStorage.getItem('jewelcase-user:1')).toBeNull();
+	});
+
+	it('sign-out tells the service worker that nobody is signed in', async () => {
+		const postMessage = vi.fn();
+		const spy = vi
+			.spyOn(navigator.serviceWorker, 'getRegistration')
+			.mockResolvedValue({ active: { postMessage } } as never);
+		try {
+			await browser().tab('a').client.signOut();
+			expect(postMessage).toHaveBeenCalledWith({ type: 'user', user: null });
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
 	it('signing out in one tab is done by the tab that owns the files, which then lets them go', async () => {
 		const b = browser();
 		const owner = b.tab('owner');
