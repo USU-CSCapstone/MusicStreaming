@@ -1,0 +1,38 @@
+{
+  "id": "musicbrainz-tagger",
+  "name": "MusicBrainz Tagger",
+  "version": "0.2.0",
+  "apiVersion": "0.1",
+  "description": "Finds tracks with no artist on MusicBrainz by their title and length, and fills in the tags and cover they are missing.",
+  "author": "Jewelcase examples",
+  "homepage": "https://musicbrainz.org",
+  "settings": {
+    "properties": {
+      "guessFromTitle": {
+        "type": "boolean",
+        "title": "Guess from the title",
+        "description": "When MusicBrainz has no match for a title that names its artist, such as \"Artist feat. Other - Song (Official Audio)\", write that artist and song anyway.",
+        "default": true
+      },
+      "covers": {
+        "type": "boolean",
+        "title": "Embed covers",
+        "description": "Embed the matched release's front cover, from the Cover Art Archive, in files with no picture.",
+        "default": true
+      }
+    }
+  },
+  "permissions": [
+    { "permission": "libraryRead", "required": true, "reason": "To find tracks with no artist, and read their files' tags." },
+    {
+      "permission": "network",
+      "required": true,
+      "reason": "To search for recordings on musicbrainz.org, a little under once a second, inside the limit it asks clients to keep to, and to fetch covers from coverartarchive.org. Covers are served from archive.org's servers, whose names change, so it asks for any host.",
+      "destinations": ["*"],
+      "rateLimits": { "musicbrainz.org": "50/min", "coverartarchive.org": "50/min" }
+    },
+    { "permission": "libraryChange", "required": false, "reason": "To write the tags and covers it finds into your files. Without it, it only reports what it would write." },
+    { "permission": "tracksChanged", "required": false, "reason": "To look up tracks with no artist as they are added." },
+    { "permission": "schedule", "required": false, "reason": "To carry on through the library each hour, and look again a month later for tracks it found no match for.", "everyMinutes": 60 }
+  ]
+}
