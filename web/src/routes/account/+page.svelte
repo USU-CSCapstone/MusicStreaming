@@ -17,7 +17,7 @@
 	import { catalog } from '$lib/catalog/client.svelte';
 	import { connectivity } from '$lib/connectivity.svelte';
 	import { imageCacheSize } from '$lib/image-cache';
-	import { setLogoutPending } from '$lib/last-known';
+	import { lastKnown, setLogoutPending } from '$lib/last-known';
 	import { finishLogout } from '$lib/logout';
 	import { prefs } from '$lib/prefs.svelte';
 	import { queue } from '$lib/queue/client.svelte';
@@ -55,6 +55,23 @@
 			() => {}
 		);
 	});
+	/** The libraries the device holds or could not take, named as the account last saw them. */
+	const held = $derived(
+		Object.entries(catalog.libraries).flatMap(([id, state]) =>
+			state.onDevice || state.noRoom
+				? [
+						{
+							id,
+							name:
+								lastKnown().libraries?.items.find((library) => library.id === id)?.name ??
+								'A library',
+							...state
+						}
+					]
+				: []
+		)
+	);
+
 	let busy = $state(false);
 	/**
 	 * How many plays and changes have not reached the server, once logging out found some: the user
@@ -278,6 +295,26 @@
 					: 'The browser has not agreed to keep it, and may clear it. It would then be downloaded again.'}
 			</p>
 		{/if}
+		<ul>
+			{#each held as library (library.id)}
+				<li>
+					<strong>{library.name}</strong>
+					{#if library.noRoom}
+						<span class="muted">
+							{library.onDevice ? 'Not downloaded again' : 'Not downloaded'}: a
+							{library.onDevice ? 'new copy' : 'copy'} needs
+							{megabytes.format(library.noRoom.need / 1_000_000)} free and this device has
+							{megabytes.format(library.noRoom.free / 1_000_000)}.
+							{library.onDevice
+								? 'It keeps up with the server’s changes where it can, and is tried again the next time the app starts or reconnects.'
+								: 'It is tried again the next time the app starts or reconnects.'}
+						</span>
+					{:else}
+						<span class="muted">On this device</span>
+					{/if}
+				</li>
+			{/each}
+		</ul>
 	</section>
 {/if}
 

@@ -288,14 +288,17 @@ paths:
         while the caller could not reach a library are left out, so a device that installs a
         library's catalog file, the first time or again, pulls this feed again from `after=0`.
 
-        Pass `next` as `after` until it equals `head`, when the client is current. `head` is the
-        position of the caller's latest change, comparable with `accountChanged`'s `seq`.
+        Pass `next` as `after`, with the page's `epoch`, until `next` equals `head`, when the
+        client is current. Positions are the caller's own, counted from 1 by their changes alone,
+        and `head` is that of the caller's latest change, comparable with `accountChanged`'s
+        `position`.
       operationId: listAccountChanges
       parameters:
         - name: after
           in: query
           description: The `next` of the last page applied, or 0 for everything.
           schema: { type: integer, format: int64, minimum: 0, default: 0 }
+        - $ref: '#/components/parameters/FeedEpoch'
         - $ref: '#/components/parameters/Limit'
       responses:
         '200':
@@ -304,7 +307,9 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/AccountChanges' }
         '410':
-          description: '`cursor_expired` — `after` is past the caller''s latest change; start again from `after=0`.'
+          description: |
+            `cursor_expired` — the server cannot go on from `after` in `epoch`: see
+            `listLibraryChanges`. Start again from `after=0`.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -489,15 +494,24 @@ paths:
         album, artist, or tag that shows it, and a change to the image or the type puts them all
         on the feed again.
 
-        Pass `next` as `after` until it equals `head`, when the client is current. A client that
-        has applied a page has applied every change up to its `next`, and may stop and resume
-        from there.
+        Pass `next` as `after`, with the page's `epoch`, until `next` equals `head`, when the
+        client is current. A client that has applied a page has applied every change up to its
+        `next`, and may stop and resume from there. Positions are the library's own, counted from
+        1 by its changes alone, and `head` only grows.
+
+        Each start of the server is a run with an `epoch` of its own. Positions go on across
+        runs, so a client keeps the `epoch` of its latest page with its position and sends both;
+        the server goes on from a position of any run it knows, up to where that run ended. A
+        server restored from a backup does not know the runs after the backup, nor the changes
+        its run made after the backup was taken, so it refuses those positions rather than skip
+        what it has recorded since.
       operationId: listLibraryChanges
       parameters:
         - name: after
           in: query
           description: The `next` of the last page applied, or 0 for the whole catalog.
           schema: { type: integer, format: int64, minimum: 0, default: 0 }
+        - $ref: '#/components/parameters/FeedEpoch'
         - $ref: '#/components/parameters/Limit'
       responses:
         '200':
@@ -507,9 +521,10 @@ paths:
               schema: { $ref: '#/components/schemas/LibraryChanges' }
         '410':
           description: |
-            `cursor_expired` — the server cannot continue from `after`, because it is past the
-            library's latest change or older than the feed reaches back; start again from
-            `after=0`.
+            `cursor_expired` — the server cannot go on from `after`: it is past the library's
+            latest change or older than the feed reaches back, or `epoch` is missing, is not a run
+            of this server, or ended before `after`, as after a restore from a backup. Start again
+            from `after=0`, or from the catalog file (`getLibraryCatalog`).
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -522,50 +537,74 @@ paths:
       tags: [Libraries]
       summary: Download the library's catalog
       description: |
-        The library's catalog as one SQLite database in the device schema
+        The library's catalog as one gzipped SQLite database in the device schema
         (`crates/catalog/src/schema.sql`), for a device that has none of it yet. It holds the
-        rows `listLibraryChanges` carries, as of `X-Jewelcase-Seq`: the device then pulls the
-        feed with `after` set to that value. The file is built once and shared by everyone who
+        rows `listLibraryChanges` carries, as of `X-Jewelcase-Position`: the device then pulls the
+        feed with `after` set to that value and `epoch` to `X-Jewelcase-Epoch`. The file is built once and shared by everyone who
         reaches the library. It is rebuilt in the background once the library's feed holds more
         changes since the file than a tenth of its tracks, albums and artists, and the old file is
-        served meanwhile. It is gzipped for a client that accepts it.
+        served meanwhile.
 
-        `ETag` is the SHA-256 of the database itself, as a quoted lowercase hex string,
-        whether or not the response is compressed: a client checks it against the file it ends
-        up with. A file is served only after SQLite's `quick_check` passed on it.
+        The body is the gzip file itself, `application/gzip` with no `Content-Encoding`, so a
+        client stores the bytes it receives and inflates them itself. An interrupted download
+        resumes: the client asks for `Range: bytes=<bytes it has>-` with `If-Range` set to the
+        `ETag` it started with, and gets `206` with the rest, or `200` with the whole of a newer
+        file if the file has changed since.
+
+        `ETag` is the SHA-256 of the gzip file, as a quoted lowercase hex string: a client checks
+        it against the bytes it ends up with, and gzip's own checksum covers the inflated
+        database. A file is served only after SQLite's `quick_check` passed on the database.
         `X-Jewelcase-Schema` is the device schema's version, which the database also carries as
-        its `user_version`: a client that doesn't know that version doesn't import the file. The
+        its `user_version`: a client that doesn't know that version doesn't import the file.
+        `X-Jewelcase-Database-Size` is the size of the database the gzip inflates to, so a device
+        can check it has room for both before it downloads (`headLibraryCatalog`). The
         response is `no-store`, so no HTTP cache keeps a copy of the catalog.
 
         Until the first build has finished there is no file, and the answer is `503`. The client
         reads the catalog from the other endpoints in the meantime and asks again after
         `Retry-After`.
       operationId: getLibraryCatalog
+      parameters:
+        - name: Range
+          in: header
+          description: '`bytes=<start>-`, to resume a download.'
+          schema: { type: string }
+        - name: If-Range
+          in: header
+          description: The `ETag` the download started with; a range of any other file is not sent.
+          schema: { type: string }
       responses:
         '200':
           description: OK
           headers:
             ETag:
-              description: The SHA-256 of the uncompressed database, in quotes.
+              description: The SHA-256 of the gzip file, in quotes.
               schema: { type: string }
-            X-Jewelcase-Seq:
-              description: The feed position the file is current to, for `listLibraryChanges`'s `after`.
+            X-Jewelcase-Position:
+              description: The library's feed position the file is current to, for `listLibraryChanges`'s `after`.
               schema: { type: integer, format: int64 }
+            X-Jewelcase-Epoch:
+              description: The run that position belongs to, for `listLibraryChanges`'s `epoch`.
+              schema: { type: string }
             X-Jewelcase-Schema:
               description: The device schema version of the file (`PRAGMA user_version`).
               schema: { type: integer, format: int32 }
+            X-Jewelcase-Database-Size:
+              description: The size in bytes of the database the gzip inflates to, which the device needs room for besides the gzip.
+              schema: { type: integer, format: int64 }
             Cache-Control:
               description: '`no-store`.'
               schema: { type: string }
-            Content-Encoding:
-              description: '`gzip` when the client accepts it.'
-              schema: { type: string }
           content:
-            application/vnd.sqlite3:
+            application/gzip:
               schema: { type: string, format: binary }
-        '206': { description: 'Partial content (`Range`). A range applies to the encoding sent, so an interrupted download can resume.' }
+        '206':
+          description: The range asked for (`Range`), of the file `If-Range` names if it is set, with the same headers as `200` and `Content-Range`.
+          content:
+            application/gzip:
+              schema: { type: string, format: binary }
         '304': { description: Not modified (`If-Modified-Since`). }
-        '416': { description: Range not satisfiable. }
+        '416': { description: 'Range not satisfiable: the range starts at or past the end of the file, whose length `Content-Range` gives.' }
         '503':
           description: '`catalog_building` — the first build has not finished; try again after `Retry-After`.'
           headers:
@@ -574,6 +613,48 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    head:
+      tags: [Libraries]
+      summary: Size up the library's catalog
+      description: |
+        What `getLibraryCatalog` would answer, headers only, so a device can check it has room
+        before it downloads: `Content-Length` is the size of the gzip and
+        `X-Jewelcase-Database-Size` the size of the database it inflates to. It needs the same
+        access as the download and answers in the same way, `404` for a library the caller cannot
+        reach and `503` while the first build runs, which a request for it also starts. It builds
+        and sends nothing else.
+      operationId: headLibraryCatalog
+      responses:
+        '200':
+          description: OK
+          headers:
+            Content-Length:
+              description: The size in bytes of the gzip file.
+              schema: { type: integer, format: int64 }
+            ETag:
+              description: The SHA-256 of the gzip file, in quotes.
+              schema: { type: string }
+            X-Jewelcase-Position:
+              description: The library's feed position the file is current to.
+              schema: { type: integer, format: int64 }
+            X-Jewelcase-Epoch:
+              description: The run that position belongs to.
+              schema: { type: string }
+            X-Jewelcase-Schema:
+              description: The device schema version of the file (`PRAGMA user_version`).
+              schema: { type: integer, format: int32 }
+            X-Jewelcase-Database-Size:
+              description: The size in bytes of the database the gzip inflates to.
+              schema: { type: integer, format: int64 }
+            Cache-Control:
+              description: '`no-store`.'
+              schema: { type: string }
+        '503':
+          description: '`catalog_building` — the first build has not finished; try again after `Retry-After`.'
+          headers:
+            Retry-After:
+              schema: { type: integer }
         default: { $ref: '#/components/responses/Problem' }
 
   # ───────────────────────────── Browse ─────────────────────────────
@@ -2239,6 +2320,13 @@ components:
       name: limit
       in: query
       schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+    FeedEpoch:
+      name: epoch
+      in: query
+      description: |
+        The `epoch` of the page whose `next` is `after` (or the catalog file's
+        `X-Jewelcase-Epoch`). Required with an `after` above 0: without it the answer is `410`.
+      schema: { type: string }
     ArtistFilter:
       name: artistId
       in: query
@@ -2498,7 +2586,7 @@ components:
 
     LibraryChanges:
       type: object
-      required: [changes, next, head]
+      required: [changes, next, head, epoch]
       properties:
         changes:
           type: array
@@ -2511,12 +2599,15 @@ components:
           type: integer
           format: int64
           description: The position of the library's latest change when the page was read.
+        epoch:
+          type: string
+          description: The server's run that `next` and `head` belong to, to send with `next`.
 
     LibraryChange:
       type: object
-      required: [seq, op, kind, id]
+      required: [position, op, kind, id]
       properties:
-        seq: { type: integer, format: int64 }
+        position: { type: integer, format: int64 }
         op: { type: string, enum: [upsert, delete] }
         kind: { type: string, enum: [library, track, album, artist, tag] }
         id: { $ref: '#/components/schemas/Id' }
@@ -2531,7 +2622,7 @@ components:
 
     AccountChanges:
       type: object
-      required: [changes, next, head]
+      required: [changes, next, head, epoch]
       properties:
         changes:
           type: array
@@ -2544,12 +2635,15 @@ components:
           type: integer
           format: int64
           description: The position of the caller's latest change when the page was read.
+        epoch:
+          type: string
+          description: The server's run that `next` and `head` belong to, to send with `next`.
 
     AccountChange:
       type: object
-      required: [seq, op, kind, id]
+      required: [position, op, kind, id]
       properties:
-        seq: { type: integer, format: int64 }
+        position: { type: integer, format: int64 }
         op: { type: string, enum: [upsert, delete] }
         kind: { type: string, enum: [playlist, playlistItem, hiddenTrack] }
         id:
@@ -5042,33 +5136,33 @@ components:
             trackId: { $ref: '#/components/schemas/Id' }
             hidden: { type: boolean }
         - type: object
-          required: [type, libraryId, seq]
+          required: [type, libraryId, position]
           description: |
             A library's change feed moved, so a device holding the library fetches what it
             missed (`listLibraryChanges`, with `after` set to the position it holds). Sent to every
             connection of every account that reaches the library, once the change is committed,
-            and never to an account that does not. It carries no data: `seq` is the feed's
-            position, comparable with `head` there, and a device already at or past it does
-            nothing. At most one is sent for a library each second, carrying the latest `seq`,
+            and never to an account that does not. It carries no data: `position` is the library's own
+            feed position, comparable with `head` there, and a device already at or past it does
+            nothing. At most one is sent for a library each second, carrying the latest `position`,
             and a change inside that second is announced when it ends, so a burst such as a scan
             sends a few. A device also fetches on `hello`, so a reconnect and a hint are one path.
           properties:
             type: { const: libraryChanged }
             libraryId: { $ref: '#/components/schemas/Id' }
-            seq: { type: integer, format: int64 }
+            position: { type: integer, format: int64 }
         - type: object
-          required: [type, seq]
+          required: [type, position]
           description: |
             The account's own change feed moved (`listAccountChanges`, with `after` set to the
-            position the device holds), so a device keeping its playlists fetches what it
-            missed. Sent to every connection of the account, once the change is committed, and
-            to no other account. It carries no data: `seq` is the feed's position, comparable
-            with `head` there. At most one is sent each second, carrying the latest `seq`, and a
-            change inside that second is announced when it ends. A device also fetches on
-            `hello`.
+            position the device holds), so a device keeping its playlists and hidden tracks
+            fetches what it missed. Sent to every connection of the account, once the change is
+            committed, and to no other account. It carries no data: `position` is the account's
+            own feed position, comparable with `head` there. At most one is sent each second,
+            carrying the latest `position`, and a change inside that second is announced when it
+            ends. A device also fetches on `hello`.
           properties:
             type: { const: accountChanged }
-            seq: { type: integer, format: int64 }
+            position: { type: integer, format: int64 }
         - type: object
           required: [type, queueId]
           description: |

@@ -19,18 +19,20 @@ CREATE TABLE account_changes (
     -- The playlist, or the hidden track. Not a reference: a tombstone outlives what it names
     entity_id   INTEGER NOT NULL,
     item_key    INTEGER NOT NULL DEFAULT 0 CHECK (kind = 'playlistItem' OR item_key = 0),
-    op          TEXT    NOT NULL CHECK (op IN ('upsert', 'delete'))
+    op          TEXT    NOT NULL CHECK (op IN ('upsert', 'delete')),
+    -- The row's place in its user's feed, which clients see (0013_feed_positions.sql)
+    position    INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 
-CREATE INDEX account_changes_feed ON account_changes (user_id, seq);
+CREATE INDEX account_changes_feed ON account_changes (user_id, position);
 -- Leads with what changed, so deleting a playlist finds all its rows
 CREATE UNIQUE INDEX account_changes_thing
     ON account_changes (user_id, entity_id, kind, item_key);
 
 -- Playlists and hidden tracks from before this migration have no rows yet, so a device would never
 -- hear of them. Each playlist gets its upsert, in id order, each item after its playlist, and each
--- hidden track after them, so that a device reading the feed from the start receives all of them.
--- The table is new, so nothing collides.
+-- hidden track after them, so that a device reading the feed from the start receives all of them,
+-- numbered per user in that order. The table is new, so nothing collides.
 INSERT INTO account_changes (user_id, library_id, kind, entity_id, item_key, op)
 SELECT user_id, library_id, 'playlist', id, 0, 'upsert' FROM playlists ORDER BY id;
 
@@ -43,3 +45,8 @@ ORDER BY i.playlist_id, i.key;
 INSERT INTO account_changes (user_id, library_id, kind, entity_id, item_key, op)
 SELECT user_id, library_id, 'hiddenTrack', track_id, 0, 'upsert' FROM hidden_tracks
 ORDER BY user_id, library_id, hidden_at, track_id;
+
+UPDATE account_changes SET position = numbered.position
+FROM (SELECT seq, row_number() OVER (PARTITION BY user_id ORDER BY seq) AS position
+      FROM account_changes) AS numbered
+WHERE numbered.seq = account_changes.seq;

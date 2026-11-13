@@ -5,6 +5,8 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use rusqlite::Connection;
 
 use crate::db::Database;
@@ -14,7 +16,8 @@ use crate::db::testing::scale;
 
 /// Writes library 1 of a generated library ([`scale::size`] tracks) as the device schema holds it
 /// into `target/catalog-scale/device.db`, copied as a catalog snapshot is
-/// ([`jewelcase_catalog::snapshot::copy`]). Run it with
+/// ([`jewelcase_catalog::snapshot::copy`]), and gzipped as it is served beside it, `device.db.gz`.
+/// Run it with
 /// `cargo test --release -p jewelcase-server write_device_scale_files -- --ignored --nocapture`.
 #[test]
 #[ignore = "benchmark data"]
@@ -40,6 +43,11 @@ fn write_device_scale_files() {
     conn.execute("VACUUM INTO ?", [device.to_str().unwrap()]).unwrap();
     println!("device.db: {} bytes", fs::metadata(&device).unwrap().len());
     drop(conn);
+    let zipped = out.join("device.db.gz");
+    let mut gzip = GzEncoder::new(fs::File::create(&zipped).unwrap(), Compression::default());
+    std::io::copy(&mut fs::File::open(&device).unwrap(), &mut gzip).unwrap();
+    gzip.finish().unwrap();
+    println!("device.db.gz: {} bytes", fs::metadata(&zipped).unwrap().len());
     for file in [&server, &building] {
         let _ = fs::remove_file(file);
     }

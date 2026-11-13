@@ -7,7 +7,7 @@
 // context, and a phone cannot reach this machine as `localhost`, so put https in front of it, which
 // must pass the COOP/COEP headers through: `tailscale serve --bg 4180` or
 // `cloudflared tunnel --url http://localhost:4180`. Open the https URL in Safari and tap Run. The
-// page downloads the database file, about 330 MB.
+// page downloads the gzipped database file, about 120 MB.
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { createServer } from 'node:http';

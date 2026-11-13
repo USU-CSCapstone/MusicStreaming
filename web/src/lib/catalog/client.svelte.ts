@@ -115,6 +115,8 @@ export class CatalogClient {
 	/** What waits for a `started` or `paused` from the worker. */
 	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- waiting askers are not state to render
 	#says = new Map<string, () => void>();
+	/** The libraries the worker found a file for at its start, if it said. */
+	#found: string[] | undefined;
 
 	/**
 	 * Makes a client whose owner starts its worker with `create`, on the lock and channel `name`;
@@ -293,6 +295,14 @@ export class CatalogClient {
 		}
 		const here = this.#current()?.libraries[library];
 		return !!here && here.onDevice;
+	}
+
+	/**
+	 * What the owner last said of each library the device holds or left for want of room, as the
+	 * account page shows it; empty while no owner of this tab's account is serving.
+	 */
+	get libraries(): CatalogState['libraries'] {
+		return this.#current()?.libraries ?? {};
 	}
 
 	/**
@@ -576,7 +586,10 @@ export class CatalogClient {
 					return answer;
 				})
 			: () => {};
-		if (started) this.#serve(true);
+		if (started) {
+			this.#reportEvicted();
+			this.#serve(true);
+		}
 		await released;
 		this.#serve(false);
 		stop();
@@ -595,6 +608,25 @@ export class CatalogClient {
 		if (this.#serving === on) return;
 		this.#serving = on;
 		this.#publish();
+	}
+
+	/**
+	 * Tells the user once if a library the device held for this account the last time a tab served
+	 * it has no file at the worker's start, as when the browser cleared it. A file the worker found
+	 * and deleted itself (an older schema, one that would not open) is not reported, and nothing is
+	 * after a failed start. Serving rewrites the libraries held, so a later start does not report
+	 * the same ones again.
+	 */
+	#reportEvicted() {
+		const found = this.#found;
+		if (!found) return;
+		const missing = [...deviceLibraries(this.#user)].filter((id) => !found.includes(id));
+		if (missing.length === 0) return;
+		toast(
+			missing.length === 1
+				? 'A music library is no longer on this device and will be downloaded again.'
+				: `${missing.length} music libraries are no longer on this device and will be downloaded again.`
+		);
 	}
 
 	/**
@@ -690,6 +722,7 @@ export class CatalogClient {
 			if (message.error === undefined) call?.resolve(message.result ?? '');
 			else call?.reject(new Error(message.error));
 		} else {
+			if (message.type === 'started') this.#found = message.found;
 			this.#says.get(message.type)?.();
 		}
 	}

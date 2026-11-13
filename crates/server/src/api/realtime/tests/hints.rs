@@ -37,14 +37,14 @@ async fn setup() -> (tempfile::TempDir, Arc<Database>, Arc<Hub>) {
 }
 
 /// Records an upsert of each of `tracks` in `library`'s feed in one transaction, and returns the
-/// feed's position after it.
+/// library's own feed position after it.
 async fn change(db: &Database, library: i64, tracks: &[i64]) -> i64 {
     let tracks = tracks.to_vec();
     db.write(move |tx| {
         for track in tracks {
             feed::record(tx, library, Entity::Track, track, Op::Upsert, 0)?;
         }
-        tx.query_row("SELECT max(seq) FROM library_changes", [], |row| row.get(0))
+        feed::head(tx, feed::Feed::Library(library))
     })
     .await
     .unwrap()
@@ -106,9 +106,9 @@ async fn a_scan_batch_sends_one_library_changed_to_accounts_with_access() {
     let (mut owner, mut user) = (hub.connect(1, 1), hub.connect(2, 2));
     let mut tab = hub.connect(2, 2);
 
-    let seq = change(&db, 1, &[1, 2, 3]).await;
+    let position = change(&db, 1, &[1, 2, 3]).await;
 
-    let hint = json!({ "type": "libraryChanged", "libraryId": "1", "seq": seq });
+    let hint = json!({ "type": "libraryChanged", "libraryId": "1", "position": position });
     assert_eq!(heard(&mut owner).await, hint);
     assert_eq!(heard(&mut user).await, hint);
     assert_eq!(heard(&mut tab).await, hint, "every connection of the account hears it");
@@ -121,9 +121,9 @@ async fn an_account_without_access_hears_nothing() {
     let (mut owner, mut user, mut stranger) =
         (hub.connect(1, 1), hub.connect(2, 2), hub.connect(3, 3));
 
-    let seq = change(&db, 2, &[1]).await;
+    let position = change(&db, 2, &[1]).await;
 
-    let hint = json!({ "type": "libraryChanged", "libraryId": "2", "seq": seq });
+    let hint = json!({ "type": "libraryChanged", "libraryId": "2", "position": position });
     assert_eq!(heard(&mut owner).await, hint);
     assert!(hears_nothing(&mut user).await, "account 2 reaches library 1 only");
     assert!(hears_nothing(&mut stranger).await);
@@ -148,23 +148,20 @@ async fn each_hint_carries_its_own_librarys_seq() {
     let (_temp, db, hub) = setup().await;
     let mut owner = hub.connect(1, 1);
 
-    let (first, second) = db
-        .write(|tx| {
-            feed::record(tx, 1, Entity::Track, 1, Op::Upsert, 0)?;
-            let first: i64 =
-                tx.query_row("SELECT max(seq) FROM library_changes", [], |r| r.get(0))?;
-            feed::record(tx, 2, Entity::Track, 2, Op::Upsert, 0)?;
-            let second: i64 =
-                tx.query_row("SELECT max(seq) FROM library_changes", [], |r| r.get(0))?;
-            Ok((first, second))
-        })
-        .await
-        .unwrap();
+    db.write(|tx| {
+        for track in 1..=3 {
+            feed::record(tx, 2, Entity::Track, track, Op::Upsert, 0)?;
+        }
+        feed::record(tx, 1, Entity::Track, 1, Op::Upsert, 0)
+    })
+    .await
+    .unwrap();
 
+    // Each library's own position: library 2's three changes leave library 1 at its first.
     let mut heard_both = [heard(&mut owner).await, heard(&mut owner).await];
     heard_both.sort_by_key(|hint| hint["libraryId"].as_str().unwrap().to_owned());
-    assert_eq!(heard_both[0], json!({ "type": "libraryChanged", "libraryId": "1", "seq": first }));
-    assert_eq!(heard_both[1], json!({ "type": "libraryChanged", "libraryId": "2", "seq": second }));
+    assert_eq!(heard_both[0], json!({ "type": "libraryChanged", "libraryId": "1", "position": 1 }));
+    assert_eq!(heard_both[1], json!({ "type": "libraryChanged", "libraryId": "2", "position": 3 }));
 }
 
 #[tokio::test(start_paused = true)]
@@ -183,7 +180,7 @@ async fn a_library_is_hinted_again_only_when_it_changes() {
     tokio::time::advance(WINDOW).await;
 
     let hint = heard_paused(&mut owner).await;
-    assert_eq!((&hint["libraryId"], &hint["seq"]), (&json!("1"), &json!(again)));
+    assert_eq!((&hint["libraryId"], &hint["position"]), (&json!("1"), &json!(again)));
     tokio::time::sleep(2 * WINDOW).await;
     assert!(hears_nothing(&mut owner).await, "library 2 did not change");
 }
@@ -194,7 +191,7 @@ async fn the_last_change_of_a_burst_is_always_hinted() {
     let mut owner = hub.connect(1, 1);
 
     let first = change(&db, 1, &[1]).await;
-    assert_eq!(heard_paused(&mut owner).await["seq"], json!(first));
+    assert_eq!(heard_paused(&mut owner).await["position"], json!(first));
     // Inside the first hint's window, so held until it ends.
     let mut feed = db.follow_feed();
     let last = change(&db, 1, &[2, 3]).await;
@@ -203,7 +200,7 @@ async fn the_last_change_of_a_burst_is_always_hinted() {
 
     tokio::time::advance(WINDOW).await;
 
-    assert_eq!(heard_paused(&mut owner).await["seq"], json!(last));
+    assert_eq!(heard_paused(&mut owner).await["position"], json!(last));
     tokio::time::sleep(2 * WINDOW).await;
     assert!(hears_nothing(&mut owner).await);
 }
@@ -215,12 +212,12 @@ fn a_burst_of_changes_sends_at_most_one_hint_per_second_with_the_latest_seq() {
     let mut throttle = Throttle::default();
 
     assert_eq!(throttle.moved(at(0), 1, 10), Some(10), "the first change is hinted at once");
-    for (millis, seq) in [(100, 11), (500, 14), (900, 13)] {
-        assert_eq!(throttle.moved(at(millis), 1, seq), None);
+    for (millis, position) in [(100, 11), (500, 14), (900, 13)] {
+        assert_eq!(throttle.moved(at(millis), 1, position), None);
     }
     assert_eq!(throttle.next_deadline(), Some(at(1000)));
     assert_eq!(throttle.due(at(999)), vec![]);
-    assert_eq!(throttle.due(at(1000)), vec![(1, 14)], "the latest seq, once");
+    assert_eq!(throttle.due(at(1000)), vec![(1, 14)], "the latest position, once");
     assert_eq!(throttle.next_deadline(), None);
     // The hint at 1000 opened a new window.
     assert_eq!(throttle.moved(at(1500), 1, 15), None);
@@ -233,11 +230,12 @@ fn a_burst_of_changes_sends_at_most_one_hint_per_second_with_the_latest_seq() {
     assert_eq!(throttle.moved(at(2100), 2, 3), Some(3));
 }
 
-/// Records a change to `user`'s playlist 7 in library 1 and returns the account feed's position.
+/// Records a change to `user`'s playlist 7 in library 1 and returns the account's own feed
+/// position.
 async fn account_change(db: &Database, user: i64) -> i64 {
     db.write(move |tx| {
         feed::record_account(tx, user, 1, Kind::Playlist, 7, 0, Op::Upsert)?;
-        tx.query_row("SELECT max(seq) FROM account_changes", [], |row| row.get(0))
+        feed::head(tx, feed::Feed::Account(user))
     })
     .await
     .unwrap()
@@ -250,9 +248,9 @@ async fn account_changed_reaches_only_the_account() {
         (hub.connect(1, 1), hub.connect(2, 2), hub.connect(3, 3));
     let mut tab = hub.connect(2, 2);
 
-    let seq = account_change(&db, 2).await;
+    let position = account_change(&db, 2).await;
 
-    let hint = json!({ "type": "accountChanged", "seq": seq });
+    let hint = json!({ "type": "accountChanged", "position": position });
     assert_eq!(heard(&mut user).await, hint);
     assert_eq!(heard(&mut tab).await, hint, "every connection of the account hears it");
     // Account 1 reaches library 1 as the owner, and 3 reaches none: neither hears of account 2.
@@ -267,7 +265,7 @@ async fn the_last_account_change_of_a_burst_is_always_hinted() {
     let mut user = hub.connect(2, 2);
 
     let first = account_change(&db, 2).await;
-    assert_eq!(heard_paused(&mut user).await["seq"], json!(first));
+    assert_eq!(heard_paused(&mut user).await["position"], json!(first));
     let mut feed = db.follow_account_feed();
     account_change(&db, 2).await;
     let last = account_change(&db, 2).await;
@@ -276,5 +274,20 @@ async fn the_last_account_change_of_a_burst_is_always_hinted() {
 
     tokio::time::advance(WINDOW).await;
 
-    assert_eq!(heard_paused(&mut user).await["seq"], json!(last));
+    assert_eq!(heard_paused(&mut user).await["position"], json!(last));
+}
+
+#[tokio::test]
+async fn an_account_hint_carries_the_accounts_own_position() {
+    let (_temp, db, hub) = setup().await;
+    let mut user = hub.connect(2, 2);
+    db.write(|tx| {
+        for playlist in 1..=3 {
+            feed::record_account(tx, 1, 1, Kind::Playlist, playlist, 0, Op::Upsert)?;
+        }
+        feed::record_account(tx, 2, 1, Kind::Playlist, 7, 0, Op::Upsert)
+    })
+    .await
+    .unwrap();
+    assert_eq!(heard(&mut user).await, json!({ "type": "accountChanged", "position": 1 }));
 }
