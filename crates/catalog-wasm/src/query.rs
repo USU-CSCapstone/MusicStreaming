@@ -25,7 +25,7 @@ impl Catalog {
     /// (decimal IDs). Returns the JSON text the server sends, serialized once and passed to JS as
     /// it is. Throws on an unknown name, parameters the API would refuse, or a query that fails;
     /// `search` and search recipes throw until `buildIndex` has run. A list's counted total is
-    /// remembered until the next `stage` or `commit`.
+    /// remembered until the next `stage`, `commit` or `sql`.
     pub fn query(
         &self,
         user: &str,

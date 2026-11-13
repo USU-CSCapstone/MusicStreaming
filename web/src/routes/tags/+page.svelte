@@ -6,6 +6,7 @@
 	import { plural } from '$lib/format';
 	import { fullText } from '$lib/full-text';
 	import { Paged } from '$lib/paged.svelte';
+	import { DEPENDS } from '$lib/live.svelte';
 	import { tagTypeName, tagTypePlural } from '$lib/tags';
 
 	// One type's tags, each a link to its page (`requirements/tags.md` §7). A messy library shows
@@ -13,7 +14,13 @@
 	let { data } = $props();
 
 	const tags = $derived(
-		new Paged(data.tags, (cursor) => listTags(fetch, data.lib, { ...data.query, cursor }))
+		new Paged(
+			data.tags,
+			(cursor, limit) => listTags(fetch, data.lib, { ...data.query, cursor, limit }),
+			data.lib,
+			DEPENDS.tags,
+			data.since
+		)
 	);
 	const name = $derived(tagTypeName(data.type, data.tagTypes).toLowerCase());
 	// A plugin gives its type one name, for one tag and for more.

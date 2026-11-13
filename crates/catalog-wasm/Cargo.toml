@@ -13,6 +13,8 @@ jewelcase-core = { path = "../core" }
 rusqlite = "0.41.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The snapshot import's hash, as in the core.
+sha2 = "0.10"
 # The version rusqlite builds on, which names the VFS callbacks the sahpool VFS needs; its
 # `wasm-bindgen` feature provides the clock, sleep and entropy SQLite asks the host for.
 sqlite-wasm-rs = { version = "0.6", default-features = false, features = ["wasm-bindgen"] }

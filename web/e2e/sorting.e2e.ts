@@ -204,8 +204,11 @@ test.describe('songs, which the server sorts', () => {
 
 	test("an artist's songs sort without loading the rest of the page again", async ({
 		page,
+		context,
 		server
 	}) => {
+		// Reads stay on the server, which is what is counted: the device would answer once synced.
+		await context.route('**/api/v1/libraries/*/catalog', (route) => route.abort());
 		const asked: string[] = [];
 		page.on('request', (r) => {
 			const path = new URL(r.url()).pathname;

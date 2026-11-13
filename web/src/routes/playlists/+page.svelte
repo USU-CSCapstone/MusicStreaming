@@ -14,11 +14,18 @@
 	} from '$lib/components/PlaylistDetailsDialog.svelte';
 	import { plural } from '$lib/format';
 	import { Paged } from '$lib/paged.svelte';
+	import { DEPENDS } from '$lib/live.svelte';
 
 	let { data } = $props();
 
 	const playlists = $derived(
-		new Paged(data.playlists, (cursor) => listPlaylists(fetch, data.lib, { cursor }))
+		new Paged(
+			data.playlists,
+			(cursor, limit) => listPlaylists(fetch, data.lib, { cursor, limit }),
+			data.lib,
+			DEPENDS.playlists,
+			data.since
+		)
 	);
 	// Deleted ones go at once, while their Undo is still on offer.
 	const shown = $derived(playlists.items.filter((p) => !deleted.has(p.id)));

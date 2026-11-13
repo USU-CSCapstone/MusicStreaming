@@ -1,12 +1,13 @@
 <script lang="ts">
 	import { marks } from '$lib/marks.svelte';
-	import { listAlbums, listArtists, listTracks } from '$lib/api/client';
+	import { getTag, listAlbums, listArtists, listTracks } from '$lib/api/client';
 	import { albumCard, artistCard } from '$lib/cards';
 	import CollectionView from '$lib/components/CollectionView.svelte';
 	import DetailHeader from '$lib/components/DetailHeader.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
 	import ViewToggle from '$lib/components/ViewToggle.svelte';
 	import { plural } from '$lib/format';
+	import { DEPENDS, Live } from '$lib/live.svelte';
 	import { Paged } from '$lib/paged.svelte';
 	import { player } from '$lib/player.svelte';
 	import { currentSort, showSorted } from '$lib/sort-url';
@@ -17,21 +18,47 @@
 	// (`requirements/tags.md` §5, §7).
 	let { data } = $props();
 
-	const tag = $derived(data.tag);
+	// The tag reads again, in place, when the library changes on the device.
+	const shownTag = $derived(
+		new Live(
+			data.tag,
+			() => getTag(fetch, data.lib, data.tag.id),
+			data.lib,
+			DEPENDS.tags,
+			data.since
+		)
+	);
+	const tag = $derived(shownTag.value);
 	const context = $derived({ type: 'tag', id: tag.id } as const);
 	const sort = $derived(currentSort(FIELDS));
 	const albums = $derived(
-		new Paged(data.albums, (cursor) =>
-			listAlbums(fetch, data.lib, { tagAll: tag.id, sort: 'name', cursor })
+		new Paged(
+			data.albums,
+			(cursor, limit) =>
+				listAlbums(fetch, data.lib, { tagAll: tag.id, sort: 'name', cursor, limit }),
+			data.lib,
+			DEPENDS.albums,
+			data.since
 		)
 	);
 	const artists = $derived(
-		new Paged(data.artists, (cursor) =>
-			listArtists(fetch, data.lib, { tagAll: tag.id, sort: 'name', cursor })
+		new Paged(
+			data.artists,
+			(cursor, limit) =>
+				listArtists(fetch, data.lib, { tagAll: tag.id, sort: 'name', cursor, limit }),
+			data.lib,
+			DEPENDS.artists,
+			data.since
 		)
 	);
 	const tracks = $derived(
-		new Paged(data.tracks, (cursor) => listTracks(fetch, data.lib, { ...data.songs, cursor }))
+		new Paged(
+			data.tracks,
+			(cursor, limit) => listTracks(fetch, data.lib, { ...data.songs, cursor, limit }),
+			data.lib,
+			DEPENDS.tracks,
+			data.since
+		)
 	);
 	const counts = $derived(
 		[

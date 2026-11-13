@@ -9,6 +9,7 @@
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import TabBar from '$lib/components/TabBar.svelte';
 	import Toast from '$lib/components/Toast.svelte';
+	import { catalog } from '$lib/catalog/client.svelte';
 	import { controls } from '$lib/controls.svelte';
 	import { marks } from '$lib/marks.svelte';
 	import { player } from '$lib/player.svelte';
@@ -24,13 +25,18 @@
 		player.libraryId = data.library?.id ?? '';
 	});
 
-	// Live updates, and the account's queue, for someone signed in; setup and login have nothing
-	// to update.
+	// Live updates, the account's queue and the device's copy of its libraries, for someone signed
+	// in; setup and login have nothing to update, and nobody to keep a copy for.
 	$effect(() => {
-		if (bare || !data.me) return;
+		if (bare || !data.me) {
+			catalog.signOut();
+			return;
+		}
 		realtime.start();
 		queue.connect(realtime, marks);
+		catalog.connect(realtime, data.me.id);
 		return () => {
+			catalog.disconnect();
 			queue.disconnect();
 			realtime.stop();
 		};
