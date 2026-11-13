@@ -28,7 +28,25 @@ vi.mock('$lib/connectivity.svelte', () => ({
 }));
 vi.mock('$app/paths', () => ({ base: '', resolve: (path: string) => path }));
 
-import { getPlaylist, getTracksByIds, listKeptQueues, listPlaylistItems, logout } from './client';
+import {
+	completeSetup,
+	disconnectMyPlugin,
+	getPlaylist,
+	getTracksByIds,
+	installPluginFile,
+	installPluginUrl,
+	listKeptQueues,
+	listPlaylistItems,
+	login,
+	logout,
+	runPlugin,
+	setMyPluginSettings,
+	setPluginEnabled,
+	setPluginPermissions,
+	setPluginSettings,
+	startScan,
+	uninstallPlugin
+} from './client';
 
 /**
  * Says whether the library is on the device, to a read that waits for the owner and to one that
@@ -134,17 +152,55 @@ describe('what a request says of the server', () => {
 });
 
 describe('working offline', () => {
-	it('sends no request: a read is unavailable offline, a write fails as with no network', async () => {
+	it('sends no request: a read and a write are both unavailable offline', async () => {
 		link.working = true;
 		const f = vi.fn(async () => Response.json({}));
 		await expect(listKeptQueues(f)).rejects.toMatchObject({
 			status: 503,
 			code: 'unavailable_offline'
 		});
-		await expect(logout(f)).rejects.toBeInstanceOf(TypeError);
+		await expect(logout(f)).rejects.toMatchObject({ status: 503, code: 'unavailable_offline' });
 		expect(f).not.toHaveBeenCalled();
 		link.working = false;
 		await listKeptQueues(f);
 		expect(f).toHaveBeenCalledOnce();
+	});
+});
+
+describe('a write only the server can carry out, offline', () => {
+	const kinds: [string, (f: typeof fetch) => Promise<unknown>][] = [
+		['logging in', (f) => login(f, { username: 'a', password: 'b' } as never)],
+		['setting up', (f) => completeSetup(f, { username: 'a', password: 'b' } as never)],
+		['scanning', (f) => startScan(f, '1')],
+		['installing a plugin from a file', (f) => installPluginFile(f, new Blob(['wasm']))],
+		['installing a plugin from a link', (f) => installPluginUrl(f, 'https://example.com/p.wasm')],
+		['granting a plugin', (f) => setPluginPermissions(f, 'p', {} as never)],
+		['enabling a plugin', (f) => setPluginEnabled(f, 'p', '1', true)],
+		['saving a plugin’s settings', (f) => setPluginSettings(f, 'p', {})],
+		['running a plugin', (f) => runPlugin(f, 'p')],
+		['removing a plugin', (f) => uninstallPlugin(f, 'p')],
+		['connecting a plugin', (f) => setMyPluginSettings(f, 'p', {})],
+		['disconnecting a plugin', (f) => disconnectMyPlugin(f, 'p')]
+	];
+
+	it.each(kinds)('%s says it is unavailable offline, in plain words', async (_, write) => {
+		for (const why of ['working', 'offline', 'unreachable'] as const) {
+			link[why] = true;
+			const f = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+			const error = await write(f).catch((error: unknown) => error);
+			expect(error, why).toMatchObject({ status: 503, code: 'unavailable_offline' });
+			expect((error as Error).message, why).toMatch(/^Unavailable offline\. /);
+			link[why] = false;
+			link.unreachable = false;
+		}
+	});
+
+	it('online, a refusal is the server’s own, not unavailable offline', async () => {
+		const f = vi.fn(async () =>
+			Response.json({ code: 'invalid_credentials', detail: 'No.' }, { status: 401 })
+		);
+		await expect(login(f, { username: 'a', password: 'b' } as never)).rejects.toMatchObject({
+			code: 'invalid_credentials'
+		});
 	});
 });

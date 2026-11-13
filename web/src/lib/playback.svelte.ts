@@ -5,10 +5,16 @@
 //
 // A command to the device playing shows its effect at once and is set right by the next
 // state; one that fails is undone, and says why (§5).
+//
+// The devices and the state as last heard are kept for the signed-in account (`last-known.ts`),
+// so an app started with no network shows them as one that lost its connection does.
 
-import { flushSync } from 'svelte';
+import { flushSync, untrack } from 'svelte';
 import { getTrack, getWaveform } from './api/client';
+import { UNAVAILABLE_OFFLINE } from './api/root';
+import { connectivity } from './connectivity.svelte';
 import type { Device, PlayerCommand, PlayerState, TrackSummary } from './api/types';
+import { lastPlayback, rememberPlayback } from './last-known';
 import { queue } from './queue/client.svelte';
 import { realtime } from './realtime.svelte';
 import { decodeWaveform } from './waveform';
@@ -47,10 +53,17 @@ class Playback {
 	#waiting = new Set<string>();
 	#errorTimer: ReturnType<typeof setTimeout> | undefined;
 	#volumeTimer: ReturnType<typeof setTimeout> | undefined;
+	/** The signed-in account, whose devices and state are kept; null while there is none. */
+	#user: string | null = null;
+	/** The ID the server last knew this device by, kept for when it has not said hello yet. */
+	#keptDevice = $state<string | null>(null);
+
+	/** This device's ID: as the connection said, or as it last said where it has not yet. */
+	thisDevice = $derived(realtime.deviceId ?? this.#keptDevice);
 
 	/** Whether another device holds playback, playing or paused. */
 	elsewhere = $derived(
-		this.state?.activeDeviceId != null && this.state.activeDeviceId !== realtime.deviceId
+		this.state?.activeDeviceId != null && this.state.activeDeviceId !== this.thisDevice
 	);
 
 	/** The name of the device holding playback, as the user knows it. */
@@ -65,10 +78,17 @@ class Playback {
 	constructor() {
 		realtime.on((message) => {
 			// The answer to a command sent over a connection now gone is lost with it.
-			if (message.type === 'hello') this.#forget();
-			if (message.type === 'devices') this.devices = message.devices;
+			if (message.type === 'hello') {
+				this.#forget();
+				this.#keep({ deviceId: message.deviceId });
+			}
+			if (message.type === 'devices') {
+				this.devices = message.devices;
+				this.#keep({ devices: message.devices });
+			}
 			if (message.type === 'commandResult') this.#answered(message.result);
 			if (message.type !== 'player') return;
+			this.#keep({ player: message.state });
 			// What was asked of one device means nothing to another that has taken over.
 			if (message.state.activeDeviceId !== this.state?.activeDeviceId) this.#forget();
 			this.state = message.state;
@@ -82,9 +102,40 @@ class Playback {
 			$effect(() => {
 				void queue.revision;
 				const state = this.state;
-				if (state?.itemId && state.activeDeviceId !== realtime.deviceId) this.#fetch(state.itemId);
+				if (state?.itemId && state.activeDeviceId !== this.thisDevice) this.#fetch(state.itemId);
 			});
 		});
+	}
+
+	/**
+	 * Starts keeping the devices and state for `user`, and shows what was kept of them where the
+	 * server has not yet said. Reads nothing reactively, so an effect that calls it does not run
+	 * again as they change.
+	 */
+	connect(user: string) {
+		untrack(() => {
+			this.#user = user;
+			const kept = lastPlayback(user);
+			this.#keptDevice = kept.deviceId ?? null;
+			if (this.state === null && kept.player) this.state = kept.player;
+			if (this.devices.length === 0 && kept.devices) this.devices = kept.devices;
+		});
+	}
+
+	/** Stops keeping them, and lets go of the account's devices and state; reads nothing reactively. */
+	disconnect() {
+		untrack(() => {
+			this.#user = null;
+			this.#keptDevice = null;
+			this.#forget();
+			this.state = null;
+			this.devices = [];
+		});
+	}
+
+	/** Keeps `part` for the signed-in account, if there is one. */
+	#keep(part: Parameters<typeof rememberPlayback>[1]) {
+		if (this.#user) rememberPlayback(this.#user, part);
 	}
 
 	/**
@@ -179,7 +230,10 @@ class Playback {
 			!realtime.send({ type: 'playerCommand', command: { ...command, commandId } as PlayerCommand })
 		) {
 			this.#asked = {};
-			this.fail('Not connected to the server.');
+			// Offline it is one of the actions only the server can carry out, and says so as they do.
+			this.fail(
+				connectivity.state === 'online' ? 'Not connected to the server.' : UNAVAILABLE_OFFLINE
+			);
 			return null;
 		}
 		this.#waiting.add(commandId);

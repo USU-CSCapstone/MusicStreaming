@@ -7,6 +7,8 @@ import { connectivity } from '$lib/connectivity.svelte';
 const fake = vi.hoisted(() => ({
 	realtime: { deviceId: '2', connected: true },
 	playback: {
+		/** This device, as the connection said. */
+		thisDevice: '2',
 		devices: [] as unknown[],
 		state: null as unknown,
 		track: null as unknown,

@@ -256,9 +256,8 @@ describe('catalog sync', () => {
 
 		await h.message(libraryChanged(BASE + 2));
 		await h.idle();
-		// Who is signed in is asked first: only this worker's account pulls.
+		// Who is signed in is not asked: each answer names its account.
 		expect((await h.api.asked('/')).slice(asked)).toEqual([
-			'/me',
 			`/libraries/1/changes?after=${BASE}&epoch=1&limit=1000`,
 			`/libraries/1/changes?after=${BASE + 1}&epoch=1&limit=1000`
 		]);
@@ -268,7 +267,7 @@ describe('catalog sync', () => {
 		// A hint of a position the device already holds asks for nothing.
 		await h.message(libraryChanged(BASE + 2));
 		await h.idle();
-		expect((await h.api.asked('/')).length).toBe(asked + 3);
+		expect((await h.api.asked('/')).length).toBe(asked + 2);
 	});
 
 	it('a catch-up interrupted mid-way resumes from its last page', async () => {
@@ -616,6 +615,14 @@ describe('catalog sync', () => {
 		expect(await dbs()).toHaveLength(1);
 	});
 
+	it('a pull asks no one who is signed in', async () => {
+		await started('1');
+		await h.message(hello);
+		await h.message(libraryChanged(POSITION + 1));
+		await h.idle();
+		expect(await h.api.asked('/me')).toEqual(await h.api.asked('/me/changes'));
+	});
+
 	it('a worker whose session is now another account’s pulls nothing of it', async () => {
 		await started('1');
 		await h.api.setSession('2');
@@ -627,16 +634,30 @@ describe('catalog sync', () => {
 		expect(await h.libraries()).toEqual(['1']);
 	});
 
-	it('a worker whose session is now another account’s asks no library feed for anything', async () => {
+	it('a worker whose session is now another account’s applies no library feed it is sent', async () => {
 		await started('1');
-		const before = (await h.api.asked('/libraries/1/changes')).length;
 		await h.api.setSession('2');
+		await h.api.setFeed('1', [tag(POSITION + 1, '90', 'Rock')], POSITION + 1);
 		await h.message(libraryChanged(POSITION + 1));
 		await h.idle();
 
-		expect(await h.api.asked('/libraries/1/changes')).toHaveLength(before);
+		expect(await tagName('90')).toBeUndefined();
+		expect(await h.cursor('1', 'library')).toBe(POSITION);
 		expect(await h.libraries()).toEqual(['1']);
 		expect(await dbs()).toHaveLength(1);
+	});
+
+	it('a worker whose session is now another account’s deletes nothing on its 404', async () => {
+		await started('1', '2');
+		await h.api.setSession('2');
+		await h.api.setLibraries(['1']);
+		await h.message(libraryChanged(POSITION + 1, '2'));
+		await h.message(hello);
+		await h.idle();
+
+		expect(await h.libraries()).toEqual(['1', '2']);
+		expect(await dbs()).toHaveLength(2);
+		expect(await h.lost()).toEqual([]);
 	});
 
 	it('a worker whose session is now another account’s downloads no library again', async () => {

@@ -2,12 +2,7 @@
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import {
-		disconnectMyPlugin,
-		getMyPluginSettings,
-		setMyPluginSettings,
-		setMySearchSharing
-	} from '$lib/api/client';
+	import { disconnectMyPlugin, getMyPluginSettings, setMyPluginSettings } from '$lib/api/client';
 	import type { PersonalPlugin } from '$lib/api/plugins';
 	import type { User } from '$lib/api/types';
 	import DeviceList from '$lib/components/DeviceList.svelte';
@@ -17,12 +12,14 @@
 	import { catalog } from '$lib/catalog/client.svelte';
 	import { connectivity } from '$lib/connectivity.svelte';
 	import { imageCacheSize } from '$lib/image-cache';
-	import { lastKnown, setLogoutPending } from '$lib/last-known';
+	import { lastKnown, remember, setLogoutPending } from '$lib/last-known';
 	import { finishLogout } from '$lib/logout';
 	import { prefs } from '$lib/prefs.svelte';
 	import { queue } from '$lib/queue/client.svelte';
 	import { realtime } from '$lib/realtime.svelte';
-	import { sender } from '$lib/sync/sender';
+	import { definition } from '$lib/sync/mutations';
+	import { QUEUE_SCOPE } from '$lib/sync/mutations/queue';
+	import { type SetAside, sender } from '$lib/sync/sender';
 	import { tagTypeName } from '$lib/tags';
 
 	let { data } = $props();
@@ -72,12 +69,47 @@
 		)
 	);
 
+	/** What the log set aside after it kept failing, for the user to retry or discard. */
+	let setAside = $state<SetAside[]>([]);
+	/**
+	 * Each set-aside change with those set aside because they were made on it, which go with it; one
+	 * whose own has gone stands alone.
+	 */
+	const asideGroups = $derived(
+		setAside
+			.filter((rec) => !rec.with || !setAside.some((other) => other.key === rec.with))
+			.map((rec) => ({ rec, more: setAside.filter((other) => other.with === rec.key).length }))
+	);
+	/** Reads again what the log set aside. */
+	const readSetAside = async () => (setAside = await sender.setAside());
+	$effect(() => {
+		if (!me) return;
+		void readSetAside();
+		// One set aside while the page is open shows here at once.
+		return sender.onSettled((_rec, _outcome, { dead }) => dead && void readSetAside());
+	});
+
+	/** What the set-aside `rec` was, and how many were made on it, in a few words. */
+	function asideWhat(rec: SetAside, more: number): string {
+		const what = definition(rec.name)?.what(rec.args) ?? 'a change from a newer version of the app';
+		const extra = more ? ` (and ${more} ${more === 1 ? 'change' : 'changes'} made on it)` : '';
+		return what.charAt(0).toUpperCase() + what.slice(1) + extra;
+	}
+
+	/** Puts the set-aside change `key` back to be sent, or lets it go, then reads the list again. */
+	async function resolveAside(key: string, how: 'retry' | 'discard') {
+		await (how === 'retry' ? sender.retry(key) : sender.discard(key));
+		await readSetAside();
+	}
+
 	let busy = $state(false);
 	/**
 	 * How many plays and changes have not reached the server, once logging out found some: the user
-	 * is asked before they are deleted.
+	 * is asked before they are deleted. Those set aside are among them.
 	 */
 	let unsent = $state(0);
+	/** How many of `unsent` were set aside. */
+	let unsentAside = $state(0);
 
 	/** How long the server is waited for at log out; a server out of reach is told later. */
 	const LOGOUT_WAIT_MS = 3000;
@@ -100,7 +132,8 @@
 				queue.save(),
 				new Promise((done) => setTimeout(done, QUEUE_SAVE_WAIT_MS))
 			]);
-			unsent = await sender.pending();
+			unsentAside = (await sender.setAside()).length;
+			unsent = (await sender.pending()) + unsentAside;
 			if (unsent > 0) {
 				busy = false;
 				return;
@@ -119,8 +152,10 @@
 		location.assign(resolve('/login'));
 	}
 
+	/** Changes plugin `id` as shown, and as kept for the page offline. */
 	function update(id: string, change: Partial<PersonalPlugin>) {
 		connectable = connectable.map((p) => (p.id === id ? { ...p, ...change } : p));
+		remember({ plugins: connectable });
 	}
 
 	async function disconnect(p: PersonalPlugin) {
@@ -134,18 +169,23 @@
 		}
 	}
 
-	// Applied at once and confirmed in the background, put back if refused
-	// (`requirements/general.md` §3.4).
-	async function shareSearches(p: PersonalPlugin, sharing: boolean) {
+	/**
+	 * Turns sharing searches with `p` on or off: applied at once and sent through the log, online or
+	 * offline, and put back below if the server refuses it (`requirements/general.md` §3.4).
+	 */
+	function shareSearches(p: PersonalPlugin, sharing: boolean) {
 		connectionError = '';
 		update(p.id, { sharesSearches: sharing });
-		try {
-			await setMySearchSharing(fetch, p.id, sharing);
-		} catch (e) {
-			update(p.id, { sharesSearches: !sharing });
-			connectionError = e instanceof Error ? e.message : String(e);
-		}
+		sender.enqueue('shareSearches', { pluginId: p.id, name: p.name, sharing });
 	}
+	// Puts a switch back when the log drops its change.
+	$effect(() =>
+		sender.onSettled(({ name, args }, outcome) => {
+			if (name !== 'shareSearches' || outcome !== 'dropped') return;
+			const { pluginId, sharing } = args as { pluginId: string; sharing: boolean };
+			update(pluginId, { sharesSearches: !sharing });
+		})
+	);
 </script>
 
 <svelte:head><title>Account · Jewelcase</title></svelte:head>
@@ -164,7 +204,9 @@
 		</p>
 		{#if unsent > 0}
 			<p role="alert">
-				{unsent} plays and changes haven't reached the server. Log out anyway?
+				{unsent} plays and changes haven't reached the server{unsentAside
+					? `, ${unsentAside} of them set aside`
+					: ''}. Log out anyway?
 			</p>
 			<button type="button" onclick={() => logOut(true)} disabled={busy}>Log out anyway</button>
 			<button type="button" onclick={() => (unsent = 0)} disabled={busy}>Cancel</button>
@@ -221,6 +263,33 @@
 			/>
 			Work offline
 		</label>
+	</section>
+{/if}
+
+{#if me && asideGroups.length}
+	<section aria-labelledby="set-aside">
+		<h2 id="set-aside">Changes not sent</h2>
+		<p class="muted">
+			These kept failing to reach the server, so they were set aside. Retry sends one again; Discard
+			lets it go and takes it back on this device. A change to the queue can only be discarded.
+		</p>
+		<ul>
+			{#each asideGroups as { rec, more } (rec.key)}
+				<li>
+					<div>
+						<strong>{asideWhat(rec, more)}</strong>
+						<span class="muted">
+							Made {new Date(rec.createdAt).toLocaleString()}. {rec.why}
+						</span>
+					</div>
+					<!-- Sent now, a queue change this old would make its queue the playing one everywhere. -->
+					{#if rec.scope !== QUEUE_SCOPE}
+						<button type="button" onclick={() => resolveAside(rec.key, 'retry')}>Retry</button>
+					{/if}
+					<button type="button" onclick={() => resolveAside(rec.key, 'discard')}>Discard</button>
+				</li>
+			{/each}
+		</ul>
 	</section>
 {/if}
 

@@ -38,6 +38,11 @@ export type Mutation<A = unknown> = Stored & {
 	carried?: unknown;
 	/** When it may first be sent, milliseconds; it is held until then, and may be cancelled. */
 	notBefore?: number;
+	/**
+	 * When its tries began, where that is not when it was made: when it was retried after being set
+	 * aside. Its age is counted from here.
+	 */
+	since?: number;
 };
 
 /** What a mutation's request is sent with. */

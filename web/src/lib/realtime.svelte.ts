@@ -50,6 +50,9 @@ const defaultSignedIn = () =>
 		() => true
 	);
 
+/** Whether the browser may have a network: with none, nothing can reach the server. */
+const networked = () => navigator.onLine !== false;
+
 export class Realtime {
 	/** Whether the connection is open and the server has said hello. */
 	connected = $state(false);
@@ -92,13 +95,16 @@ export class Realtime {
 		this.#revoked = revoked ?? (() => location.assign(loginUrl()));
 	}
 
-	/** Connects, and keeps reconnecting until [`stop`](#stop). */
+	/**
+	 * Connects, and keeps reconnecting until [`stop`](#stop). While the browser has no network it
+	 * makes no attempt, and the `online` event starts one at once.
+	 */
 	start() {
 		if (this.#running) return;
 		this.#running = true;
 		addEventListener('online', this.#reconnectNow);
 		document.addEventListener('visibilitychange', this.#reconnectNow);
-		this.#open();
+		if (networked()) this.#open();
 		this.#watch();
 	}
 
@@ -212,13 +218,18 @@ export class Realtime {
 		}, UNREACHABLE_AFTER_MS);
 	}
 
-	/** The connection is gone: tries again, and says so if it stays gone. */
+	/**
+	 * The connection is gone: tries again, and says so if it stays gone. With no network it neither
+	 * tries nor asks after the session until the browser is back online.
+	 */
 	#lost() {
 		const refused = !this.connected;
 		this.#drop();
 		if (!this.#running) return;
 		// Once per failure streak, so a connection that never comes back does not flicker the state.
 		if (this.#failures === 0) this.#watch();
+		clearTimeout(this.#retry);
+		if (!networked()) return;
 		// A connection refused may be one whose session ended while this device could not hear
 		// it, asleep perhaps; the browser does not say why, so the API is asked.
 		if (refused) {
@@ -229,7 +240,6 @@ export class Realtime {
 		// Spread out, so devices that lost the server together do not all return at once.
 		const wait = Math.min(MAX_RETRY_MS, 1000 * 2 ** this.#failures) * (0.5 + Math.random() / 2);
 		this.#failures++;
-		clearTimeout(this.#retry);
 		this.#retry = setTimeout(() => this.#open(), wait);
 	}
 
@@ -258,10 +268,14 @@ export class Realtime {
 	/**
 	 * Back online, or back in view: tries at once instead of waiting out the backoff, or, if
 	 * the connection looks open, checks it now so a dead one is found by the next check at the
-	 * latest.
+	 * latest. Does nothing while the browser has no network, nor, but for the network's return,
+	 * while the page is hidden.
 	 */
-	#reconnectNow = () => {
-		if (!this.#running || document.visibilityState === 'hidden') return;
+	#reconnectNow = (event?: Event) => {
+		if (!this.#running || !networked()) return;
+		// The network coming back reconnects a page in the background too, as a phone playing in a
+		// pocket is; only coming into view waits for the page to be seen.
+		if (event?.type !== 'online' && document.visibilityState === 'hidden') return;
 		if (this.connected) {
 			this.#check();
 			return;

@@ -18,7 +18,8 @@
 // aside in `dead`. One logged with a `notBefore` time is held until then, and may be cancelled
 // while it is unsent, which takes its change back off the device. A refusal drops the mutation and
 // every later one of its scope made on it, says so once, and takes their changes back off the
-// device. A 401 stops everything until the session may be good again.
+// device. A 401 stops everything until the session may be good again. What is set aside is listed
+// (`setAside`) and can be put back in the log (`retry`) or let go of (`discard`).
 
 import { isRedirect } from '@sveltejs/kit';
 import { ApiError } from '$lib/api/client';
@@ -30,7 +31,6 @@ import { type Args, type Name, definition } from './mutations';
 import {
 	type Env,
 	type Port,
-	type Stored,
 	adoptLock,
 	browserEnv,
 	closed,
@@ -60,6 +60,12 @@ export type Outcome = Settled | 'kept';
  * and whether it was set aside rather than refused.
  */
 export type Result = { answer?: unknown; code?: string; message?: string; dead?: boolean };
+
+/**
+ * A mutation set aside in `dead`: as the log held it, when it was set aside, why in plain words,
+ * and, for one set aside because it was made on another, that other's key (`with`).
+ */
+export type SetAside = Mutation & { setAsideAt: number; why: string; with?: string };
 
 /** How a mutation that was not sent is dealt with. */
 type Verdict = 'halt' | 'retry' | 'drop';
@@ -372,6 +378,72 @@ export class Sender {
 		} catch {
 			return [...this.#scopes.values()].reduce((n, list) => n + list.length, 0);
 		}
+	}
+
+	/** The mutations set aside, in the order they were made; none where no log is open. */
+	async setAside(): Promise<SetAside[]> {
+		const port = this.#port;
+		if (!port) return [];
+		await this.#tail;
+		try {
+			return (await port.all<SetAside>('dead')).sort((a, b) => a.seq - b.seq);
+		} catch (error) {
+			this.#failed(error);
+			return [];
+		}
+	}
+
+	/** The set-aside mutation `key` and those set aside because they were made on it, in order. */
+	async #group(key: string) {
+		return (await this.setAside()).filter((rec) => rec.key === key || rec.with === key);
+	}
+
+	/**
+	 * Puts the set-aside mutation `key` back in the log, with those set aside because they were made
+	 * on it, after everything the log holds and with fresh tries; has the device make their changes
+	 * again, and sends them. Settles with whether there was such a one, once the device has them.
+	 */
+	async retry(key: string): Promise<boolean> {
+		const user = this.#user;
+		const group = await this.#group(key);
+		if (!user || this.#user !== user || group.length === 0) return false;
+		const now = Date.now();
+		for (const aside of group) {
+			const rec: Mutation = {
+				key: aside.key,
+				rev: id(),
+				owner: this.#instance,
+				createdAt: aside.createdAt,
+				tries: 0,
+				since: now,
+				name: aside.name,
+				args: aside.args,
+				scope: aside.scope,
+				seq: (this.#seq = Math.max(this.#seq + 1, now * 1000)),
+				idem: aside.idem,
+				local: aside.local
+			};
+			this.#scopes.set(rec.scope, [...(this.#scopes.get(rec.scope) ?? []), { rec, due: 0 }]);
+			// In the log before it leaves `dead`, so neither a crash nor another tab loses it.
+			void this.#save(rec, true);
+			void this.#write((port) => port.remove('dead', rec.key));
+		}
+		await this.#rebase(group.flatMap((rec) => rec.local?.library ?? []));
+		this.#kick();
+		return true;
+	}
+
+	/**
+	 * Lets go of the set-aside mutation `key`, with those set aside because they were made on it.
+	 * Their changes were taken off the device as they were set aside, which is made sure of again.
+	 * Settles with whether there was such a one.
+	 */
+	async discard(key: string): Promise<boolean> {
+		const group = await this.#group(key);
+		if (group.length === 0) return false;
+		for (const rec of group) void this.#write((port) => port.remove('dead', rec.key));
+		await this.#rebase(group.flatMap((rec) => rec.local?.library ?? []));
+		return true;
 	}
 
 	/**
@@ -771,12 +843,16 @@ export class Sender {
 				error instanceof ApiError &&
 				(error.status === 502 || error.status === 503 || error.status === 504);
 			if (!(error instanceof TypeError) && !gateway && !connectivity.blocked) rec.tries++;
-			if (rec.tries >= MAX_TRIES || Date.now() - rec.createdAt > MAX_AGE_MS) {
+			const old = Date.now() - (rec.since ?? rec.createdAt) > MAX_AGE_MS;
+			if (rec.tries >= MAX_TRIES || old) {
 				this.#giveUp(
 					scope,
 					entry,
 					`Couldn’t ${def.what(rec.args)}. It kept failing, so it was set aside.`,
-					{ dead: true }
+					{ dead: true },
+					old
+						? 'It couldn’t be sent for a week.'
+						: `The server failed to take it ${MAX_TRIES} times.`
 				);
 			} else {
 				const pause = backoff(error, (entry.fails = (entry.fails ?? 0) + 1) - 1);
@@ -794,11 +870,11 @@ export class Sender {
 
 	/**
 	 * Gives `entry` up, with every later mutation of its scope made on it: takes them out (into
-	 * `dead`, if `dead`), tells the user once unless its definition is `silent` about a refusal, and
-	 * has the device take their changes back. Listeners hear `code`, the server's reason for a
-	 * refusal, with each.
+	 * `dead`, if `dead`, with `why` for `entry`), tells the user once unless its definition is
+	 * `silent` about a refusal, and has the device take their changes back. Listeners hear `code`,
+	 * the server's reason for a refusal, with each.
 	 */
-	#giveUp(scope: string, entry: Entry, message: string, { dead = false, code }: Result) {
+	#giveUp(scope: string, entry: Entry, message: string, { dead = false, code }: Result, why = '') {
 		const { rec } = entry;
 		const gone = [
 			entry,
@@ -814,7 +890,13 @@ export class Sender {
 		);
 		for (const given of gone) {
 			if (dead) {
-				const copy = JSON.parse(JSON.stringify(given.rec)) as Stored;
+				const copy: SetAside = {
+					...JSON.parse(JSON.stringify(given.rec)),
+					setAsideAt: Date.now(),
+					...(given === entry
+						? { why }
+						: { why: 'It was made on a change that was set aside.', with: rec.key })
+				};
 				void this.#write((port) => port.put('dead', copy));
 			}
 			this.#done(scope, given, 'dropped', rebased, { code, message, dead });
