@@ -11,6 +11,7 @@ import { Queue } from '$lib/core-wasm/jewelcase_core_wasm.js';
 import type {
 	PlayContext,
 	QueueEdit,
+	QueueRecipe,
 	QueueSnapshot,
 	RealtimeServerMessage,
 	RestoredQueue,
@@ -34,13 +35,17 @@ import type {
 export type Options = {
 	/** The API's base path, such as `/api/v1`. */
 	api: string;
+	/** The account signed in, whose files alone the catalog's owner answers the queue from. */
+	user: string;
 	fetch?: typeof fetch;
 	/** How long to wait before sending again what could not be sent. */
 	retryMs?: number;
 	/** Where lists are kept; the browser's Cache Storage if left out. Without any, memory. */
 	storage?: CacheStorage;
-	/** The way to the device's catalog, whichever tab owns it, for the queue to resolve lists with. */
-	catalog?: CatalogRouter;
+	/**
+	 * The way to the device's catalog, whichever tab owns it, for the queue to resolve lists with.
+	 */
+	catalog?: Pick<CatalogRouter, 'ask'>;
 	/** Called after every change, with what the page shows. */
 	changed: (summary: Summary) => void;
 	/** Called when an edit could not be kept. */
@@ -56,6 +61,8 @@ type Pending = {
 	local: QueueEdit | null;
 	/** The version the server answered it made, once it has. */
 	version?: number;
+	/** The list this device resolved for an `add` of a recipe, once it has: JSON as a list's download gives it. */
+	device?: { hash: string; body: string };
 };
 
 /** A restore waiting to be sent, and how its answer reaches the caller. */
@@ -97,6 +104,7 @@ type ProblemBody = { code?: string; detail?: string; title?: string } | null;
 
 export class QueueStore {
 	#api: string;
+	#user: string;
 	#fetch: typeof fetch;
 	#retryMs: number;
 	#changed: (summary: Summary) => void;
@@ -145,7 +153,7 @@ export class QueueStore {
 	#sources = new Map<string, SourceInfo>();
 	#loading = false;
 	/** The way to the device's catalog, for resolving lists from its files. */
-	readonly catalog?: CatalogRouter;
+	readonly catalog?: Pick<CatalogRouter, 'ask'>;
 
 	/**
 	 * The tracks the user hid, by library (`requirements/conventions.md` §8). Their rows stay in
@@ -173,6 +181,7 @@ export class QueueStore {
 	/** Makes an empty store; it loads the server's queue when the connection says hello. */
 	constructor({
 		api,
+		user,
 		fetch: fetcher = (...args) => fetch(...args),
 		retryMs = 2000,
 		storage = globalThis.caches,
@@ -182,6 +191,7 @@ export class QueueStore {
 	}: Options) {
 		this.catalog = catalog;
 		this.#api = api;
+		this.#user = user;
 		this.#fetch = fetcher;
 		this.#retryMs = retryMs;
 		this.#changed = changed;
@@ -333,8 +343,10 @@ export class QueueStore {
 	 * start is not a position of the source. The new queue keeps the confirmed queue's repeat
 	 * mode, as the server's does (`requirements/queue.md` §5); the latest repeat change not yet
 	 * confirmed is then made again on it, and sent after the start, so both end on that mode.
+	 * A start of a recipe is also resolved on the device (see `#attachResolved`); `offline` says
+	 * whether the app counts itself offline, and is not sent to the server.
 	 */
-	start({ total, loaded, ...body }: StartRequest): boolean {
+	start({ total, loaded, offline, ...body }: StartRequest): boolean {
 		const { key, libraryId, tracks } = body.source;
 		const length = tracks?.length ?? total ?? 0;
 		// The core makes the state; it rounds what it is given, so a position it would not is refused here.
@@ -363,6 +375,8 @@ export class QueueStore {
 		this.#supersede((pending) => pending.edit.type !== 'repeat');
 		this.#pending = [];
 		this.#starting = { body, total };
+		if (body.source.recipe)
+			void this.#attachResolved(key, libraryId, body.source.recipe, !!offline);
 		if (tapped) {
 			this.edit(tapped.edit);
 		} else {
@@ -370,6 +384,85 @@ export class QueueStore {
 			this.#drain();
 		}
 		return true;
+	}
+
+	/**
+	 * The recipe's list as the device's catalog resolves it, hashed by the core; null when it
+	 * cannot (no owner, the library is not on the device, a query error, a playlist that is not
+	 * the user's); the queue then goes on as it does without a catalog. A search is left to the
+	 * server unless the page counts itself `offline`: its ranking is the server's, and the
+	 * device's index costs memory to build.
+	 */
+	async #resolve(
+		libraryId: string,
+		recipe: QueueRecipe,
+		offline: boolean
+	): Promise<{ hash: string; ids: string[] } | null> {
+		if (!this.catalog || (recipe.type === 'search' && !offline)) return null;
+		try {
+			const params = { recipe };
+			const request = {
+				type: 'query',
+				library: libraryId,
+				name: 'resolveRecipe',
+				params,
+				offline,
+				user: this.#user
+			} as const;
+			return JSON.parse(await this.catalog.ask(request));
+		} catch {
+			return null;
+		}
+	}
+
+	/**
+	 * Gives a started recipe's source the list the device resolves for it, without waiting for the
+	 * server: attached under the device's hash while the server has named none, and kept in storage.
+	 * Once the server names the list, the device's is used only if it names the same hash, so a
+	 * snapshot that agrees downloads nothing and one that does not downloads its own. Does nothing
+	 * if the device could not resolve it or the queue no longer has the source: another start has
+	 * a new key, and a queue that names a list takes the device's only under the same hash.
+	 */
+	async #attachResolved(key: string, libraryId: string, recipe: QueueRecipe, offline: boolean) {
+		const found = await this.#resolve(libraryId, recipe, offline);
+		const confirmed = this.#confirmed;
+		if (!found || !confirmed) return;
+		const state: { sources: { key: string; list?: string }[] } = JSON.parse(confirmed.toJson());
+		const source = state.sources.find((source) => source.key === key);
+		const { hash, ids } = found;
+		if (
+			!source ||
+			(source.list !== undefined && (source.list !== hash || this.#attached.has(hash)))
+		) {
+			return;
+		}
+		const body = JSON.stringify({ libraryId, tracks: ids });
+		try {
+			if (source.list === undefined) {
+				confirmed.attachSource(key, hash, body);
+				this.#attached.add(hash);
+				this.#viewRows.delete(key);
+			} else if (!this.#attach(hash, body)) {
+				return;
+			}
+		} catch {
+			// Not the length the view said: the server's list is fetched as without a catalog.
+			return;
+		}
+		void this.#lists.put(hash, body);
+		this.#rebuild();
+	}
+
+	/**
+	 * Resolves a pending `add` of a recipe on the device and shows its rows from that list at
+	 * once, as an add of `tracks` does; the list is kept for the server's confirmation if the
+	 * server names the same hash. Does nothing once the edit is no longer pending.
+	 */
+	async #resolveAdd(pending: Pending, libraryId: string, recipe: QueueRecipe, offline: boolean) {
+		const found = await this.#resolve(libraryId, recipe, offline);
+		if (!found || !this.#pending.includes(pending)) return;
+		pending.device = { hash: found.hash, body: JSON.stringify({ libraryId, tracks: found.ids }) };
+		this.#rebuild();
 	}
 
 	/**
@@ -478,9 +571,11 @@ export class QueueStore {
 	 * reported. An `add` of a `recipe` applies here as `length` rows, the count of the view it
 	 * comes from, which wait for the server's list or pages (`design/queue.md` §3); the server's
 	 * `queueEdit` gives the length it resolved. Without a length it is just sent, and shows when
-	 * that arrives.
+	 * that arrives. An `add` of a recipe is also resolved on the device, and its rows show from
+	 * that list at once (see `#resolveAdd`); `offline` says whether the app counts itself offline,
+	 * which lets a search be resolved there too.
 	 */
-	edit(edit: SentEdit, length?: number) {
+	edit(edit: SentEdit, length?: number, offline = false) {
 		if (!this.#view || !this.#queueId) {
 			this.#refused({ code: 'no_queue', message: 'There is no queue to change.', edit });
 			return;
@@ -496,7 +591,11 @@ export class QueueStore {
 			}
 			this.#view = next;
 		}
-		this.#pending.push({ editId: crypto.randomUUID(), queueId: this.#queueId, edit, local });
+		const pending: Pending = { editId: crypto.randomUUID(), queueId: this.#queueId, edit, local };
+		this.#pending.push(pending);
+		if (edit.type === 'add' && edit.source.recipe) {
+			void this.#resolveAdd(pending, edit.source.libraryId, edit.source.recipe, offline);
+		}
 		this.#emit();
 		this.#drain();
 	}
@@ -601,7 +700,7 @@ export class QueueStore {
 	#confirm(confirmed: Queue, { edit, editId, version }: QueueEditMessage) {
 		const own = this.#pending.find((pending) => pending.editId === editId);
 		const mine = own && edit.type === 'add' && edit.source.list ? edit.source.list : null;
-		const body = own && mine ? ownBody(own.edit) : null;
+		const body = own && mine ? ownBody(own, mine) : null;
 		if (applyTo(confirmed, edit) !== undefined) {
 			// The server applied what the core refuses: this device cannot trust its copy.
 			this.#refetch = true;
@@ -631,6 +730,13 @@ export class QueueStore {
 			this.#pending = this.#pending.filter((pending) => {
 				const code = pending.local && applyTo(view, pending.local);
 				if (code) this.#drop(pending, code, `The queue refused this change (${code}).`);
+				else if (pending.device && pending.edit.type === 'add') {
+					try {
+						view.attachSource(pending.edit.source.key, pending.device.hash, pending.device.body);
+					} catch {
+						// Its length is not the view's count: the server's list is used when it names it.
+					}
+				}
 				return !code;
 			});
 		}
@@ -876,7 +982,7 @@ export class QueueStore {
 			const applied = (await response.json()) as { version: number; source?: { list?: string } };
 			pending.version = applied.version;
 			// Kept under the hash it names, so a snapshot that has the add never downloads it back.
-			const body = ownBody(pending.edit);
+			const body = ownBody(pending, applied.source?.list);
 			if (applied.source?.list && body) void this.#lists.put(applied.source.list, body);
 			return;
 		}
@@ -1060,10 +1166,18 @@ function hashesOf(queue: Queue): string[] {
 	return JSON.parse(queue.listHashes());
 }
 
-/** The JSON of the tracks of this device's own add, as the list's download would give them; null if it has none. */
-function ownBody(edit: SentEdit): string | null {
-	if (edit.type !== 'add' || !edit.source.tracks?.length) return null;
-	return JSON.stringify({ libraryId: edit.source.libraryId, tracks: edit.source.tracks });
+/**
+ * The JSON of the list of this device's own add, as the list's download would give it: its
+ * `tracks`, or the recipe's list it resolved if the server named `hash` for it; null if it has
+ * none.
+ */
+function ownBody({ edit, device }: Pending, hash?: string): string | null {
+	if (edit.type !== 'add') return null;
+	if (edit.source.tracks?.length) {
+		return JSON.stringify({ libraryId: edit.source.libraryId, tracks: edit.source.tracks });
+	}
+	// A recipe's list this device resolved is the server's only if the hashes are the same.
+	return device && device.hash === hash ? device.body : null;
 }
 
 /**
