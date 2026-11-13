@@ -28,6 +28,32 @@ test('the staging table is a rowid table', () => {
 	catalog.free();
 });
 
+test('the planner’s statistics are gathered once the feed grows the library to real size', () => {
+	const catalog = Catalog.openInMemory();
+	/** Applies the library's counts saying it holds `tracks`, at feed position `position`. */
+	const counted = (tracks: number, position: number) => {
+		const rows = {
+			libraries: [{ id: '1', track_count: tracks, album_count: 0, artist_count: 0 }]
+		};
+		const change = { position, op: 'upsert', kind: 'library', id: '1', key: 0, rows };
+		catalog.stage('library:1', '1', JSON.stringify([change]));
+		catalog.commit('library:1', BigInt(position), 100);
+	};
+	const gathered = () => {
+		try {
+			catalog.sql('SELECT 1 FROM sqlite_stat1');
+			return true;
+		} catch {
+			return false;
+		}
+	};
+	counted(50, 1);
+	expect(gathered()).toBe(false);
+	counted(1000, 2);
+	expect(gathered()).toBe(true);
+	catalog.free();
+});
+
 /** The parsed golden file `name` from the catalog crate's parity folder. */
 const parity = (name: string) =>
 	JSON.parse(

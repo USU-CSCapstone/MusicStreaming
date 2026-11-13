@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use jewelcase_catalog::search::documents;
-use jewelcase_core::Index;
+use jewelcase_core::{Index, IndexBuilder};
 use rusqlite::Connection;
 
 use super::tagged::TaggedSets;
@@ -134,19 +134,22 @@ fn versions(conn: &Connection) -> rusqlite::Result<HashMap<i64, i64>> {
 /// Reads the library's names and indexes them. A build that panics is [`DbError::Aborted`].
 async fn build(db: &Database, library: i64) -> Result<Built, DbError> {
     let started = Instant::now();
-    let (version, documents) = db
+    let (version, builder) = db
         .read(move |conn| {
-            // One snapshot, so the version is exactly the one the documents reflect.
+            // One snapshot, so the version is exactly the one the documents reflect. Each name is
+            // folded into the builder as it is read, so no list of all of them is held.
             let version = library_number(conn, library, "names_version")?;
-            Ok((version, documents(conn, library)?))
+            let mut builder = IndexBuilder::default();
+            documents(conn, library, |document| builder.add(document))?;
+            Ok((version, builder))
         })
         .await?;
-    // A second of CPU at full scale, so off the async workers.
-    let index =
-        tokio::task::spawn_blocking(move || Index::build(documents)).await.map_err(|error| {
-            tracing::error!(%error, library, "building a search index did not complete");
-            DbError::Aborted
-        })?;
+    // Sorting and laying out the index takes hundreds of milliseconds of CPU at full scale, more
+    // on a Pi, so off the async workers.
+    let index = tokio::task::spawn_blocking(move || builder.finish()).await.map_err(|error| {
+        tracing::error!(%error, library, "building a search index did not complete");
+        DbError::Aborted
+    })?;
     Ok(Built { index: Arc::new(index), version, ready: Instant::now(), took: started.elapsed() })
 }
 

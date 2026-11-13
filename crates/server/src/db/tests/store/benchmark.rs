@@ -69,7 +69,7 @@ fn benchmark_scanning() {
             changing.push(rec.clone());
         }
     });
-    let mut batches = scale::fill(&store, generated.map(|(_, rec)| rec));
+    let mut batches = scale::fill(&store, 1, generated.map(|(_, rec)| rec));
     let total: Duration = batches.iter().sum();
     let tenth = batches.len().div_ceil(10);
     let last = batches.len() - tenth;

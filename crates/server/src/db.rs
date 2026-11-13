@@ -48,24 +48,12 @@ pub use store::SqliteStore;
 
 use jewelcase_core::Recover;
 
-/// How often the writer gathers query-planner statistics again ([`OPTIMIZE`]), so a table that
+/// How often the writer gathers query-planner statistics again
+/// ([`OPTIMIZE`](jewelcase_catalog::statistics::OPTIMIZE)), so a table that
 /// grows tenfold during a scan, such as the artists of a library scanned for the first time, is
 /// described again within minutes rather than read whole by every statement that touches it
 /// (`design/database.md` §4).
 const OPTIMIZE_EVERY: Duration = Duration::from_secs(120);
-
-/// The fewest tracks, across every library, for which the writer gathers query-planner
-/// statistics. Statistics from a smaller library describe tables of a few rows, which lead the
-/// planner to scan a table that has since grown rather than look its rows up, until
-/// `PRAGMA optimize` notices that it has grown tenfold. Without statistics the planner takes
-/// every table to be large (`design/database.md` §4).
-const STATISTICS_FROM_TRACKS: i64 = 1_000;
-
-/// Gathers query-planner statistics for every table that lacks them or has grown or shrunk
-/// tenfold since they were gathered (0x10000 checks every table, 0x2 analyzes), within SQLite's
-/// analysis limit (0x10), so even a large database opens quickly. When no table needs it, it
-/// only reads each table's size.
-const OPTIMIZE: &str = "PRAGMA optimize = 0x10012";
 
 /// How much of the database file each reader maps into memory, in bytes, so its reads come from
 /// the operating system's page cache, which every reader shares, rather than being copied into
@@ -137,7 +125,7 @@ impl Database {
         // A release that adds a built-in tag type has files read again for it.
         store::tag_types::count_built_in(&writer)?;
         // Once the libraries are large enough to describe (design/database.md §4).
-        gather_statistics(&writer)?;
+        jewelcase_catalog::statistics::gather(&writer)?;
         let start = writer.transaction()?;
         let epoch = feed::start_epoch(&start)?;
         start.commit()?;
@@ -344,23 +332,13 @@ where
     }
 }
 
-/// Gathers query-planner statistics through [`gather_statistics`] (`design/database.md` §4),
+/// Gathers query-planner statistics through [`jewelcase_catalog::statistics::gather`]
+/// (`design/database.md` §4),
 /// logging a failure rather than returning it.
 fn optimize(conn: &Connection) {
-    if let Err(error) = gather_statistics(conn) {
+    if let Err(error) = jewelcase_catalog::statistics::gather(conn) {
         warn!(%error, "cannot optimize the database");
     }
-}
-
-/// Runs [`OPTIMIZE`] when the libraries together hold at least [`STATISTICS_FROM_TRACKS`]
-/// tracks, and does nothing otherwise.
-fn gather_statistics(conn: &Connection) -> rusqlite::Result<()> {
-    let tracks: i64 =
-        conn.query_row("SELECT ifnull(SUM(track_count), 0) FROM libraries", [], |r| r.get(0))?;
-    if tracks >= STATISTICS_FROM_TRACKS {
-        conn.execute_batch(OPTIMIZE)?;
-    }
-    Ok(())
 }
 
 /// Settings every connection needs, and room in its statement cache for every statement the

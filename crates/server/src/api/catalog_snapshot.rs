@@ -206,10 +206,11 @@ fn quick_check(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 /// Builds `library`'s file in `dir` from the server database at `database` in run `epoch`,
-/// replacing the older ones: the device rows and the feed position read in one snapshot, checked
-/// by `verify`, hashed, and gzipped, keeping only the gzip. The file served is the database as
-/// built, closed before it is read, not a compacted copy: a copy is 3.5% smaller on the wire but
-/// is another write of the whole file. Nothing is left in `dir` if any step fails.
+/// replacing the older ones: the device rows and the feed position read in one snapshot, with
+/// planner statistics, checked by `verify`, hashed, and gzipped, keeping only the gzip. The file
+/// served is the database as built, closed before it is read, not a compacted copy: a copy is
+/// 3.5% smaller on the wire but is another write of the whole file.
+/// Nothing is left in `dir` if any step fails.
 fn build(
     database: &Path,
     dir: &Path,
@@ -227,6 +228,10 @@ fn build(
     conn.execute("ATTACH DATABASE ?1 AS server", [read_only_uri(database)])?;
     let position = snapshot::copy(&mut conn, library)?;
     conn.execute_batch("DETACH DATABASE server")?;
+    // The planner's statistics travel in the file, by the rule the device follows as its feed
+    // grows the file: without them a tag-filtered page reads several times slower, and from a
+    // library of a few tracks they would mislead the planner once it has grown.
+    jewelcase_catalog::statistics::gather(&conn)?;
     conn.close().map_err(|(_, error)| error)?;
     verify(&Connection::open_with_flags(&served, OpenFlags::SQLITE_OPEN_READ_ONLY)?)?;
 
@@ -360,5 +365,7 @@ fn internal(error: impl std::fmt::Display) -> Problem {
     Problem::new(Code::Internal)
 }
 
+#[cfg(test)]
+mod device_files;
 #[cfg(test)]
 mod tests;

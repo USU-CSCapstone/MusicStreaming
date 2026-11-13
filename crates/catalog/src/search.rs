@@ -5,8 +5,8 @@
 
 use std::collections::HashSet;
 
-use jewelcase_core::{Document, Kind, Section as Found};
-use rusqlite::Connection;
+use jewelcase_core::{Document, Index, IndexBuilder, Kind, Section as Found};
+use rusqlite::{Connection, params};
 use serde::Serialize;
 
 use crate::Invalid;
@@ -47,28 +47,94 @@ enum SearchResult {
     Artist { artist: ArtistSummary },
 }
 
-/// The library's tracks, albums and artists, as the core's rule makes them documents.
-pub fn documents(conn: &Connection, library: i64) -> rusqlite::Result<Vec<Document>> {
-    let mut documents = Vec::new();
+/// Calls `add` with each of the library's tracks, albums and artists, as the core's rule makes
+/// them documents, one row at a time, so that none of them need be held at once.
+pub fn documents(
+    conn: &Connection,
+    library: i64,
+    mut add: impl FnMut(Document),
+) -> rusqlite::Result<()> {
     let mut tracks = conn.prepare_cached("SELECT id, title FROM tracks WHERE library_id = ?1")?;
-    for track in
-        tracks.query_map([library], |row| Ok(Document::from_track(row.get(0)?, row.get(1)?)))?
-    {
-        documents.push(track?);
+    let mut rows = tracks.query([library])?;
+    while let Some(row) = rows.next()? {
+        add(Document::from_track(row.get(0)?, row.get(1)?));
     }
     let mut albums = conn.prepare_cached("SELECT id, title FROM albums WHERE library_id = ?1")?;
-    for album in
-        albums.query_map([library], |row| Ok(Document::from_album(row.get(0)?, row.get(1)?)))?
-    {
-        documents.extend(album?);
+    let mut rows = albums.query([library])?;
+    while let Some(row) = rows.next()? {
+        if let Some(album) = Document::from_album(row.get(0)?, row.get(1)?) {
+            add(album);
+        }
     }
     let mut artists = conn.prepare_cached("SELECT id, name FROM artists WHERE library_id = ?1")?;
-    for artist in
-        artists.query_map([library], |row| Ok(Document::from_artist(row.get(0)?, row.get(1)?)))?
-    {
-        documents.extend(artist?);
+    let mut rows = artists.query([library])?;
+    while let Some(row) = rows.next()? {
+        if let Some(artist) = Document::from_artist(row.get(0)?, row.get(1)?) {
+            add(artist);
+        }
     }
-    Ok(documents)
+    Ok(())
+}
+
+/// Where a read of a library's documents in batches stands ([`documents_from`]): the table it is
+/// in (tracks, albums, then artists) and the lowest ID of it not yet read.
+#[derive(Debug, Default)]
+pub struct Reading {
+    table: usize,
+    from: i64,
+}
+
+/// Calls `add` with up to `limit` of the library's [`documents`], the same ones in all, from
+/// where `reading` stands, which it moves on; says whether that was all of them. Each table is
+/// read in ID order, by its primary key rather than an index, as a device's file, which holds the
+/// one library, is best read; the server's database holds many, so it reads [`documents`].
+/// Rows changed between two calls may be missed or read twice: the caller starts again then.
+pub fn documents_from(
+    conn: &Connection,
+    library: i64,
+    reading: &mut Reading,
+    limit: usize,
+    mut add: impl FnMut(Document),
+) -> rusqlite::Result<bool> {
+    /// The tables read, in `reading.table` order, with the column each document's text comes from.
+    const TABLES: [(&str, &str); 3] =
+        [("tracks", "title"), ("albums", "title"), ("artists", "name")];
+    let mut left = limit;
+    while let Some(&(table, column)) = TABLES.get(reading.table) {
+        let mut statement = conn.prepare_cached(&format!(
+            "SELECT id, {column} FROM {table} NOT INDEXED \
+             WHERE library_id = ?1 AND id >= ?2 ORDER BY id LIMIT ?3"
+        ))?;
+        let mut rows = statement.query(params![
+            library,
+            reading.from,
+            i64::try_from(left).unwrap_or(i64::MAX)
+        ])?;
+        while let Some(row) = rows.next()? {
+            let id: i64 = row.get(0)?;
+            let document = match reading.table {
+                0 => Some(Document::from_track(id, row.get(1)?)),
+                1 => Document::from_album(id, row.get(1)?),
+                _ => Document::from_artist(id, row.get(1)?),
+            };
+            document.into_iter().for_each(&mut add);
+            reading.from = id + 1;
+            left -= 1;
+        }
+        if left == 0 {
+            return Ok(false);
+        }
+        reading.table += 1;
+        reading.from = 0;
+    }
+    Ok(true)
+}
+
+/// The search index of the library, built from its [`documents`] as they are read.
+pub fn index(conn: &Connection, library: i64) -> rusqlite::Result<Index> {
+    let mut builder = IndexBuilder::default();
+    documents(conn, library, |document| builder.add(document))?;
+    Ok(builder.finish())
 }
 
 /// How many matches a search for `q` returns in each section, from its `sectionLimit`: 5 unless

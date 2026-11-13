@@ -134,9 +134,15 @@ UPDATE_PARITY=1 cargo test -p jewelcase-server parity
 
 ### Catalog scale benchmark
 
-An opt-in Playwright run measures a 500,000-track library on the device: importing the snapshot,
-page queries, recipe reads and memory. It is not part of `pnpm test`. It reads files that an
-ignored test in the server crate writes into `target/catalog-scale`:
+An opt-in Playwright run measures a 500,000-track library on the device: downloading and importing
+the snapshot as the sync does, cold start (compile, pool, open, first query), page queries and
+totals, the offline search index's build and memory, recipe reads, and catching up 1%, 5%, 10% and
+25% of the library from feed pages, with how long each slice of the catch-up and of the index
+build holds the worker. It is not part of `pnpm test` and takes about 9 minutes
+unthrottled and 15 throttled. It reads files that an ignored test in the server crate writes into
+`target/catalog-scale` (about half an hour): the snapshot as the server builds it (`device.db.gz`,
+its ETag in `sha256`, `device.db` inflated), the library's ID (`library`), and gzipped feed pages
+(`changes/`):
 
 ```sh
 cargo test --release -p jewelcase-server write_device_scale_files -- --ignored --nocapture

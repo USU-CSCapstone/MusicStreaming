@@ -20,10 +20,9 @@ import { catalog } from './client.svelte';
 const UNAVAILABLE = 'This needs the server, which this device cannot reach right now.';
 
 /**
- * How long a server search may take before the device answers instead. Past about a second a
- * person types on waiting (`requirements/search.md` §7); this leaves a server on a good day
- * its answer, and a device that has to build its index the first time (under a second, a few
- * on a slow phone) still ahead of a server that is hanging.
+ * How long a server search may take before the device answers instead, where its search index
+ * is already built. Past about a second a person types on waiting (`requirements/search.md` §7);
+ * this leaves a server on a good day its answer.
  */
 export const SLOW_MS = 1500;
 
@@ -105,6 +104,26 @@ export async function read<T>(
 
 /** What `readSearch` stops waiting for the server on. */
 const SLOW = Symbol('slow');
+/** What `readSearch` stops waiting for a slow server on: the device is no longer online. */
+const LOST = Symbol('lost');
+/** How often a search waiting on a slow server looks whether the device is still online. */
+const LOST_POLL_MS = 250;
+
+/**
+ * Resolves with `LOST` once the device is no longer online, as the realtime connection finds a
+ * server that has stopped answering; looks no more once `settled` settles.
+ */
+function lost(settled: Promise<unknown>): Promise<typeof LOST> {
+	return new Promise((resolve) => {
+		const timer = setInterval(() => {
+			if (connectivity.state === 'online') return;
+			clearInterval(timer);
+			resolve(LOST);
+		}, LOST_POLL_MS);
+		const stop = () => clearInterval(timer);
+		settled.then(stop, stop);
+	});
+}
 
 /**
  * Whether a failed request to the server says it cannot be reached or is broken, not that the
@@ -116,8 +135,9 @@ export const unreachable = (error: unknown) =>
 /**
  * The answer to the API operation `name` of `library` with `params`, for a read the server
  * answers whenever it can be reached: the device answers when this one is offline, the server
- * fails or is slow (`SLOW_MS`), and only if the library is on it. A refusal by the server (a
- * request it finds invalid) is never the device's to second-guess.
+ * fails, or the server is slow (`SLOW_MS`) and the device's search index is built, and only if
+ * the library is on it. A refusal by the server (a request it finds invalid) is never the
+ * device's to second-guess.
  */
 export async function readSearch<T>(
 	name: string,
@@ -137,8 +157,15 @@ export async function readSearch<T>(
 		try {
 			const answer = await Promise.race([asked, slow]);
 			if (answer !== SLOW) return answer;
-			// Nothing on the device to hand off to: the server is all there is.
-			if (!catalog.onDevice(library)) return await asked;
+			// Nothing on the device ready to hand off to: the server is all there is. A device
+			// without the index would build it first, holding up every tab's reads and keeping its
+			// memory, for a server that is only slow; one the server answers before is not waited for.
+			// A server that has stopped answering, which the device then is no longer online for,
+			// is the device's to answer for, as offline.
+			if (!catalog.indexed(library)) {
+				const after = await Promise.race([asked, lost(asked)]);
+				if (after !== LOST) return after;
+			}
 			late = asked;
 		} catch (error) {
 			if (!unreachable(error)) throw error;
@@ -147,8 +174,10 @@ export async function readSearch<T>(
 			clearTimeout(timer);
 		}
 	}
-	// A server found slow has already found the library on the device.
-	if (!late && !(await onDevice(library, failure !== undefined))) {
+	// A built index already says the library is on the device.
+	if ((!late || !catalog.indexed(library)) && !(await onDevice(library, failure !== undefined))) {
+		// The server lost is still the only one to answer.
+		if (late) return late;
 		if (failure) throw failure;
 		if (connectivity.blocked) throw notOnDevice();
 		// Unreachable says nothing about HTTP: with no device copy to answer instead, the server
