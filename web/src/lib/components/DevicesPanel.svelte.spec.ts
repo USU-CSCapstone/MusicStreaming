@@ -2,9 +2,10 @@ import { page, userEvent } from 'vitest/browser';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import type { Device, PlayerState } from '$lib/api/types';
+import { connectivity } from '$lib/connectivity.svelte';
 
 const fake = vi.hoisted(() => ({
-	realtime: { deviceId: '2', connected: true, offline: false },
+	realtime: { deviceId: '2', connected: true },
 	playback: {
 		devices: [] as unknown[],
 		state: null as unknown,
@@ -49,7 +50,8 @@ const playingOn = (activeDeviceId: string): PlayerState => ({
 
 beforeEach(() => {
 	vi.restoreAllMocks();
-	Object.assign(fake.realtime, { connected: true, offline: false });
+	Object.assign(fake.realtime, { connected: true });
+	connectivity.reach();
 	fake.playback.devices = [
 		device('3', 'Old Laptop', 'desktop', false),
 		device('1', 'Desk', 'desktop', true),
@@ -147,7 +149,8 @@ describe('DevicesPanel', () => {
 	it('offers nowhere to move playback while offline, nor says it is on its way', async () => {
 		fake.playback.devices.push(device('4', 'Living Room', 'tv', true));
 		fake.playback.moving = { deviceId: '4', commandId: 'c' };
-		Object.assign(fake.realtime, { connected: false, offline: true });
+		Object.assign(fake.realtime, { connected: false });
+		connectivity.lose();
 		render(DevicesPanel);
 		await expect.element(rows().nth(2)).toHaveTextContent(/Living Room\s*Was connected/);
 		await expect.element(page.getByRole('button', { name: 'Play there' })).not.toBeInTheDocument();
@@ -187,7 +190,8 @@ describe('DevicesPanel', () => {
 	});
 
 	it('shows nothing as current while offline', async () => {
-		Object.assign(fake.realtime, { connected: false, offline: true });
+		Object.assign(fake.realtime, { connected: false });
+		connectivity.lose();
 		render(DevicesPanel);
 		await expect.element(page.getByText('Offline, so this may be out of date')).toBeVisible();
 		await expect.element(rows().nth(0)).toHaveTextContent(/Phone\s*This device · Not connected/);

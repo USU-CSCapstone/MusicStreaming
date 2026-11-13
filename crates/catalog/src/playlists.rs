@@ -169,6 +169,7 @@ pub enum ItemsError {
     Sql(rusqlite::Error),
 }
 
+/// The message a caller can show or log.
 impl fmt::Display for ItemsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -183,12 +184,14 @@ impl fmt::Display for ItemsError {
 
 impl std::error::Error for ItemsError {}
 
+/// Lets `?` pass a rejected request on as [`ItemsError::Invalid`].
 impl From<Invalid> for ItemsError {
     fn from(invalid: Invalid) -> ItemsError {
         ItemsError::Invalid(invalid)
     }
 }
 
+/// Lets `?` pass a database error on as [`ItemsError::Sql`].
 impl From<rusqlite::Error> for ItemsError {
     fn from(error: rusqlite::Error) -> ItemsError {
         ItemsError::Sql(error)

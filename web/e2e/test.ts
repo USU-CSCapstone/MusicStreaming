@@ -40,6 +40,34 @@ export async function createPlaylist(server: Server, title: string, trackTitles:
 	return made.id as string;
 }
 
+/** Whether the catalog's owner says `library` is on the device. */
+export const onDevice = (page: Page, library: string) =>
+	page.evaluate(
+		(library) =>
+			new Promise<boolean>((resolve) => {
+				const channel = new BroadcastChannel('jewelcase-catalog');
+				const timer = setTimeout(() => (channel.close(), resolve(false)), 1000);
+				channel.onmessage = ({ data }) => {
+					if (data.type !== 'state') return;
+					clearTimeout(timer);
+					channel.close();
+					resolve(!!data.state?.libraries?.[library]?.onDevice);
+				};
+				channel.postMessage({ protocol: 2, type: 'who' });
+			}),
+		library
+	);
+
+/** Goes to `path` inside the app as a link click does, so the page is not reloaded. */
+export const go = (page: Page, path: string) =>
+	page.evaluate((path) => {
+		const link = document.createElement('a');
+		link.href = path;
+		document.body.append(link);
+		link.click();
+		link.remove();
+	}, path);
+
 /**
  * A server of its own and a browser context logged in to it, with service workers, for specs that
  * take the server away.

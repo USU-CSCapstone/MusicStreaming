@@ -8,8 +8,20 @@ const fake = vi.hoisted(() => ({
 	list: (async () => ({ items: [], nextCursor: null })) as (
 		cursor?: string
 	) => Promise<{ items: unknown[]; nextCursor: string | null }>,
-	remove: (async () => {}) as (id: string) => Promise<void>,
-	restore: (async () => null) as (id: string) => Promise<string | null>
+	restore: (async () => null) as (id: string) => Promise<string | null>,
+	/** What was given to the log, and who hears what became of it. */
+	logged: [] as { name: string; args: { queueId: string } }[],
+	settled: [] as ((rec: { name: string; args: unknown }, outcome: string) => void)[]
+}));
+
+vi.mock('$lib/sync/sender', () => ({
+	sender: {
+		enqueue: (name: string, args: { queueId: string }) => void fake.logged.push({ name, args }),
+		onSettled: (listener: (rec: { name: string; args: unknown }, outcome: string) => void) => {
+			fake.settled.push(listener);
+			return () => fake.settled.splice(fake.settled.indexOf(listener), 1);
+		}
+	}
 }));
 
 vi.mock('$lib/realtime.svelte', () => ({
@@ -34,13 +46,11 @@ vi.mock('$lib/queue/summaries', () => ({
 vi.mock('$lib/api/client', async (actual) => ({
 	...(await actual<typeof import('$lib/api/client')>()),
 	listKeptQueues: (_: unknown, cursor?: string) => fake.list(cursor),
-	deleteKeptQueue: (_: unknown, id: string) => fake.remove(id),
 	getAlbum: async () => ({ title: 'Signal' }),
 	getArtist: async () => ({ name: 'Nobody' }),
 	getPlaylist: async () => ({ title: 'Mix' })
 }));
 
-const { ApiError } = await import('$lib/api/client');
 const { default: KeptQueues } = await import('./KeptQueues.svelte');
 
 /** A kept queue that was playing track `n` of an album. */
@@ -61,8 +71,9 @@ const hear = (message: object) =>
 beforeEach(() => {
 	fake.listeners.length = 0;
 	fake.list = async () => ({ items: [kept(1), kept(2)], nextCursor: null });
-	fake.remove = async () => {};
 	fake.restore = async () => null;
+	fake.logged = [];
+	fake.settled.length = 0;
 });
 
 describe('KeptQueues', () => {
@@ -123,19 +134,21 @@ describe('KeptQueues', () => {
 		await expect.element(page.getByText('Song 3')).toBeInTheDocument();
 	});
 
-	it('deletes with one press, and says why the active queue stays', async () => {
-		const removed: string[] = [];
-		fake.remove = async (id) => {
-			if (id === 'q2') throw new ApiError(409, 'queue_active', 'active');
-			removed.push(id);
-		};
+	it('deletes with one press through the log, and shows again one the server refused', async () => {
 		render(KeptQueues);
 		await page.getByRole('button', { name: /Delete Song 1/ }).click();
-		expect(removed).toEqual(['q1']);
+		expect(fake.logged).toEqual([{ name: 'deleteKeptQueue', args: { queueId: 'q1' } }]);
+		await expect.element(page.getByText('Song 1')).not.toBeInTheDocument();
+		// A load before the server has it leaves it out.
+		hear({ type: 'queuesChanged' });
+		await new Promise((resolve) => setTimeout(resolve, 50));
 		await expect.element(page.getByText('Song 1')).not.toBeInTheDocument();
 
 		await page.getByRole('button', { name: /Delete Song 2/ }).click();
-		await expect.element(page.getByRole('alert')).toHaveTextContent('cannot be deleted');
+		await expect.element(page.getByText('Song 2')).not.toBeInTheDocument();
+		// The log told the user why; the list is the server's again.
+		for (const heard of fake.settled)
+			heard({ name: 'deleteKeptQueue', args: { queueId: 'q2' } }, 'dropped');
 		await expect.element(page.getByText('Song 2')).toBeInTheDocument();
 	});
 

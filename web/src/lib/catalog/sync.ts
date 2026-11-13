@@ -15,11 +15,14 @@ import {
 	storeReserve
 } from '$lib/catalog-wasm/jewelcase_catalog_wasm.js';
 import type { RealtimeServerMessage } from '$lib/api/types';
+import type { Call } from '$lib/sync/mutation';
 import { ALL, collect, told, type Kind } from './kinds';
 import type { LibraryState } from './protocol';
 
 /** The page size asked of both feeds: the API's largest. */
 const PAGE = 1000;
+/** The kinds of rows the device's own writes change: what taking them back may change. */
+const REWOUND: readonly Kind[] = ['playlists', 'liked', 'hidden'];
 /** A catch-up of more than this share of a library's entities downloads its snapshot again. */
 const REDOWNLOAD_SHARE = 0.1;
 /** Downloads of a snapshot whose hash did not match its ETag, before giving up. */
@@ -54,9 +57,11 @@ const APPLY_MAX = 1000;
 const CHUNK = 1 << 20;
 /** Tries at reading or deleting the files, which fail while another worker holds the pool. */
 const WIPE_TRIES = 5;
+/** How long to wait between those tries. */
 const WIPE_WAIT_MS = 300;
 /** A download's file name: a plain OPFS file beside the pool, which the pool never sees. */
 const DOWNLOAD = (id: string) => `download-${id}.tmp`;
+/** Matches every name `DOWNLOAD` makes. */
 const DOWNLOADS = /^download-.*\.tmp$/;
 
 /** The feeds' positions a file keeps: its library feed, its account feed, and its owner. */
@@ -68,8 +73,11 @@ const OWNER = 'owner';
 /** A database file's name: `lib-<library>-<generation>.db`, and its journal with `-journal`. */
 const FILE = /^lib-(\d+)-(\d+)\.db(-journal)?$/;
 
+/** One entry of a feed: `rows` are the entity's rows, by table, for anything but a delete. */
 type Change = { seq: number; op: string; kind: string; id: string; rows?: Rows };
+/** Rows by table name. */
 type Rows = Record<string, Record<string, unknown>[]>;
+/** A page of a feed: `next` is the position of its last change, `head` that of the feed. */
 type Page = { changes: Change[]; next: number; head: number };
 
 /** The messages of the realtime connection that make the worker pull. */
@@ -92,6 +100,7 @@ type WorkerFile = FileSystemFileHandle & {
 /** What went wrong that a person may need to know, such as a full disk. */
 export type Report = { message: string; quota: boolean };
 
+/** What a `CatalogSync` is made from. */
 export type Options = {
 	/** Where the API is, such as `/api/v1`. */
 	api: string;
@@ -120,6 +129,11 @@ export type Options = {
 	 * is kept for it.
 	 */
 	lost?: (libraryId: string) => Promise<void> | void;
+	/**
+	 * The writes of the mutations the log holds for a library, in the order they were made: what the
+	 * device shows over the server's rows until each is answered (`$lib/sync`).
+	 */
+	pending?: (libraryId: string) => Promise<Call[]>;
 };
 
 /** A rebuild of a search index waits this many times as long as the last build took. */
@@ -192,6 +206,7 @@ export class CatalogSync {
 	#online: () => boolean;
 	#changed: (libraryId: string, kinds: readonly Kind[]) => void;
 	#lost: (libraryId: string) => Promise<void> | void;
+	#pending: (libraryId: string) => Promise<Call[]>;
 	#state: (libraries: Record<string, LibraryState>) => void;
 	#heavy: (heavy: boolean) => void;
 	/** The long calls under way, which `#heavy` hears of as one. */
@@ -230,7 +245,8 @@ export class CatalogSync {
 		changed = () => {},
 		state = () => {},
 		heavy = () => {},
-		lost = () => {}
+		lost = () => {},
+		pending = async () => []
 	}: Options) {
 		this.#api = api;
 		this.#user = user;
@@ -241,6 +257,7 @@ export class CatalogSync {
 		this.#state = state;
 		this.#heavy = heavy;
 		this.#lost = lost;
+		this.#pending = pending;
 	}
 
 	/**
@@ -286,6 +303,9 @@ export class CatalogSync {
 					void this.#pullLibrary(id);
 				}
 			}
+			// What a closed worker left made or unmade of the log, or a tab made with no worker to
+			// make it, is made as the log has it now.
+			for (const id of this.catalogs.keys()) void this.rebase(id);
 		} catch (error) {
 			this.#closed = true;
 			throw error;
@@ -566,14 +586,15 @@ export class CatalogSync {
 
 	/**
 	 * Stages the account feed's pages after the file's position, only for the library's own
-	 * playlists, and commits at the head, announcing the library as changed if any playlist of its own came. False if
-	 * the server no longer reaches back that far.
+	 * playlists, and commits at the head, announcing the library as changed if any playlist of
+	 * its own came. False if the server no longer reaches back that far.
 	 */
 	async #catchUpAccount(id: string, catalog: Catalog, stale: () => boolean) {
 		if (stale()) return true;
 		let after = Number(catalog.pulled(ACCOUNT));
 		const kinds = new Set<Kind>();
 		const liked = catalog.liked(this.#user, id);
+		let staged = 0;
 		for (;;) {
 			const response = await this.#get(`/me/changes?after=${after}&limit=${PAGE}`);
 			if (stale()) return true;
@@ -591,8 +612,11 @@ export class CatalogSync {
 			if (stale()) return true;
 			catalog.stage(ACCOUNT, JSON.stringify(mine));
 			collect(kinds, mine, liked);
+			staged += mine.length;
 			if (page.next >= page.head) {
-				await this.#apply(catalog, ACCOUNT, BigInt(page.next), stale);
+				// A new file not swapped in yet has the device's own writes made as it is installed.
+				const rebase = staged > 0 && this.catalogs.get(id) === catalog;
+				await this.#apply(id, catalog, ACCOUNT, BigInt(page.next), stale, rebase);
 				// A file not yet swapped in announces itself when it is.
 				if (kinds.size > 0 && this.catalogs.get(id) === catalog) this.#changed(id, told(kinds));
 				return true;
@@ -692,7 +716,9 @@ export class CatalogSync {
 			if (!fresh && pulled > this.#entities(id, catalog) * REDOWNLOAD_SHARE) return 'far';
 			catalog.stage(LIBRARY, JSON.stringify(page.changes));
 			if (page.next >= page.head) {
-				await this.#apply(catalog, LIBRARY, BigInt(page.next), stale);
+				// The library feed writes no row a device write's undo holds (playlists, their items,
+				// hidden tracks), so the device's own writes stay as they are through it.
+				await this.#apply(id, catalog, LIBRARY, BigInt(page.next), stale, false);
 				if (pulled > 0 && !stale()) this.#announce(id, told(kinds));
 				return 'current';
 			}
@@ -704,16 +730,39 @@ export class CatalogSync {
 	 * Applies what `catalog` has staged for `feed` and moves its position to `through`, a slice a
 	 * transaction, each sized to take about `SLICE_MS` and the worker answering between them: the
 	 * reads of other libraries, the questions of state, and the other feeds' pulls. Until it ends,
-	 * reads of the file go to the server or wait ([`onDevice`](#onDevice)). Stops once `stale` says
-	 * the file is not the one to write, leaving the file's mark for the next pull to finish. A slice
-	 * that fails marks the file broken, so it answers nothing until an apply completes, and throws
+	 * reads of the file go to the server or wait ([`onDevice`](#onDevice)). With `rebase`, the
+	 * device's own writes are taken back first and made again after, as the log has them then
+	 * ([`#rewind`](#rewind), [`#replay`](#replay)), so the server's rows land on the rows they were
+	 * written over and a pending change is shown on top of them. Stops once `stale` says the file is
+	 * not the one to write, leaving the file's mark for the next pull to finish. A slice that fails
+	 * marks the file broken, so it answers nothing until an apply completes, and throws
 	 * [`Unapplied`], which callers treat as damage; or, where the device is full, the error itself,
 	 * reported as a quota error with the copy kept.
 	 */
-	async #apply(catalog: Catalog, feed: string, through: bigint, stale: () => boolean) {
-		const before = this.#applying.get(catalog);
-		const run = (async () => {
-			await before;
+	async #apply(
+		id: string,
+		catalog: Catalog,
+		feed: string,
+		through: bigint,
+		stale: () => boolean,
+		rebase: boolean
+	) {
+		await this.#exclusive(catalog, async () => {
+			let rewound: boolean;
+			const fail = (error: unknown) => {
+				this.#broken.add(catalog);
+				this.#publish();
+				// A full device leaves the file whole, if part-way: a later pull finishes it.
+				if (describe(error).quota) return error;
+				return new Unapplied(`staged changes would not apply: ${describe(error).message}`);
+			};
+			try {
+				rewound = rebase && catalog.applied() > 0;
+				// The feed brings what the server answered, so that is dropped, not kept to make again.
+				if (rebase && !(await this.#rewind(catalog, stale, true))) return;
+			} catch (error) {
+				throw fail(error);
+			}
 			let limit = APPLY_CHUNK;
 			while (!stale()) {
 				let done: boolean;
@@ -722,16 +771,13 @@ export class CatalogSync {
 					done = catalog.commit(feed, through, limit);
 					limit = Math.max(APPLY_CHUNK, slice(limit, performance.now() - started, APPLY_MAX));
 				} catch (error) {
-					this.#broken.add(catalog);
-					this.#publish();
-					// A full device leaves the file whole, if part-way: a later pull finishes it.
-					if (describe(error).quota) throw error;
-					throw new Unapplied(`staged changes would not apply: ${describe(error).message}`);
+					throw fail(error);
 				}
 				if (done) {
 					// Readable again only once neither feed's changes are left part-way in it.
 					if (catalog.applying(LIBRARY) === undefined && catalog.applying(ACCOUNT) === undefined)
 						this.#broken.delete(catalog);
+					if (rebase) await this.#replay(id, catalog, stale, await this.#pending(id), rewound);
 					return;
 				}
 				// Told only once an apply takes more than a slice: one that is done at once is never seen.
@@ -739,6 +785,18 @@ export class CatalogSync {
 				await new Promise((resolve) => setTimeout(resolve));
 				await this.#queue;
 			}
+		});
+	}
+
+	/**
+	 * Runs `job` on `catalog` after the apply under way, if any, keeping readers off the file until
+	 * it ends: online reads go to the server, and offline ones wait ([`query`](#query)).
+	 */
+	async #exclusive(catalog: Catalog, job: () => Promise<void>) {
+		const before = this.#applying.get(catalog);
+		const run = (async () => {
+			await before;
+			await job();
 		})();
 		const end = run.catch(() => {});
 		this.#applying.set(catalog, end);
@@ -752,12 +810,188 @@ export class CatalogSync {
 		}
 	}
 
+	/**
+	 * Takes back every write the device made to `catalog` for the log, newest first, in slices of
+	 * about `SLICE_MS`; those the server answered are kept to make again, unless `drop`. False if
+	 * `stale` stopped it part-way.
+	 */
+	async #rewind(catalog: Catalog, stale: () => boolean, drop: boolean) {
+		let limit = APPLY_CHUNK;
+		for (;;) {
+			const started = performance.now();
+			if (catalog.rewind(limit, drop)) return true;
+			limit = Math.max(APPLY_CHUNK, slice(limit, performance.now() - started, APPLY_MAX));
+			await new Promise((resolve) => setTimeout(resolve));
+			await this.#queue;
+			if (stale()) return false;
+		}
+	}
+
+	/**
+	 * Makes again in `catalog` the writes the server answered that a rewind kept, then `pending`,
+	 * the writes of the mutations the log holds for library `id`, in the order they were made, each
+	 * at the time it was made, in slices of about `SLICE_MS`, each one transaction. Tells the page
+	 * what they changed, every kind a write makes if writes were just taken back (`rewound`), which
+	 * may not be made again. Stops once `stale` says the file is not the one to write.
+	 */
+	async #replay(
+		id: string,
+		catalog: Catalog,
+		stale: () => boolean,
+		pending: Call[],
+		rewound = false
+	) {
+		const calls = [...(JSON.parse(catalog.answeredCalls()) as Call[]), ...pending];
+		let made = 0;
+		let limit = APPLY_CHUNK;
+		for (let done = 0; done < calls.length;) {
+			if (stale()) return;
+			const started = performance.now();
+			const batch = calls.slice(done, done + limit);
+			made += this.#make(id, catalog, batch).made;
+			done += batch.length;
+			limit = Math.max(APPLY_CHUNK, slice(limit, performance.now() - started, APPLY_MAX));
+			if (done < calls.length) {
+				await new Promise((resolve) => setTimeout(resolve));
+				await this.#queue;
+			}
+		}
+		// What was taken back and not made again changed too, in any kind a write makes.
+		if ((rewound || made > 0) && this.catalogs.get(id) === catalog)
+			this.#changed(id, rewound ? REWOUND : this.#kinds(id, catalog, calls));
+	}
+
+	/**
+	 * Makes those of `calls`, writes of mutations in library `id`, that `catalog` does not hold, in
+	 * one transaction, and answers how many were made. A write the device refuses, as one made on
+	 * a version the feed has since replaced, is not shown; the server's answer decides it. One that
+	 * breaks a constraint, as a client-minted ID that is taken would, is that write's failure
+	 * alone. With `answered`, the server has them: nothing is made, and those the file holds are
+	 * kept for a rewind to make again until the account feed brings them.
+	 */
+	#make(id: string, catalog: Catalog, calls: Call[], answered = false) {
+		const answer = JSON.parse(
+			catalog.applyCalls(this.#user, id, JSON.stringify(calls), answered)
+		) as { made: number; failed: string[] };
+		for (const failure of answer.failed) console.error(failure);
+		return answer;
+	}
+
+	/** The kinds of rows `calls` change in library `id`'s `catalog`, as a list depends on them. */
+	#kinds(id: string, catalog: Catalog, calls: Call[]): Kind[] {
+		const kinds = new Set<Kind>(['playlists']);
+		const liked = catalog.liked(this.#user, id);
+		for (const { name, args } of calls) {
+			if (name === 'hide' || name === 'unhide') kinds.add('hidden');
+			const playlist = (args as { playlistId?: string }).playlistId;
+			if (name === 'like' || name === 'unlike' || name === 'hide' || playlist === liked)
+				kinds.add('liked');
+		}
+		return [...kinds];
+	}
+
+	/**
+	 * Makes those of `calls`, a mutation's writes to library `library`, that its file does not hold,
+	 * after any apply under way, and tells the page what they changed. Nothing where the library
+	 * is not on the device: they are made when it is ([`#replay`](#replay)). With `answered`, the
+	 * server has answered the mutation, which has left the log or is about to: none is made, and
+	 * those the file holds are made again through every rebase until an apply of the account feed,
+	 * which brings them; one it lacks is left to that feed, which may have brought it already.
+	 */
+	async mutate(library: string, calls: Call[], answered = false) {
+		for (;;) {
+			await this.#queue;
+			const catalog = this.catalogs.get(library);
+			if (this.#closed || !catalog || this.#broken.has(catalog)) return;
+			const applying = this.#applying.get(catalog);
+			if (applying) {
+				await applying;
+				continue;
+			}
+			try {
+				if (this.#make(library, catalog, calls, answered).made > 0)
+					this.#changed(library, this.#kinds(library, catalog, calls));
+			} catch (error) {
+				void this.#run(`lib:${library}`, () => this.#rebuild(library));
+				throw error;
+			}
+			return;
+		}
+	}
+
+	/**
+	 * Hears that the server answered a write to playlist `playlistId` of `library` with the playlist
+	 * at `version`, once the write has left the log. If the device's copy is past that version and
+	 * the log's writes to the playlist still to come, the feed brought the server's rows of the write
+	 * while it was in the log, and the write was made again over them: the library is rebased, which
+	 * makes it once. A write made on a version, such as an edit, is refused on such rows instead,
+	 * so only an append needs this.
+	 */
+	async confirmed(library: string, playlistId: string, version: number) {
+		for (;;) {
+			await this.#queue;
+			const catalog = this.catalogs.get(library);
+			if (this.#closed || !catalog || this.#broken.has(catalog)) return;
+			const applying = this.#applying.get(catalog);
+			if (applying) {
+				await applying;
+				continue;
+			}
+			let held: number | undefined;
+			try {
+				const read = catalog.query(
+					this.#user,
+					library,
+					'getPlaylist',
+					JSON.stringify({ playlistId })
+				);
+				held = (JSON.parse(read) as { version?: number } | null)?.version;
+			} catch {
+				return;
+			}
+			const later = (await this.#pending(library)).filter(
+				(call) => (call.args as { playlistId?: string }).playlistId === playlistId
+			).length;
+			if (held !== undefined && held > version + later) await this.rebase(library, true);
+			return;
+		}
+	}
+
+	/**
+	 * Takes back every write the device made to `library` for the log and makes again those the
+	 * server answered and those the log holds now, as after a mutation left the log unsent; readers
+	 * are kept off the file meanwhile, as during an apply. With `drop`, those the server answered are
+	 * not made again: the feed brought them.
+	 */
+	async rebase(library: string, drop = false) {
+		await this.#queue;
+		const catalog = this.catalogs.get(library);
+		if (this.#closed || !catalog) return;
+		const stale = () => this.#gone(library, catalog);
+		try {
+			await this.#exclusive(catalog, async () => {
+				if (stale() || this.#broken.has(catalog)) return;
+				// Read once the file is this job's, so a write asked for meanwhile waits and is made after.
+				const pending = await this.#pending(library);
+				const rewound = catalog.applied() > 0;
+				// Nothing made and nothing to make, as at most starts.
+				if (!rewound && pending.length === 0 && catalog.answeredCalls() === '[]') return;
+				if (await this.#rewind(catalog, stale, drop))
+					await this.#replay(library, catalog, stale, pending, rewound);
+			});
+		} catch (error) {
+			if (damaged(error)) void this.#run(`lib:${library}`, () => this.#rebuild(library));
+			this.#fail(error);
+		}
+	}
+
 	/** Finishes the applies a closed worker left part-way in the library's file `catalog`. */
 	async #finish(id: string, catalog: Catalog) {
 		const stale = () => this.#gone(id, catalog);
 		for (const feed of [LIBRARY, ACCOUNT]) {
 			const through = stale() ? undefined : catalog.applying(feed);
-			if (through !== undefined) await this.#apply(catalog, feed, through, stale);
+			if (through !== undefined)
+				await this.#apply(id, catalog, feed, through, stale, feed === ACCOUNT);
 		}
 	}
 
@@ -845,7 +1079,8 @@ export class CatalogSync {
 
 	/**
 	 * Downloads a library's snapshot, imports it as a new file, adds the library's playlists to
-	 * it, and swaps it in for any copy the library has, announcing the library as changed.
+	 * it and the device's own writes over them, and swaps it in for any copy the library has,
+	 * announcing the library as changed.
 	 * Nothing shows until the swap. Undefined when the account does not reach the library. Unless
 	 * `forced`, a snapshot no newer than the copy's own position is not imported: it is asked for
 	 * again while the server builds a newer one, and the copy is returned if none comes.
@@ -895,6 +1130,8 @@ export class CatalogSync {
 			// A new file stages nothing for these, so each is done in one call.
 			catalog.commit(LIBRARY, BigInt(seq), APPLY_CHUNK);
 			catalog.commit(OWNER, BigInt(this.#user), APPLY_CHUNK);
+			// The device's own writes show on the new copy as they did on the old.
+			await this.#replay(id, catalog, () => this.#closed, await this.#pending(id));
 			if (this.#closed) throw new Closed();
 		} catch (error) {
 			catalog?.free();

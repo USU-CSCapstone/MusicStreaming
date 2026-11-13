@@ -161,6 +161,7 @@ pub enum Error {
     Sql(rusqlite::Error),
 }
 
+/// The message a caller can show or log.
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -172,6 +173,7 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// Lets `?` pass a database error on as [`Error::Sql`].
 impl From<rusqlite::Error> for Error {
     fn from(error: rusqlite::Error) -> Error {
         Error::Sql(error)

@@ -68,6 +68,12 @@ export type RestoredQueue = Schemas['RestoredQueue'];
 export type QueueState = Schemas['QueueState'];
 /** A start as `POST /me/queue` takes it. */
 export type StartQueue = Schemas['StartQueue'];
+/** What the server answers a start: the list it made of the source, and its length. */
+export type StartedQueue = Schemas['StartedQueue'];
+/** An edit as `POST /me/queue/edits` takes it: the edit, the queue it is for, and its `editId`. */
+export type EditQueue = Schemas['EditQueue'];
+/** What the server answers an edit: the version it made, and an add's source with its list. */
+export type AppliedEdit = Schemas['AppliedEdit'];
 /** A page of the queue's rows, with each row's track. */
 export type QueueRows = Schemas['QueueRows'];
 /** An edit as the server applies it and `queueEdit` carries it. */

@@ -2,6 +2,8 @@
 // worker holds the queue; the page sends it what happened and shows what it reports.
 
 import type { PlayContext, RealtimeServerMessage, SentEdit, StartQueue } from '$lib/api/types';
+import type { EditArgs, RestoreArgs, StartArgs } from '$lib/sync/mutations/queue';
+import type { Result, Settled } from '$lib/sync/sender';
 
 /** How the queue repeats: not at all, all of it, or the item playing. */
 export type Repeat = 'off' | 'all' | 'one';
@@ -41,8 +43,9 @@ export type Summary = {
 export type Refusal = {
 	/**
 	 * Why: the server's problem code such as `anchor_gone` or `play_gone`, the core's code for an
-	 * edit it refuses, `superseded` when another queue replaced this one, or `lost` when the
-	 * server answered the edit but no longer has it, as after a restart.
+	 * edit it refuses, `superseded` when the server had another queue active by the time the edit
+	 * reached it, or `lost` when the server answered the edit but no longer has it, as after a
+	 * restart.
 	 */
 	code: string;
 	message: string;
@@ -68,11 +71,21 @@ export type StartRequest = StartQueue & {
 
 /**
  * The answer to restoring a kept queue (`design/queue.md` §7): the queue is now the active one
- * and `position` is where its playback was left, or why it was not restored.
+ * and `position` is where its playback was left, or why it was not restored: `offline` when the app
+ * counts itself offline, `unreachable` when the server could not be reached.
  */
 export type RestoreResult =
 	| { ok: true; position: { item: string; positionMs: number } | null }
 	| { ok: false; code: string; message: string };
+
+/**
+ * A start, edit or restore of the queue, as the worker gives it to the page's log, which sends it
+ * (`$lib/sync/mutations/queue.ts`).
+ */
+export type QueueMutation =
+	| { name: 'startQueue'; args: StartArgs }
+	| { name: 'editQueue'; args: EditArgs }
+	| { name: 'restoreQueue'; args: RestoreArgs };
 
 /** Which rows a window is of: the item playing, Up Next, or History (newest first). */
 export type RowSection = 'current' | 'upNext' | 'history';
@@ -110,15 +123,27 @@ export type ToWorker =
 	/** First: where the API is, and the account signed in. */
 	| { type: 'init'; api: string; wasm: string; user: string }
 	| { type: 'message'; message: RealtimeServerMessage }
+	/** Whether the device is working offline, when the worker makes no request; off until said. */
+	| { type: 'offline'; value: boolean }
 	| { type: 'edit'; edit: SentEdit; length?: number; offline?: boolean }
 	/** Starts a queue; answered with `started` carrying the same `id`. */
 	| { type: 'start'; id: number; request: StartRequest }
-	/** Restores a kept queue; answered with `restored` carrying the same `id`. */
-	| { type: 'restore'; id: number; queueId: string }
+	/**
+	 * Restores a kept queue; answered with `restored` carrying the same `id`. `offline`: the app
+	 * counts itself offline, so it is answered at once and nothing is restored.
+	 */
+	| { type: 'restore'; id: number; queueId: string; offline?: boolean }
+	/** What became of a start, edit or restore the page's log held, as its sender heard it. */
+	| { type: 'settled'; mutation: QueueMutation; outcome: Settled; result: Result }
 	/** Asks for up to `limit` rows from `offset`; answered with `rows` carrying the same `id`. */
 	| { type: 'rows'; id: number; section: RowSection; offset: number; limit: number }
 	/** The user hid track `trackId` of `libraryId`, or unhid it, here or on another device. */
-	| { type: 'hidden'; libraryId: string; trackId: string; hidden: boolean };
+	| { type: 'hidden'; libraryId: string; trackId: string; hidden: boolean }
+	/**
+	 * Writes the queue to the database now (the page is hidden, or logging out); answered with
+	 * `saved` carrying the same `id`, after every `enqueue` the worker posted before.
+	 */
+	| { type: 'save'; id: number };
 
 /** The worker to the page. */
 export type FromWorker =
@@ -127,4 +152,13 @@ export type FromWorker =
 	/** Whether the start took: the queue is the new one, and its state follows. */
 	| { type: 'started'; id: number; ok: boolean }
 	| { type: 'restored'; id: number; result: RestoreResult }
+	/** The queue's write is done, or failed; answers `save` with the same `id`. */
+	| { type: 'saved'; id: number }
+	/** A start, edit or restore for the page's log to keep and send. */
+	| { type: 'enqueue'; mutation: QueueMutation }
+	/**
+	 * Something to tell the user that is not about an edit or a start, which playback would answer
+	 * to.
+	 */
+	| { type: 'notice'; message: string }
 	| { type: 'rows'; id: number; window: RowsWindow };

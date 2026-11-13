@@ -4,9 +4,11 @@
 	import { page } from '$app/state';
 	import { ApiError, login, sessionEnding } from '$lib/api/client';
 	import AuthForm from '$lib/components/AuthForm.svelte';
+	import { connectivity } from '$lib/connectivity.svelte';
 	import { thisDevice } from '$lib/device';
 	import { setLogoutPending } from '$lib/last-known';
 	import { finishLogout } from '$lib/logout';
+	import { DISCARDED } from '$lib/sync/store';
 
 	let username = $state('');
 	let password = $state('');
@@ -14,6 +16,22 @@
 	 * Whether the server ended the session and the page is about to reload; no form shows meanwhile.
 	 */
 	const ending = sessionEnding();
+	/**
+	 * How many unsent plays and changes a session the server ended took with it, told once: read
+	 * and taken down at once, so it never reaches the next session's login. While `ending`, it is
+	 * left for the page after the reload.
+	 */
+	const discarded = (() => {
+		if (ending) return 0;
+		try {
+			const count = Number(sessionStorage.getItem(DISCARDED));
+			sessionStorage.removeItem(DISCARDED);
+			return count;
+		} catch {
+			return 0;
+		}
+	})();
+
 	/** Where to go once logged in: the `next` page, if it is one of this app's. */
 	function next(): string {
 		const target = new URL(page.url.searchParams.get('next') ?? '', page.url);
@@ -23,6 +41,9 @@
 	}
 
 	async function logIn() {
+		// Logging in asks the server, which Work offline keeps every request from, and this page has
+		// no switch for it: the press is the choice to connect again.
+		if (connectivity.workOffline) connectivity.setWorkOffline(false);
 		// A logout the server has not heard of is told first, or it would end the session this
 		// login makes; one it still cannot take is dropped, as this login is the newer.
 		await finishLogout(fetch);
@@ -53,6 +74,14 @@
 	<p role="status">Signing out…</p>
 {:else}
 	<AuthForm title="Log in" submit="Log in" busyLabel="Logging in…" action={logIn}>
+		{#if discarded > 0}
+			<p role="status">
+				Your session ended, so {discarded} unsent {discarded === 1
+					? 'play or change'
+					: 'plays and changes'}
+				from this device {discarded === 1 ? 'was' : 'were'} discarded.
+			</p>
+		{/if}
 		<label>
 			Username
 			<input

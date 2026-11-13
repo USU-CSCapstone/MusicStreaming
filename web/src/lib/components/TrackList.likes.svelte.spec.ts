@@ -21,6 +21,8 @@ vi.mock('$lib/api/client', async (actual) => ({
 }));
 
 const { marks } = await import('$lib/marks.svelte');
+const { sender } = await import('$lib/sync/sender');
+const { memoryEnv } = await import('$lib/sync/store');
 const { player } = await import('$lib/player.svelte');
 const { toaster } = await import('$lib/toast.svelte');
 const { default: TrackList } = await import('./TrackList.svelte');
@@ -48,9 +50,11 @@ beforeEach(async () => {
 	await page.viewport(1280, 800);
 	marks.clear();
 	sent.length = 0;
+	sender.start('1', { env: memoryEnv() });
 });
 
 afterEach(() => {
+	sender.stop();
 	toaster.dismiss();
 	vi.restoreAllMocks();
 });

@@ -1,24 +1,24 @@
 // Which tracks the user likes and which they hid, by library, as every list shows them
 // (`requirements/playlists.md` §11, `requirements/conventions.md` §8). A track is read with
 // `liked`; a like, an unlike, a hide or an unhide made here, or one the server tells of from
-// another device, holds from then on over what was read. A change here shows at once and is sent
-// after, and one the server refuses is undone, with why (`requirements/general.md` §3.4). The
-// server tells nothing of what changed while the connection was down, so each time it comes
-// back, every track marked here takes the server's word on it again.
+// another device, holds from then on over what was read.
+//
+// A change made here is a mutation (`sync/mutations/marks.ts`), which the device's copy makes and
+// the sender sends. This overlay stays beside the device because not every list reads the device
+// at once: a library read from the server (not on the device, still downloading, or with no room)
+// shows a change only through it (`requirements/general.md` §3.4), a list read before reloads up
+// to a second after the device changes, and the server's word on another device's change reaches
+// lists already read only here. It can go once every list reads the device and reloads on its
+// changes. A change the server refuses is undone here, as the device takes it back, with why. The
+// server tells nothing of what changed while the connection was down, so each time it comes back,
+// every track marked here that is not waiting to be sent takes the server's word on it again.
 
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
-import {
-	ApiError,
-	getTracksByIds,
-	hideTrack,
-	likeTrack,
-	listHiddenTracks,
-	unhideTrack,
-	unlikeTrack
-} from './api/client';
+import { getTracksByIds, listHiddenTracks } from './api/client';
 import type { Playlist, RealtimeServerMessage } from './api/types';
 import { realtime } from './realtime.svelte';
-import { toast } from './toast.svelte';
+import { mintId } from './sync/mutations/marks';
+import { sender } from './sync/sender';
 
 type Fetch = typeof fetch;
 
@@ -43,12 +43,16 @@ class Marks {
 	 */
 	#hides = new SvelteMap<string, SvelteMap<string, boolean>>();
 	/**
-	 * The latest change sent for each track, by `{library}/{track}`. While one is under way, the
-	 * server's word on that track may be the echo of an older change this device made, so it is
-	 * recorded but not shown. Nothing shows this, so nothing reacts to it.
+	 * The latest change made here to each track that is unsent, by `{library}/{track}`. While one
+	 * is, the server's word on that track may be the echo of an older change this device made, so it
+	 * is recorded but not shown. Nothing shows this, so nothing reacts to it.
 	 */
-	#sending = new Map<string, number>();
-	#sent = 0;
+	#pending = new Map<string, object>();
+	/**
+	 * What a track was read as, hidden or not, for the change under way, which a refusal goes back
+	 * to.
+	 */
+	#read = new Map<string, boolean>();
 	/**
 	 * When each mark was last written, by `{library}/{track}`, counting every write, so a check of
 	 * the server's word can tell a mark written while it was under way. Nothing reacts to it.
@@ -56,8 +60,8 @@ class Marks {
 	#written = new Map<string, number>();
 	#writes = 0;
 	/**
-	 * What the server has confirmed of each track, by `{library}/{track}`: the changes it took and
-	 * what it told of. A refusal goes back to this, never to a change still unconfirmed.
+	 * What the server has said of each track, by `{library}/{track}`. A refusal goes back to this,
+	 * never to a change still unsent.
 	 */
 	#confirmed = new Map<string, Mark>();
 	/** Libraries whose Liked Songs was deleted since tracks were read, which unliked them all. */
@@ -123,19 +127,15 @@ class Marks {
 	}
 
 	/** Likes `track`, which unhides it, or unlikes it. */
-	like(f: Fetch, library: string, track: Marked, liked: boolean): Promise<void> {
+	like(library: string, track: Marked, liked: boolean): Promise<void> {
 		const mark = liked ? { liked, hidden: false } : { liked };
-		const send = liked ? likeTrack : unlikeTrack;
-		const what = liked ? 'like' : 'unlike';
-		return this.#change(library, track, mark, () => send(f, library, track.id), what);
+		return this.#change(library, track, mark, liked ? 'like' : 'unlike');
 	}
 
 	/** Hides `track`, which unlikes it, or unhides it. */
-	hide(f: Fetch, library: string, track: Marked, hidden: boolean): Promise<void> {
+	hide(library: string, track: Marked, hidden: boolean): Promise<void> {
 		const mark = hidden ? { hidden, liked: false } : { hidden };
-		const send = hidden ? hideTrack : unhideTrack;
-		const what = hidden ? 'hide' : 'unhide';
-		return this.#change(library, track, mark, () => send(f, library, track.id), what);
+		return this.#change(library, track, mark, hidden ? 'hide' : 'unhide');
 	}
 
 	/**
@@ -163,7 +163,8 @@ class Marks {
 	clear() {
 		this.#marks.clear();
 		this.#hides.clear();
-		this.#sending.clear();
+		this.#pending.clear();
+		this.#read.clear();
 		this.#written.clear();
 		this.#confirmed.clear();
 		this.#cleared.clear();
@@ -171,50 +172,51 @@ class Marks {
 	}
 
 	/**
-	 * Shows `mark` on `track` at once and sends it. A refusal of the latest change to the track goes
-	 * back to what the server has confirmed of it, and says why; one of an earlier change leaves the
-	 * later one showing, and its own answer decides.
+	 * Shows `mark` on `track` at once and keeps it as a mutation, which the device makes at once and
+	 * the sender sends, now or when the device is online again. Settles once it is sent or refused,
+	 * or left for another tab to send. A refused change goes back to what the server last said of
+	 * the track, or else as it was read.
 	 */
-	async #change(
-		library: string,
-		track: Marked,
-		mark: Mark,
-		send: () => Promise<void>,
-		what: string
-	) {
+	async #change(library: string, track: Marked, mark: Mark, what: string) {
 		const at = key(library, track.id);
-		const sent = ++this.#sent;
-		this.#sending.set(at, sent);
 		this.#merge(at, mark);
-		try {
-			await send();
-			this.#confirmed.set(at, { ...this.#confirmed.get(at), ...mark });
-			// What the server now holds, over anything that wrote the mark meanwhile, such as Liked
-			// Songs deleted elsewhere, whose echo this change held back; a later change decides
-			// for itself.
-			if (this.#sending.get(at) === sent) this.#merge(at, mark);
-		} catch (e) {
-			if (this.#sending.get(at) === sent) {
-				const confirmed = this.#confirmed.get(at);
-				this.#put(at, confirmed);
-				// Shown again as the server last confirmed it, or else as it was read.
-				if (mark.hidden !== undefined) {
-					this.#tell(library, track.id, confirmed?.hidden ?? track.hidden ?? false);
-				}
-			}
-			toast(`Couldn’t ${what} “${track.title}”. ${e instanceof ApiError ? e.message : ''}`.trim());
-		} finally {
-			if (this.#sending.get(at) === sent) this.#sending.delete(at);
+		if (!this.#pending.has(at)) this.#read.set(at, track.hidden ?? false);
+		const queued = sender.enqueue('mark', {
+			...mark,
+			library,
+			track: track.id,
+			what: `${what} “${track.title}”`,
+			likedId: mark.liked ? mintId() : undefined
+		});
+		if (!queued) return;
+		// Its own token: a later change may be folded into the same mutation.
+		const change = {};
+		this.#pending.set(at, change);
+		const outcome = await sender.settled(queued.key);
+		if (outcome === 'sent') this.#confirmed.set(at, { ...this.#confirmed.get(at), ...mark });
+		// A later change to the track decides for itself.
+		if (this.#pending.get(at) !== change) return;
+		this.#pending.delete(at);
+		// What the server now holds, over anything that wrote the mark meanwhile, such as Liked Songs
+		// deleted elsewhere, whose echo it held back.
+		if (outcome === 'sent') this.#merge(at, mark);
+		if (outcome === 'dropped') {
+			const confirmed = this.#confirmed.get(at);
+			this.#put(at, confirmed);
+			// Shown again as the server last said, or else as it was read.
+			if (mark.hidden !== undefined)
+				this.#tell(library, track.id, confirmed?.hidden ?? this.#read.get(at) ?? false);
 		}
+		this.#read.delete(at);
 	}
 
 	/**
 	 * Takes `mark` as the server's word on the track at `at`. It shows unless a change of this
-	 * device's is under way there, whose echo it may be; that change's own answer decides.
+	 * device's is unsent there, whose echo it may be; that change's own answer decides.
 	 */
 	#confirm(at: string, mark: Mark) {
 		this.#confirmed.set(at, { ...this.#confirmed.get(at), ...mark });
-		if (!this.#sending.has(at)) this.#merge(at, mark);
+		if (!this.#pending.has(at)) this.#merge(at, mark);
 	}
 
 	#merge(at: string, mark: Mark) {
@@ -227,9 +229,11 @@ class Marks {
 	}
 
 	/**
-	 * Has each track marked here, with no change of this device's under way, take the server's word
-	 * on whether it is liked, read with the track, and hidden, from Hidden Songs. A track neither
-	 * returns is gone, and so neither. A mark written while this is under way is newer, so stays.
+	 * Has each track marked here, with no change of this device's unsent, take the server's word
+	 * on whether it is liked, read with the track, and hidden, from Hidden Songs. Both are read from
+	 * the server: the device's copy is behind until the catch-up this connection starts finishes. A
+	 * track neither returns is gone, and so neither. A mark written while this is under way is
+	 * newer, so stays.
 	 * A library that cannot be read keeps its marks until the next time.
 	 */
 	async #recheck(f: Fetch) {
@@ -237,7 +241,7 @@ class Marks {
 		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- the check's own, not shown
 		const libraries = new Map<string, string[]>();
 		for (const at of this.#marks.keys()) {
-			if (this.#sending.has(at)) continue;
+			if (this.#pending.has(at)) continue;
 			const [library, track] = split(at);
 			libraries.set(library, [...(libraries.get(library) ?? []), track]);
 		}
@@ -248,19 +252,19 @@ class Marks {
 					const hidden = new Set<string>();
 					let cursor: string | undefined;
 					do {
-						const page = await listHiddenTracks(f, library, { limit: 1000, cursor });
+						const page = await listHiddenTracks(f, library, { limit: 1000, cursor }, true);
 						for (const track of page.items) hidden.add(track.id);
 						cursor = page.nextCursor ?? undefined;
 					} while (cursor);
 					// eslint-disable-next-line svelte/prefer-svelte-reactivity -- the check's own, not shown
 					const liked = new Set<string>();
 					for (let i = 0; i < tracks.length; i += 100) {
-						const page = await getTracksByIds(f, library, tracks.slice(i, i + 100));
+						const page = await getTracksByIds(f, library, tracks.slice(i, i + 100), true);
 						for (const track of page.items) if (track.liked) liked.add(track.id);
 					}
 					for (const track of tracks) {
 						const at = key(library, track);
-						if (this.#sending.has(at) || (this.#written.get(at) ?? 0) > since) continue;
+						if (this.#pending.has(at) || (this.#written.get(at) ?? 0) > since) continue;
 						const mark = { liked: liked.has(track), hidden: hidden.has(track) };
 						this.#confirmed.set(at, mark);
 						this.#merge(at, mark);
@@ -297,5 +301,6 @@ function split(at: string): [string, string] {
 	return [at.slice(0, slash), at.slice(slash + 1)];
 }
 
+/** The one set of marks the app shows, fed by realtime messages and the changes made here. */
 export const marks = new Marks();
 realtime.on((message) => void marks.receive(message));

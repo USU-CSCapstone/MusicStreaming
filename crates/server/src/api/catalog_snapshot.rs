@@ -63,6 +63,7 @@ struct Build<'a> {
 }
 
 impl Drop for Build<'_> {
+    /// Lets the library be built again.
     fn drop(&mut self) {
         self.snapshots.building.lock().recover().remove(&self.library);
     }
@@ -264,8 +265,8 @@ fn read_only_uri(path: &Path) -> String {
 }
 
 /// The spec's `getLibraryCatalog`: the library's newest file, gzipped if the client accepts it,
-/// with its ETag, feed position and device schema version. A file the feed has moved too far past is rebuilt in the
-/// background. With no file yet, `503 catalog_building` and a build.
+/// with its ETag, feed position and device schema version. A file the feed has moved too far
+/// past is rebuilt in the background. With no file yet, `503 catalog_building` and a build.
 pub async fn get(
     State(db): State<Arc<Database>>,
     State(snapshots): State<Arc<Snapshots>>,

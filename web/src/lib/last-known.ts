@@ -1,7 +1,8 @@
 // What this browser keeps about who is signed in, so the app starts with no network: the server's
 // public details, the account that owns the device and, for that account alone, its user and
-// library list. Only that: the catalog itself lives in the worker's files. Cleared by the catalog's
-// sign-out, which the next person to sign in must never see past (`requirements/general.md` §3.6).
+// library list, and which libraries its files hold. Only that: the catalog itself lives in the
+// worker's files. Cleared by the catalog's sign-out, which the next person to sign in must never
+// see past (`requirements/general.md` §3.6).
 
 import type { Library, ServerInfo, User } from '$lib/api/types';
 
@@ -17,6 +18,11 @@ const SERVER = 'jewelcase-server';
 const OWNER = 'jewelcase-owner';
 /** The start of the key of an account's user and library list; the user's ID follows. */
 const USER = 'jewelcase-user:';
+/**
+ * The key of the libraries an account has on this device, which an app launched offline reads
+ * before its owner has said.
+ */
+const DEVICE = 'jewelcase-device:';
 /** The marker of a logout the server has not been told of. */
 export const LOGOUT_PENDING = 'jewelcase-logout-pending';
 
@@ -75,6 +81,17 @@ export function remember(part: LastKnown) {
 	if (user && Object.keys(own).length) write(USER + user, { ...read(USER + user), ...own });
 }
 
+/** Keeps the IDs of the libraries `user` has on this device, as its owner last said. */
+export function rememberDevice(user: string, libraries: string[]) {
+	write(DEVICE + user, libraries);
+}
+
+/** The IDs of the libraries `user` had on this device when its owner last said, or none. */
+export function deviceLibraries(user: string): Set<string> {
+	const kept: unknown = read(DEVICE + user);
+	return new Set(Array.isArray(kept) ? kept.map(String) : []);
+}
+
 /**
  * Deletes everything kept of any account and who owns the device; the server's details are not an
  * account's.
@@ -82,7 +99,8 @@ export function remember(part: LastKnown) {
 export function forget() {
 	try {
 		for (const key of Object.keys(localStorage)) {
-			if (key === OWNER || key.startsWith(USER)) localStorage.removeItem(key);
+			if (key === OWNER || key.startsWith(USER) || key.startsWith(DEVICE))
+				localStorage.removeItem(key);
 		}
 	} catch {
 		// Nothing was kept.

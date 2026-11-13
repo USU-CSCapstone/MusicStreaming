@@ -1,14 +1,17 @@
 // The account's queue on this device: the server's queue as confirmed, plus this device's own
 // edits that the server has not yet confirmed, replayed on top (`design/queue.md` §9,
-// `requirements/general.md` §3.4). The order is the shared core's, run in WebAssembly, so this
-// holds no rule about it, and it holds no tracks in its state. Tracks come from the lists, which
-// it downloads by hash in the background and attaches to the core, and meanwhile from pages of
-// rows (`design/queue.md` §3). Plain TypeScript so it runs in a worker and in tests; `worker.ts`
-// is its shell.
+// `requirements/general.md` §3.4). Its starts, edits and restores are mutations of the page's one
+// log (`$lib/sync/mutations/queue.ts`), which sends them in order; this applies each at once and
+// hears what the server answered (`settled`). The order is the shared core's, run in
+// WebAssembly, so this holds no rule about it, and it holds no tracks in its state. Tracks come
+// from the lists, which it downloads by hash in the background and attaches to the core, and
+// meanwhile from pages of rows (`design/queue.md` §3). Plain TypeScript so it runs in a worker
+// and in tests; `worker.ts` is its shell.
 
 import type { CatalogRouter } from '$lib/catalog/router';
 import { Queue } from '$lib/core-wasm/jewelcase_core_wasm.js';
 import type {
+	AppliedEdit,
 	PlayContext,
 	QueueEdit,
 	QueueRecipe,
@@ -16,12 +19,17 @@ import type {
 	RealtimeServerMessage,
 	RestoredQueue,
 	SentEdit,
-	StartQueue,
+	StartedQueue,
 	TrackPage
 } from '$lib/api/types';
+import type { Mutation } from '$lib/sync/mutation';
+import type { EditArgs, StartArgs } from '$lib/sync/mutations/queue';
+import type { Result, Settled } from '$lib/sync/sender';
+import { wipeChannel, type Env, type Port, type Stored } from '$lib/sync/store';
 import { download, ListCache } from './lists';
 import { PAGE, RowPages } from './rows';
 import type {
+	QueueMutation,
 	QueueRow,
 	Refusal,
 	Repeat,
@@ -38,8 +46,11 @@ export type Options = {
 	/** The account signed in, whose files alone the catalog's owner answers the queue from. */
 	user: string;
 	fetch?: typeof fetch;
-	/** How long to wait before sending again what could not be sent. */
-	retryMs?: number;
+	/**
+	 * Where its starts, edits and restores go to be sent: the page's log. What becomes of each is
+	 * given back to `settled`.
+	 */
+	log: { enqueue(mutation: QueueMutation): void };
 	/** Where lists are kept; the browser's Cache Storage if left out. Without any, memory. */
 	storage?: CacheStorage;
 	/**
@@ -50,6 +61,17 @@ export type Options = {
 	changed: (summary: Summary) => void;
 	/** Called when an edit could not be kept. */
 	refused: (refusal: Refusal) => void;
+	/**
+	 * The user's database, where the queue the server confirmed is kept for the next time the app
+	 * opens, and whose log holds what has not reached the server (`design/queue.md` §7); nothing is
+	 * kept or read again if left out.
+	 */
+	database?: Env;
+	/**
+	 * Called with a plain notice for the user that is not about an edit, such as the queue not being
+	 * kept.
+	 */
+	told?: (message: string) => void;
 };
 
 /** An edit this device made that the server has not confirmed. */
@@ -61,20 +83,56 @@ type Pending = {
 	local: QueueEdit | null;
 	/** The version the server answered it made, once it has. */
 	version?: number;
-	/** The list this device resolved for an `add` of a recipe, once it has: JSON as a list's download gives it. */
+	/**
+	 * The list this device resolved for an `add` of a recipe, once it has: JSON as a list's download
+	 * gives it.
+	 */
 	device?: { hash: string; body: string };
+	/**
+	 * The count of rows an `add` of a recipe shows until the server says how many, as given to
+	 * `edit`.
+	 */
+	length?: number;
+	/**
+	 * Shown again from the log as the app opened, and made by a tab that may still be open, so the
+	 * server's queue, once fetched, says whether it has it.
+	 */
+	replayed?: boolean;
 };
 
-/** A restore waiting to be sent, and how its answer reaches the caller. */
-type Restoring = { queueId: string; settle: (result: RestoreResult) => void };
+/** The key of the account's one record in the `queue` store. */
+export const RECORD = 'queue';
 
-/** A start this device made that the server has not answered. */
-type Starting = {
-	/** What is sent: the request without what only this device holds. */
-	body: StartQueue;
-	/** How long the view said the source was, to tell whether the server's list is the view's. */
-	total?: number;
+/**
+ * What the account's queue keeps in the database's `queue` store: the queue the server confirmed,
+ * which the unsent starts and edits of the log go on top of when the app opens again. `createdAt`
+ * is when it last changed: an unchanged queue is not written again.
+ */
+export type QueueRecord = Stored & {
+	/** The confirmed queue's ID; null with no queue. */
+	queueId: string | null;
+	/** What the confirmed queue started from; null with no queue. */
+	context: PlayContext | null;
+	/** The confirmed queue's version. */
+	version: number;
+	/** The part of the server's `ETag` that is new each time it starts. */
+	run: string | null;
+	/** The confirmed queue's state, as the core writes it; null with no queue. */
+	state: string | null;
 };
+
+/**
+ * A restore this device asked for and the server has not answered: the `#epoch` it was asked at,
+ * which a later start or restore moves on, and who waits for its answer, if anyone still does.
+ */
+type Restoring = { epoch: number; settle: ((result: RestoreResult) => void) | null };
+
+/**
+ * A start this device made that the server has not answered: the request, how long the view said
+ * the source was, to tell whether the server's list is the view's, and the rows the view loaded
+ * of a recipe's source. `replayed` as for `Pending`.
+ */
+type Starting = StartArgs & { replayed?: boolean };
 
 /** What the state says of a source that rows need. */
 type SourceInfo = { libraryId: string; list?: string };
@@ -99,16 +157,51 @@ type Problem = 'gone' | 'failed';
 
 type QueueEditMessage = Extract<RealtimeServerMessage, { type: 'queueEdit' }>;
 
-/** The server's problem body, if it sent one. */
-type ProblemBody = { code?: string; detail?: string; title?: string } | null;
-
 export class QueueStore {
 	#api: string;
 	#user: string;
 	#fetch: typeof fetch;
-	#retryMs: number;
+	#log: Options['log'];
 	#changed: (summary: Summary) => void;
 	#refused: (refusal: Refusal) => void;
+
+	/** This instance, as the `owner` its record is written with. */
+	#instance = crypto.randomUUID();
+	/** The user's database while this instance holds it; null with none or once closed. */
+	#port: Port | null = null;
+	/** Tells the user something that is not about an edit (`Options.told`). */
+	#notice: (message: string) => void;
+	/**
+	 * The user's database is being deleted: nothing more is written to it, though writes already
+	 * made are not undone.
+	 */
+	#wiped = false;
+	/** What was last written says this of the queue; a change of it is what is worth writing. */
+	#savedSignature = '';
+	/** Every write, in order, so none overtakes another. */
+	#tail: Promise<void> = Promise.resolve();
+	/** Stops hearing that the database is being wiped. */
+	#unwipe: (() => void) | null = null;
+	/** Whether the user has been told that this browser would not keep the queue. */
+	#unkeptTold = false;
+	/**
+	 * The starts, edits and restores this instance gave the log that are not settled, as
+	 * `start:`, `edit:` or `restore:` and the ID: the queue is fetched only once there are none,
+	 * so what it fetches holds them, as when the queue sent its own.
+	 */
+	#own = new Set<string>();
+	/**
+	 * The starts, edits and restores the log held as the app opened, as `#own` names them: the
+	 * queue is not fetched while any is still in the log, whichever tab sends it, so a queue shown
+	 * from the log is not replaced by the one it replaced.
+	 */
+	#replayed = new Set<string>();
+	/** A drain was asked for while one ran, which looks again once it is done. */
+	#drainAgain = false;
+	/** Counts the times the server was heard from, so a fetch that failed before is tried again. */
+	#reached = 0;
+	/** The `#reached` a fetch of the queue failed at: it is tried again only once that moves on. */
+	#failedAt = -1;
 
 	/** The server's queue: its snapshot with every edit since applied, in version order. */
 	#confirmed: Queue | null = null;
@@ -126,10 +219,10 @@ export class QueueStore {
 	/** Edits heard while the queue is being fetched; the fetch may predate them. */
 	#held: QueueEditMessage[] | null = null;
 	#draining = false;
-	/** The start waiting to be sent or answered; it goes before every edit and fetch. */
+	/** The start of the queue shown, until the server answers it. */
 	#starting: Starting | null = null;
-	/** The restore waiting its turn or being sent. */
-	#restoring: Restoring | null = null;
+	/** The restores this device asked for that the server has not answered, by kept queue. */
+	#restores = new Map<string, Restoring>();
 	/** The rows of the view a start came from, by position, for the source it started (`rows`). */
 	#viewRows = new Map<string, string[]>();
 	/** The item a recipe start played, until the server's snapshot says whether it is the one it made current. */
@@ -183,19 +276,30 @@ export class QueueStore {
 		api,
 		user,
 		fetch: fetcher = (...args) => fetch(...args),
-		retryMs = 2000,
+		log,
 		storage = globalThis.caches,
 		catalog,
 		changed,
-		refused
+		refused,
+		database,
+		told = () => {}
 	}: Options) {
 		this.catalog = catalog;
 		this.#api = api;
 		this.#user = user;
 		this.#fetch = fetcher;
-		this.#retryMs = retryMs;
+		this.#log = log;
 		this.#changed = changed;
 		this.#refused = refused;
+		this.#notice = told;
+		if (database) {
+			this.#port = database.open(user);
+			const channel = wipeChannel(user);
+			if (channel) {
+				channel.onmessage = () => this.#wipe();
+				this.#unwipe = () => channel.close();
+			}
+		}
 		this.#lists = new ListCache(storage, api, user);
 		this.#pages = new RowPages(
 			(path) => this.#get(path),
@@ -328,32 +432,50 @@ export class QueueStore {
 		this.#pages.ensure(this.#queueId, this.#version, part, from, rows);
 	}
 
-	/** One request to the API, with no wait after a failure; null when it could not be made. */
-	async #get(path: string): Promise<Response | null> {
-		return this.#fetch(`${this.#api}${path}`, { headers: { 'X-Jewelcase-Client': 'web' } }).catch(
-			() => null
-		);
+	/**
+	 * One request to the API, with `headers` besides the client's; null when it could not be made.
+	 * Nothing tries it again: what failed is asked for once the server is heard from.
+	 */
+	async #get(path: string, headers: Record<string, string> = {}): Promise<Response | null> {
+		return this.#fetch(`${this.#api}${path}`, {
+			headers: { 'X-Jewelcase-Client': 'web', ...headers }
+		}).catch(() => null);
 	}
 
 	/**
 	 * Starts a queue here at once, as a start from a view does (`design/queue.md` §3): the
 	 * queue is the new one, its source as long as the view says and with no list, the clicked row
-	 * playing, and the request goes to the server in the background, before anything else. The view's
-	 * own rows fill the unshuffled rows they cover. Answers false, changing nothing, if the
-	 * start is not a position of the source. The new queue keeps the confirmed queue's repeat
-	 * mode, as the server's does (`requirements/queue.md` §5); the latest repeat change not yet
-	 * confirmed is then made again on it, and sent after the start, so both end on that mode.
+	 * playing, and the start is given to the log, which sends it after everything made before it.
+	 * The edits made on the queue it replaces are not dropped: they are sent first, so the server
+	 * keeps that queue with them, as when they were sent before the start. The view's own rows fill
+	 * the unshuffled rows they cover. Answers false, changing nothing, if the start is not a
+	 * position of the source. The new queue keeps the repeat mode shown, as the server's takes the
+	 * active queue's (`requirements/queue.md` §5), which any repeat change unsent goes to first.
 	 * A start of a recipe is also resolved on the device (see `#attachResolved`); `offline` says
 	 * whether the app counts itself offline, and is not sent to the server.
 	 */
 	start({ total, loaded, offline, ...body }: StartRequest): boolean {
+		const args: StartArgs = { body, total, loaded };
+		if (!this.#begin(args, !!offline)) return false;
+		this.#enqueue({ name: 'startQueue', args });
+		this.#emit();
+		return true;
+	}
+
+	/**
+	 * Makes the start of `args` the queue shown, waiting for the server's answer; false, changing
+	 * nothing, if the start is not a position of its source. `replayed` for one shown again from the
+	 * log as the app opens.
+	 */
+	#begin(args: StartArgs, offline: boolean, replayed = false): boolean {
+		const { body, total, loaded } = args;
 		const { key, libraryId, tracks } = body.source;
 		const length = tracks?.length ?? total ?? 0;
 		// The core makes the state; it rounds what it is given, so a position it would not is refused here.
 		if (!Number.isInteger(body.start) || body.start < 0) return false;
 		let next: Queue;
 		try {
-			const repeat = this.#confirmed ? JSON.parse(this.#confirmed.toJson()).repeat : 'off';
+			const repeat = this.#view ? JSON.parse(this.#view.toJson()).repeat : 'off';
 			next = Queue.started(key, libraryId, length, body.start, repeat);
 		} catch {
 			return false;
@@ -371,19 +493,17 @@ export class QueueStore {
 		this.#problems.clear();
 		this.#pages.reset(body.queueId);
 		this.#viewRows.set(key, tracks ?? loaded ?? []);
-		const tapped = this.#pending.findLast((pending) => pending.edit.type === 'repeat');
-		this.#supersede((pending) => pending.edit.type !== 'repeat');
+		// The edits of the queue it replaces are not shown on the new one; the log still sends them.
 		this.#pending = [];
-		this.#starting = { body, total };
-		if (body.source.recipe)
-			void this.#attachResolved(key, libraryId, body.source.recipe, !!offline);
-		if (tapped) {
-			this.edit(tapped.edit);
-		} else {
-			this.#emit();
-			this.#drain();
-		}
+		this.#starting = { ...args, replayed };
+		if (body.source.recipe) void this.#attachResolved(key, libraryId, body.source.recipe, offline);
 		return true;
+	}
+
+	/** Gives `mutation` to the log, as this instance's own until it is settled. */
+	#enqueue(mutation: QueueMutation) {
+		this.#own.add(idOf(mutation));
+		this.#log.enqueue(mutation);
 	}
 
 	/**
@@ -466,26 +586,119 @@ export class QueueStore {
 	}
 
 	/**
-	 * Sends the start, again if the answer was lost. Its answer gives the list's hash: a start of
-	 * `tracks` attaches them under it, so they are never downloaded back, and a recipe's start
-	 * fetches the queue, since the server's list and start may differ from the view's. A start
-	 * the server refuses is gone, and the queue the server has is fetched.
+	 * Makes the kept queue `queueId` the account's active one (`POST /me/queues/{id}/restore`),
+	 * given to the log after what was made before it. Nothing shows until the server answers, since
+	 * only it holds the queue; the answer is then installed as a fetch's is, unless a start or
+	 * restore made since replaced it. Settles with where playback was left, or why the queue was not
+	 * restored; one restore at a time. Kept queues are the server's alone until devices keep them,
+	 * so with `offline` (the app counts itself offline) nothing is logged and it settles at once as
+	 * `offline`; one the page takes back from the log because the server could not be reached
+	 * settles as `unreachable` (`client.svelte.ts`).
 	 */
-	async #sendStart(starting: Starting) {
-		const { body } = starting;
-		const response = await this.#call('POST', '/me/queue', body);
-		if (this.#starting !== starting || !response) return;
-		if (!response.ok) {
-			const problem = await problemOf(response);
-			this.#starting = null;
-			this.#viewRows.clear();
-			this.#supersede((pending) => pending.queueId === body.queueId);
-			this.#refetch = true;
-			this.#refused({ code: problem.code, message: problem.message, edit: null });
+	restore(queueId: string, offline = false): Promise<RestoreResult> {
+		if (offline) {
+			const message = 'Kept queues can be restored once you’re back online.';
+			return Promise.resolve({ ok: false, code: 'offline', message });
+		}
+		if (this.#restores.size > 0) {
+			return Promise.resolve({ ok: false, code: 'busy', message: 'Another restore is under way.' });
+		}
+		// A fetch under way is of the queue this replaces.
+		const restoring: Restoring = { epoch: ++this.#epoch, settle: null };
+		this.#restores.set(queueId, restoring);
+		this.#enqueue({ name: 'restoreQueue', args: { queueId } });
+		return new Promise((settle) => (restoring.settle = settle));
+	}
+
+	/**
+	 * Applies `edit` here at once and gives it to the log with a fresh `editId`, which the server
+	 * applies once however many times it is sent. An edit the core refuses changes nothing and is
+	 * reported. An `add` of a `recipe` applies here as `length` rows, the count of the view it
+	 * comes from, which wait for the server's list or pages (`design/queue.md` §3); the server's
+	 * `queueEdit` gives the length it resolved. Without a length it is just sent, and shows when
+	 * that arrives. An `add` of a recipe is also resolved on the device (see `#resolveAdd`);
+	 * `offline` says whether the app counts itself offline, which lets a search be resolved there
+	 * too.
+	 */
+	edit(edit: SentEdit, length?: number, offline = false) {
+		if (!this.#view || !this.#queueId) {
+			this.#refused({ code: 'no_queue', message: 'There is no queue to change.', edit });
 			return;
 		}
-		const { list, length } = (await response.json()) as { list: string; length: number };
+		const local = localEdit(edit, length);
+		if (local) {
+			const next = this.#view === this.#confirmed ? this.#view.copy() : this.#view;
+			const code = applyTo(next, local);
+			if (code) {
+				if (next !== this.#view) next.free();
+				this.#refused({ code, message: `The queue refused this change (${code}).`, edit });
+				return;
+			}
+			this.#view = next;
+		}
+		const args: EditArgs = { editId: crypto.randomUUID(), queueId: this.#queueId, edit, length };
+		this.#pend(args, local, offline);
+		this.#enqueue({ name: 'editQueue', args });
+		this.#emit();
+	}
+
+	/**
+	 * Holds the edit of `args`, made here as `local`, as pending on the queue shown, and resolves an
+	 * `add` of a recipe on the device.
+	 */
+	#pend(args: EditArgs, local: QueueEdit | null, offline: boolean, replayed = false) {
+		const { editId, queueId, edit } = args;
+		const pending: Pending = { editId, queueId, edit, local, length: args.length, replayed };
+		this.#pending.push(pending);
+		if (edit.type === 'add' && edit.source.recipe) {
+			void this.#resolveAdd(pending, edit.source.libraryId, edit.source.recipe, offline);
+		}
+	}
+
+	// ── What the server answered ───────────────────────────────
+
+	/**
+	 * Takes in what became of a start, edit or restore the log held, as the page's sender heard it:
+	 * sent, with the server's answer, or dropped, with why. One this instance no longer shows, as
+	 * the start of a queue another start replaced, changes nothing here.
+	 */
+	settled(mutation: QueueMutation, outcome: Settled, result: Result) {
+		if (outcome === 'sent') this.#reached++;
+		const id = idOf(mutation);
+		this.#own.delete(id);
+		this.#replayed.delete(id);
+		if (mutation.name === 'startQueue') {
+			this.#started(mutation.args, outcome, result);
+		} else if (mutation.name === 'editQueue') {
+			this.#edited(mutation.args, outcome, result);
+		} else {
+			void this.#restored(mutation.args.queueId, outcome, result).finally(() => this.#drain());
+			return;
+		}
+		this.#drain();
+	}
+
+	/**
+	 * A start answered. Its answer gives the list's hash: a start of `tracks` attaches them under it,
+	 * so they are never downloaded back, and a recipe's start fetches the queue, since the server's
+	 * list and start may differ from the view's. A start the server refuses is gone, with the edits
+	 * made on it, and the queue the server has is fetched.
+	 */
+	#started(args: StartArgs, outcome: Settled, result: Result) {
+		const { body } = args;
+		const starting = this.#starting;
+		if (!starting || starting.body.queueId !== body.queueId) return;
 		this.#starting = null;
+		if (outcome !== 'sent') {
+			this.#viewRows.clear();
+			this.#pending = this.#pending.filter((pending) => pending.queueId !== body.queueId);
+			this.#refetch = true;
+			const { code = 'failed', message = '', dead } = result;
+			// One set aside was told by the log.
+			if (!dead) this.#refused({ code, message, edit: null });
+			return;
+		}
+		const { list, length } = result.answer as StartedQueue;
 		this.#emit();
 		const { key, libraryId, tracks } = body.source;
 		if (tracks) {
@@ -509,95 +722,221 @@ export class QueueStore {
 	}
 
 	/**
-	 * Makes the kept queue `queueId` the account's active one (`POST /me/queues/{id}/restore`).
-	 * It waits its turn after a start and the edits pending, and goes before a fetch, so an
-	 * unanswered start cannot replace it and no fetch runs beside it. Nothing shows until the
-	 * server answers, since only it holds the queue; the answer is then installed as a fetch's is,
-	 * and edits for the queue it replaced are dropped. The request is not retried, since a second
-	 * restore of the same queue is refused as active. Settles with where playback was left, or why
-	 * the queue was not restored; one restore at a time.
+	 * An edit answered: one sent has the version it made, and its add's list is kept under the hash
+	 * the server named, so a snapshot that has the add never downloads it back. One refused is taken
+	 * back and reported: `superseded` when another queue was active by then, which is then fetched.
 	 */
-	restore(queueId: string): Promise<RestoreResult> {
-		if (this.#restoring) {
-			return Promise.resolve({ ok: false, code: 'busy', message: 'Another restore is under way.' });
+	#edited({ editId }: EditArgs, outcome: Settled, result: Result) {
+		const pending = this.#pending.find((pending) => pending.editId === editId);
+		if (!pending) return;
+		if (outcome === 'sent') {
+			const applied = result.answer as AppliedEdit;
+			pending.version = applied.version;
+			const body = ownBody(pending, applied.source?.list);
+			if (applied.source?.list && body) void this.#lists.put(applied.source.list, body);
+			return;
 		}
-		return new Promise((settle) => {
-			this.#restoring = { queueId, settle };
-			void this.#drain();
-		});
+		this.#pending = this.#pending.filter((other) => other !== pending);
+		const { code = 'failed', message = '', dead } = result;
+		const replaced = code === 'queue_changed';
+		if (replaced || code === 'not_found') this.#refetch = true;
+		// One set aside was told by the log.
+		if (!dead) this.#drop(pending, replaced ? 'superseded' : code, message);
+		this.#rebuild();
 	}
 
-	/** Sends the restore and installs its answer; see [`restore`](#restore). A restore asked for meanwhile is `busy` until it is answered. */
-	async #sendRestore({ queueId, settle }: Restoring) {
+	/**
+	 * A restore answered: installed as a fetch's answer is, unless a start or restore made since it
+	 * was asked for replaced it, and settled for who waits. One taken back from the log is
+	 * `unreachable`. One this instance did not ask for, as one a closed tab left, has the queue
+	 * fetched.
+	 */
+	async #restored(queueId: string, outcome: Settled, result: Result) {
+		const restoring = this.#restores.get(queueId);
+		this.#restores.delete(queueId);
+		const settle = restoring?.settle ?? (() => {});
+		if (outcome === 'cancelled') {
+			this.#refetch = true;
+			return settle({
+				ok: false,
+				code: 'unreachable',
+				message: 'The server could not be reached.'
+			});
+		}
+		if (outcome !== 'sent') {
+			// Whether another queue is active now is the server's to say.
+			this.#refetch = true;
+			const { code = 'failed', message = 'That queue wasn’t restored.' } = result;
+			return settle({ ok: false, code, message });
+		}
+		if (!restoring) {
+			this.#refetch = true;
+			return;
+		}
+		if (restoring.epoch !== this.#epoch) {
+			return settle({ ok: false, code: 'superseded', message: 'Another queue replaced this one.' });
+		}
+		const { queue, run } = result.answer as { queue: RestoredQueue; run: string | null };
+		const epoch = ++this.#epoch;
+		this.#run = run ?? this.#run;
+		this.#startItem = null;
+		this.#viewRows.clear();
+		if (!(await this.#install(queue, epoch))) {
+			return settle({ ok: false, code: 'superseded', message: 'Another queue replaced this one.' });
+		}
+		// An edit heard before this was installed named another queue, so a fetch follows for it.
+		this.#caughtUp([]);
+		settle({ ok: true, position: queue.position ?? null });
+	}
+
+	// ── Kept for the next time the app opens ───────────────────────────
+
+	/**
+	 * Shows the queue as the app left it: the queue the account's record holds, which the server
+	 * confirmed, with the starts and edits of the log not yet sent on top, in the order they were
+	 * made, whichever tab made them (`#replay`). The server's queue replaces it as soon as it is
+	 * heard. Call it once, before the queue is used. Does nothing with no database, and one that
+	 * cannot be read leaves the queue to load from the server.
+	 */
+	async resume() {
+		const port = this.#port;
+		if (!port) return;
 		try {
-			const epoch = ++this.#epoch;
-			const path = `/me/queues/${encodeURIComponent(queueId)}/restore`;
-			const response = await this.#call('POST', path);
-			if (!response?.ok) {
-				if (!response) {
-					// Whether it was applied is not known: the queue is fetched to find out.
-					this.#refetch = true;
-					return settle({
-						ok: false,
-						code: 'unreachable',
-						message: 'The server could not be reached.'
-					});
-				}
-				const { code, message } = await problemOf(response);
-				return settle({ ok: false, code, message });
+			const [records, log] = await Promise.all([
+				port.all<QueueRecord>('queue'),
+				port.all<Mutation>('mutations')
+			]);
+			const record = records.find((record) => record.key === RECORD);
+			if (record?.state) await this.#show(record);
+			for (const mutation of log) {
+				const id = idOf(mutation as unknown as QueueMutation);
+				if (id) this.#replayed.add(id);
 			}
-			const restored = (await response.json()) as RestoredQueue;
-			this.#run = runOf(response.headers.get('ETag')) ?? this.#run;
-			this.#startItem = null;
-			this.#viewRows.clear();
-			if (!(await this.#install(restored, epoch))) {
-				return settle({
-					ok: false,
-					code: 'superseded',
-					message: 'Another queue replaced this one.'
-				});
+			this.#replay(log.sort((a, b) => a.seq - b.seq));
+			this.#rebuild();
+			// Any other record is one kept for an instance, which the account's one record replaces.
+			for (const { key, rev } of records)
+				if (key !== RECORD) await port.remove('queue', key, rev).catch(console.error);
+		} catch (error) {
+			console.error(error);
+		}
+	}
+
+	/** Makes the record's queue the confirmed one. */
+	async #show({ queueId, version, context, state, run }: QueueRecord) {
+		const snapshot = { queueId, version, context, state: JSON.parse(state!) } as QueueSnapshot;
+		if (await this.#install(snapshot, this.#epoch)) this.#run = run;
+	}
+
+	/**
+	 * Shows the starts and edits of the queue in `log`, in order, on top of the queue shown: a start
+	 * replaces it unless it is that queue, which the server then has, and an edit goes on the queue
+	 * it was made on, if that is the one shown. What a restore makes active only the server holds,
+	 * so the edits made on it show once it is fetched. Each stays in the log, to be sent by this tab
+	 * or another, and the queue is fetched only once all have left it (`#replayed`).
+	 */
+	#replay(log: Mutation[]) {
+		for (const { name, args } of log) {
+			if (name === 'startQueue') {
+				const start = args as StartArgs;
+				if (start.body.queueId !== this.#queueId) this.#begin(start, false, true);
+			} else if (name === 'editQueue') {
+				const edit = args as EditArgs;
+				if (edit.queueId !== this.#queueId) continue;
+				this.#pend(edit, localEdit(edit.edit, edit.length), false, true);
 			}
-			// An edit heard before this was installed named another queue, so a fetch follows for it.
-			this.#caughtUp([]);
-			settle({ ok: true, position: restored.position ?? null });
-		} finally {
-			this.#restoring = null;
 		}
 	}
 
 	/**
-	 * Applies `edit` here at once and sends it in the background, once, however many times the
-	 * send is tried: it carries a fresh `editId`. An edit the core refuses changes nothing and is
-	 * reported. An `add` of a `recipe` applies here as `length` rows, the count of the view it
-	 * comes from, which wait for the server's list or pages (`design/queue.md` §3); the server's
-	 * `queueEdit` gives the length it resolved. Without a length it is just sent, and shows when
-	 * that arrives. An `add` of a recipe is also resolved on the device, and its rows show from
-	 * that list at once (see `#resolveAdd`); `offline` says whether the app counts itself offline,
-	 * which lets a search be resolved there too.
+	 * Writes the queue the server confirmed to the database now, after any write already begun, and
+	 * settles once it is written or has failed. What the server has not answered is the log's to
+	 * keep, so a queue started here is not written until its start is answered. A queue that has not
+	 * changed since it was last written is not written again, so the record's time is that of its
+	 * last change. Nothing is written once the database is being wiped.
 	 */
-	edit(edit: SentEdit, length?: number, offline = false) {
-		if (!this.#view || !this.#queueId) {
-			this.#refused({ code: 'no_queue', message: 'There is no queue to change.', edit });
-			return;
-		}
-		const local = localEdit(edit, length);
-		if (local) {
-			const next = this.#view === this.#confirmed ? this.#view.copy() : this.#view;
-			const code = applyTo(next, local);
-			if (code) {
-				if (next !== this.#view) next.free();
-				this.#refused({ code, message: `The queue refused this change (${code}).`, edit });
-				return;
-			}
-			this.#view = next;
-		}
-		const pending: Pending = { editId: crypto.randomUUID(), queueId: this.#queueId, edit, local };
-		this.#pending.push(pending);
-		if (edit.type === 'add' && edit.source.recipe) {
-			void this.#resolveAdd(pending, edit.source.libraryId, edit.source.recipe, offline);
-		}
-		this.#emit();
-		this.#drain();
+	async save() {
+		const port = this.#port;
+		if (!port) return;
+		if (this.#starting || this.#signature() === this.#savedSignature)
+			return void (await this.#tail);
+		const record: QueueRecord = {
+			key: RECORD,
+			rev: crypto.randomUUID(),
+			owner: this.#instance,
+			createdAt: Date.now(),
+			tries: 0,
+			queueId: this.#queueId,
+			context: this.#context,
+			version: this.#version,
+			run: this.#run,
+			state: this.#confirmed?.toJson() ?? null
+		};
+		this.#savedSignature = this.#signature();
+		this.#tail = this.#tail
+			.then(async () => {
+				if (this.#wiped) return;
+				await port.put('queue', record);
+			})
+			.catch((error) => this.#unkept(error));
+		await this.#tail;
+	}
+
+	/**
+	 * The user's database is being deleted, as the account's session ended: nothing more is written,
+	 * and nothing more is fetched, since the next request may carry another account's session. A
+	 * restore waited for is settled. It does nothing more until it is replaced.
+	 */
+	#wipe() {
+		this.#wiped = true;
+		this.close();
+		this.#pending = [];
+		this.#starting = null;
+		this.#refetch = false;
+		this.#own.clear();
+		this.#replayed.clear();
+		for (const { settle } of this.#restores.values())
+			settle?.({ ok: false, code: 'unreachable', message: 'The session ended.' });
+		this.#restores.clear();
+	}
+
+	/** Lets go of the database: nothing more is written once writes already begun are done. */
+	close() {
+		this.#unwipe?.();
+		this.#unwipe = null;
+		const port = this.#port;
+		this.#port = null;
+		if (port) void this.#tail.then(() => port.close());
+	}
+
+	/**
+	 * What the queue is worth writing for: a change of this is a change of what a later instance
+	 * would show.
+	 */
+	#signature(): string {
+		const lists = this.#confirmed ? hashesOf(this.#confirmed).join() : '';
+		return [this.#queueId, this.#version, this.#run, lists].join('|');
+	}
+
+	/**
+	 * Writes the queue at once if it changed in a way a later instance would show; a change of rows
+	 * alone writes nothing.
+	 */
+	#changedForSave() {
+		if (this.#port && this.#signature() !== this.#savedSignature) void this.save();
+	}
+
+	/**
+	 * Tells the user, once, that this browser would not keep the queue; not as a refused edit, which
+	 * playback would answer to.
+	 */
+	#unkept(error: unknown) {
+		console.error(error);
+		if (this.#unkeptTold) return;
+		this.#unkeptTold = true;
+		this.#notice(
+			'This browser couldn’t keep your queue for later, so it is kept only while the app is open.'
+		);
 	}
 
 	/** Takes in what the server said over the realtime connection. */
@@ -612,12 +951,14 @@ export class QueueStore {
 				if (problem === 'failed') this.#problems.delete(hash);
 			}
 			this.#pages.retry();
+			this.#reached++;
 			this.#refetch = true;
 			this.#drain();
 			this.#sync();
 		} else if (message.type === 'queueReplaced') {
-			// A fetch under way may answer with the queue this replaces, so it is fetched again.
-			if (this.#held || message.queueId !== this.#queueId) {
+			// A fetch under way may answer with the queue this replaces, so it is fetched again. One
+			// shown from the log is fetched too: another tab's start of it may be what was heard.
+			if (this.#held || message.queueId !== this.#queueId || this.#replayed.size > 0) {
 				this.#refetch = true;
 				this.#drain();
 			}
@@ -790,6 +1131,7 @@ export class QueueStore {
 			shuffled: !!state?.shuffle
 		});
 		this.#sync();
+		this.#changedForSave();
 	}
 
 	/**
@@ -923,75 +1265,50 @@ export class QueueStore {
 		return true;
 	}
 
-	/** Sends and fetches what is waiting, one request at a time, so the server hears edits in order. */
+	/**
+	 * Fetches the queue while it is due: once every start, edit and restore this instance gave the
+	 * log is settled, and every one the log held as the app opened has left it, so the server's queue
+	 * holds them; and not again after a fetch that failed until the server is heard from. Asked for
+	 * while it runs, it looks again once done.
+	 */
 	async #drain() {
-		if (this.#draining) return;
+		if (this.#draining) {
+			this.#drainAgain = true;
+			return;
+		}
 		this.#draining = true;
 		try {
-			// Decided and cleared with no wait between, so what arrives meanwhile is never missed.
-			for (let work = this.#next(); work; work = this.#next()) await work();
+			do {
+				this.#drainAgain = false;
+				while (
+					!this.#wiped &&
+					this.#refetch &&
+					this.#own.size === 0 &&
+					this.#failedAt !== this.#reached
+				) {
+					// Checked only while there is something to check, so a fetch otherwise leaves at once.
+					if (this.#replayed.size > 0 && !(await this.#replayedSent())) break;
+					await this.#fetchQueue();
+				}
+			} while (this.#drainAgain);
 		} finally {
 			this.#draining = false;
 		}
 	}
 
 	/**
-	 * The next thing waiting, or null: the start, an edit, a restore, then a fetch. Edits go before the fetch so each is
-	 * answered, or known unsent, by the time the snapshot is installed.
+	 * Whether every start, edit and restore the log held as the app opened has left it, sent or
+	 * dropped by whichever tab. A database that cannot be read counts as none left, so it does not hold the fetch back.
 	 */
-	#next(): (() => Promise<void>) | null {
-		const starting = this.#starting;
-		if (starting) return () => this.#sendStart(starting);
-		const edit = this.#pending.find((pending) => pending.version === undefined);
-		if (edit) return () => this.#sendEdit(edit);
-		const restoring = this.#restoring;
-		if (restoring) return () => this.#sendRestore(restoring);
-		return this.#refetch ? () => this.#fetchQueue() : null;
-	}
-
-	/** One request to the API; null when it could not be made, or the server was too busy or broken. */
-	async #call(
-		method: 'GET' | 'POST',
-		path: string,
-		body?: object,
-		extra: Record<string, string> = {}
-	): Promise<Response | null> {
-		const headers: Record<string, string> = { 'X-Jewelcase-Client': 'web', ...extra };
-		if (body) headers['Content-Type'] = 'application/json';
-		const response = await this.#fetch(`${this.#api}${path}`, {
-			method,
-			headers,
-			body: body && JSON.stringify(body)
-		}).catch(() => null);
-		if (response && response.status < 500 && response.status !== 429) {
-			return response;
+	async #replayedSent(): Promise<boolean> {
+		try {
+			const log = await this.#port!.all<Mutation>('mutations');
+			const left = new Set(log.map((mutation) => idOf(mutation as unknown as QueueMutation)));
+			for (const id of this.#replayed) if (!left.has(id)) this.#replayed.delete(id);
+		} catch {
+			this.#replayed.clear();
 		}
-		await new Promise((resolve) => setTimeout(resolve, this.#retryMs));
-		return null;
-	}
-
-	/** Sends one edit, again with the same `editId` if the answer was lost. */
-	async #sendEdit(pending: Pending) {
-		const response = await this.#call('POST', '/me/queue/edits', {
-			editId: pending.editId,
-			queueId: pending.queueId,
-			edit: pending.edit
-		});
-		if (!response || !this.#pending.includes(pending)) return;
-		if (response.ok) {
-			const applied = (await response.json()) as { version: number; source?: { list?: string } };
-			pending.version = applied.version;
-			// Kept under the hash it names, so a snapshot that has the add never downloads it back.
-			const body = ownBody(pending, applied.source?.list);
-			if (applied.source?.list && body) void this.#lists.put(applied.source.list, body);
-			return;
-		}
-		const problem = await problemOf(response);
-		this.#pending = this.#pending.filter((other) => other !== pending);
-		const replaced = problem.code === 'queue_changed';
-		if (replaced || response.status === 404) this.#refetch = true;
-		this.#drop(pending, replaced ? 'superseded' : problem.code, problem.message);
-		this.#rebuild();
+		return this.#replayed.size === 0;
 	}
 
 	/**
@@ -1005,19 +1322,19 @@ export class QueueStore {
 		// Held until the snapshot is installed, which can wait for stored lists.
 		const held: QueueEditMessage[] = (this.#held = []);
 		let settle = false;
+		const reached = this.#reached;
 		try {
-			const response = await this.#call(
-				'GET',
+			const response = await this.#get(
 				'/me/queue',
-				undefined,
 				this.#run !== null && this.#queueId
 					? { 'If-None-Match': `"${this.#run}.${this.#queueId}.${this.#version}"` }
 					: {}
 			);
 			// A start meanwhile made this the queue of another, which is not to replace it.
 			if (epoch !== this.#epoch) return;
-			if (!response) {
+			if (!response || response.status >= 500 || response.status === 429) {
 				this.#refetch = true;
+				this.#failedAt = reached;
 				return;
 			}
 			this.#run = runOf(response.headers.get('ETag')) ?? this.#run;
@@ -1045,7 +1362,8 @@ export class QueueStore {
 		this.#problems.clear();
 		this.#pages.reset(null);
 		void this.#lists.keep(new Set());
-		this.#supersede(() => true);
+		this.#pending = [];
+		this.#starting = null;
 		this.#emit();
 	}
 
@@ -1089,17 +1407,20 @@ export class QueueStore {
 		this.#queueId = queueId;
 		this.#context = context;
 		this.#version = version;
-		this.#supersede((pending) => pending.queueId !== queueId);
-		return true;
-	}
-
-	/** Drops the pending edits `gone` picks, saying a new queue replaced them. */
-	#supersede(gone: (pending: Pending) => boolean) {
+		// The server's queue is what it has, and what one shown again from the log changed shows once
+		// the server has it. An edit made here for another queue, not answered, will be refused.
 		this.#pending = this.#pending.filter((pending) => {
-			if (!gone(pending)) return true;
-			this.#drop(pending, 'superseded', 'A new queue replaced this change.');
+			if (pending.queueId === queueId && !pending.replayed) return true;
+			if (pending.queueId !== queueId && !pending.replayed && pending.version === undefined)
+				this.#drop(
+					pending,
+					'superseded',
+					'A different queue was started, so this change did not apply.'
+				);
 			return false;
 		});
+		if (this.#starting?.replayed || this.#starting?.body.queueId !== queueId) this.#starting = null;
+		return true;
 	}
 
 	/**
@@ -1125,6 +1446,17 @@ export class QueueStore {
 	}
 }
 
+/**
+ * How a start, edit or restore is named in `#own` and `#replayed`: `start:`, `edit:` or `restore:`
+ * and its ID; empty for any other mutation.
+ */
+function idOf({ name, args }: QueueMutation): string {
+	if (name === 'startQueue') return `start:${args.body.queueId}`;
+	if (name === 'editQueue') return `edit:${args.editId}`;
+	if (name === 'restoreQueue') return `restore:${args.queueId}`;
+	return '';
+}
+
 /** Applies `edit` to `queue`; the core's refusal code if it refuses, `invalid` for a malformed edit. */
 function applyTo(queue: Queue, edit: QueueEdit): string | undefined {
 	try {
@@ -1145,15 +1477,6 @@ function localEdit(edit: SentEdit, length?: number): QueueEdit | null {
 	const count = recipe ? length : tracks?.length;
 	if (!count) return null;
 	return { ...edit, source: { key, libraryId, length: count } };
-}
-
-/** The reason the server refused a request. */
-async function problemOf(response: Response): Promise<{ code: string; message: string }> {
-	const problem: ProblemBody = await response.json().catch(() => null);
-	return {
-		code: problem?.code ?? 'failed',
-		message: problem?.detail ?? problem?.title ?? response.statusText
-	};
 }
 
 /** The run part of an `ETag`, `"<run>.<queueId>.<version>"`, or `null` without one. */

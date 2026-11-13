@@ -3,22 +3,19 @@
 // (`design/general.md` §7.1).
 
 import { redirect } from '@sveltejs/kit';
+import { connectivity } from '$lib/connectivity.svelte';
+import { gated } from '$lib/gated-fetch';
 import { catalog } from '$lib/catalog/client.svelte';
 import { type LastKnown, lastKnown, owner, remember } from '$lib/last-known';
-import {
-	knownOffline,
-	offline,
-	read,
-	readSearch,
-	unavailableIfOffline,
-	unreachable
-} from '$lib/catalog/read';
+import { read, readSearch, unavailableIfNotOnline, unreachable } from '$lib/catalog/read';
 import { API, ApiError, loginUrl } from './root';
 import type {
 	Album,
 	AlbumPage,
+	AppliedEdit,
 	Artist,
 	ArtistPage,
+	EditQueue,
 	ImageRef,
 	KeptQueue,
 	Library,
@@ -33,11 +30,14 @@ import type {
 	PlaylistItemPage,
 	PlaylistPage,
 	RecentSearch,
+	RestoredQueue,
 	Scan,
 	SearchResponse,
 	ServerInfo,
 	Session,
 	SetupRequest,
+	StartQueue,
+	StartedQueue,
 	Tag,
 	TagPage,
 	TagType,
@@ -105,9 +105,29 @@ async function body<T>(res: Response): Promise<T> {
 	return res.json();
 }
 
-/** A GET of `path` at the server, rejecting as unavailable offline when the request cannot be sent. */
+/**
+ * `fetch`, or a failure as with no network while the device is offline or working offline. Any
+ * answer below 500 returns connectivity to online; a request that fails to get one makes it
+ * unreachable.
+ */
+const request = async (fetch: Fetch, input: string, init?: RequestInit) => {
+	try {
+		const response = await gated(() => connectivity.blocked, fetch)(input, init);
+		// A 5xx, such as a proxy's 502, is not the server answering.
+		if (response.status < 500) connectivity.reach();
+		return response;
+	} catch (error) {
+		if (error instanceof TypeError && !connectivity.blocked) connectivity.lose();
+		throw error;
+	}
+};
+
+/**
+ * A GET of `path` at the server, rejecting as unavailable when the request cannot be sent and the
+ * device is not online.
+ */
 const get = async <T>(fetch: Fetch, path: string, query?: Query): Promise<T> =>
-	body(await fetch(url(path, query)).catch(unavailableIfOffline));
+	body(await request(fetch, url(path, query)).catch(unavailableIfNotOnline));
 
 /**
  * A state-changing request, with a JSON body or a file. Cookie-authenticated writes must
@@ -131,23 +151,45 @@ async function send<T>(
 		headers['Content-Type'] = 'application/json';
 		payload = JSON.stringify(json);
 	}
-	return body(await fetch(url(path), { method, headers, body: payload }));
+	return body(await request(fetch, url(path), { method, headers, body: payload }));
 }
 
+/** How long the layout waits for the server before starting with what was kept. */
+const KEPT_WAIT_MS = 3000;
+
 /**
- * `answer`, kept for the next start with no network; with the server unreachable, what was kept
- * of `key` instead, if anything. Only the layout's own reads use it, so the app can start offline.
+ * The server did not answer a kept read in time and has not answered since, so the start does not
+ * wait for it again.
  */
-const kept = <K extends keyof LastKnown>(key: K, answer: Promise<NonNullable<LastKnown[K]>>) =>
-	answer.then(
-		(value) => (remember({ [key]: value }), value),
+let hanging = false;
+
+/**
+ * `answer`, kept for the next start with no network; with the server unreachable, or not
+ * answering within `KEPT_WAIT_MS` (once, not for each read), what was kept of `key` instead, if
+ * anything. Only the layout's own reads use it, so the app can start offline.
+ */
+const kept = <K extends keyof LastKnown>(key: K, answer: Promise<NonNullable<LastKnown[K]>>) => {
+	const known = lastKnown()[key];
+	const settled = answer.then(
+		(value) => ((hanging = false), remember({ [key]: value }), value),
 		(error) => {
-			const value = lastKnown()[key];
-			if (value && unreachable(error)) return value;
+			if (known && unreachable(error)) return known;
 			throw error;
 		}
 	);
+	if (!known) return settled;
+	if (hanging) {
+		settled.catch(() => {});
+		return Promise.resolve(known);
+	}
+	let timer: ReturnType<typeof setTimeout>;
+	const slow = new Promise<typeof known>(
+		(resolve) => (timer = setTimeout(() => ((hanging = true), resolve(known)), KEPT_WAIT_MS))
+	);
+	return Promise.race([settled, slow]).finally(() => clearTimeout(timer));
+};
 
+/** The server's public details; kept for starting offline. */
 export const getServerInfo = (f: Fetch) => kept('server', get<ServerInfo>(f, '/server'));
 
 /** Creates the owner and logs this browser in: the server sets the session cookie. */
@@ -166,9 +208,36 @@ export const listKeptQueues = (f: Fetch, cursor?: string) =>
 	get<{ items: KeptQueue[]; nextCursor: string | null }>(f, '/me/queues', { cursor });
 
 /** Deletes a kept queue; the active queue is refused with `queue_active`. */
-export const deleteKeptQueue = (f: Fetch, queueId: string) =>
-	send<void>(f, 'DELETE', `/me/queues/${encodeURIComponent(queueId)}`);
+export const deleteKeptQueue = (f: Fetch, queueId: string, idempotencyKey?: string) =>
+	send<void>(f, 'DELETE', `/me/queues/${encodeURIComponent(queueId)}`, undefined, idempotencyKey);
 
+/** Starts a queue as the account's active one, parking the one it replaces; answers its list. */
+export const startQueue = (f: Fetch, start: StartQueue, idempotencyKey?: string) =>
+	send<StartedQueue>(f, 'POST', '/me/queue', start, idempotencyKey);
+
+/** Applies an edit to the active queue `queueId`; answers the version it made. */
+export const editQueue = (f: Fetch, edit: EditQueue, idempotencyKey?: string) =>
+	send<AppliedEdit>(f, 'POST', '/me/queue/edits', edit, idempotencyKey);
+
+/**
+ * Makes the kept queue `queueId` the active one; answers it, and the run its `ETag` names
+ * (`"<run>.<queueId>.<version>"`), which a later fetch of the queue asks with.
+ */
+export async function restoreKeptQueue(
+	f: Fetch,
+	queueId: string,
+	idempotencyKey?: string
+): Promise<{ queue: RestoredQueue; run: string | null }> {
+	const headers: Record<string, string> = { 'X-Jewelcase-Client': 'web' };
+	if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+	const path = `/me/queues/${encodeURIComponent(queueId)}/restore`;
+	const response = await request(f, url(path), { method: 'POST', headers });
+	const queue = await body<RestoredQueue>(response);
+	const run = response.headers.get('ETag')?.replace(/^"/, '').split('.')[0] || null;
+	return { queue, run };
+}
+
+/** The signed-in user; kept for starting offline. */
 export const getMe = (f: Fetch) => kept('me', get<User>(f, '/me'));
 
 /** Records plays. With `keepalive`, the request outlives the page, for one closing. */
@@ -197,6 +266,7 @@ const device = <T>(
 	return fresh ? server() : read<T>(name, libraryId, { ...ids, ...query }, server);
 };
 
+/** The libraries the user can reach; kept for starting offline. */
 export const listLibraries = (f: Fetch) =>
 	kept('libraries', get<{ items: Library[] }>(f, '/libraries'));
 
@@ -223,18 +293,20 @@ export const listTracks = (f: Fetch, libraryId: string, query: Query = {}) =>
  * The tracks `ids` names that `libraryId` holds, in the order named; an ID the library does not
  * hold is left out. At most 100, and never none: with no `ids` the endpoint lists the library.
  * A device that answers fewer than asked may not have synced the rest yet, so while online the
- * server answers the batch instead.
+ * server answers the batch instead. With `fresh`, the server alone answers: for the server's
+ * word on a track, which the device may hold stale until its catch-up finishes.
  */
-export const getTracksByIds = async (f: Fetch, libraryId: string, ids: string[]) => {
+export const getTracksByIds = async (f: Fetch, libraryId: string, ids: string[], fresh = false) => {
 	let fromServer = false;
 	const server = () => {
 		fromServer = true;
 		return get<TrackPage>(f, `${lib(libraryId)}/tracks`, { ids: ids.join(',') });
 	};
+	if (fresh) return server();
 	const page = await read<TrackPage>('listTracksByIds', libraryId, { ids: ids.join(',') }, server);
-	if (fromServer || page.items.length >= new Set(ids).size || knownOffline()) return page;
+	if (fromServer || page.items.length >= new Set(ids).size || connectivity.blocked) return page;
 	return server().catch((error) => {
-		if (offline() && unreachable(error)) return page;
+		if (connectivity.state !== 'online' && unreachable(error)) return page;
 		throw error;
 	});
 };
@@ -253,25 +325,44 @@ export const getTrack = (f: Fetch, libraryId: string, trackId: string) =>
 const track = (libraryId: string, trackId: string) =>
 	`${lib(libraryId)}/tracks/${encodeURIComponent(trackId)}`;
 
-/** Puts the track at the top of the caller's Liked Songs, and unhides it (`requirements/playlists.md` §11). */
-export const likeTrack = (f: Fetch, libraryId: string, trackId: string) =>
-	send<void>(f, 'PUT', `${track(libraryId, trackId)}/like`);
+/**
+ * Puts the track at the top of the caller's Liked Songs, and unhides it (`requirements/playlists.md`
+ * §11). `likedId` is the ID Liked Songs is made under if the like has to make it again, as the
+ * device made it. `key` is the request's idempotency key.
+ */
+export const likeTrack = (
+	f: Fetch,
+	libraryId: string,
+	trackId: string,
+	likedId?: string,
+	key?: string
+) =>
+	send<void>(
+		f,
+		'PUT',
+		`${track(libraryId, trackId)}/like${likedId ? `?likedId=${encodeURIComponent(likedId)}` : ''}`,
+		undefined,
+		key
+	);
 
 /** Takes the track out of the caller's Liked Songs; one not liked is already so. */
-export const unlikeTrack = (f: Fetch, libraryId: string, trackId: string) =>
-	send<void>(f, 'DELETE', `${track(libraryId, trackId)}/like`);
+export const unlikeTrack = (f: Fetch, libraryId: string, trackId: string, key?: string) =>
+	send<void>(f, 'DELETE', `${track(libraryId, trackId)}/like`, undefined, key);
 
 /** Hides the track from the caller's library, and unlikes it (`requirements/conventions.md` §8). */
-export const hideTrack = (f: Fetch, libraryId: string, trackId: string) =>
-	send<void>(f, 'PUT', `${track(libraryId, trackId)}/hidden`);
+export const hideTrack = (f: Fetch, libraryId: string, trackId: string, key?: string) =>
+	send<void>(f, 'PUT', `${track(libraryId, trackId)}/hidden`, undefined, key);
 
 /** Brings the track back into the caller's library; one not hidden is already so. */
-export const unhideTrack = (f: Fetch, libraryId: string, trackId: string) =>
-	send<void>(f, 'DELETE', `${track(libraryId, trackId)}/hidden`);
+export const unhideTrack = (f: Fetch, libraryId: string, trackId: string, key?: string) =>
+	send<void>(f, 'DELETE', `${track(libraryId, trackId)}/hidden`, undefined, key);
 
-/** Hidden Songs: the tracks the caller hid, newest first, a page at a time. */
-export const listHiddenTracks = (f: Fetch, libraryId: string, query: Query = {}) =>
-	device<TrackPage>(f, 'listHiddenTracks', libraryId, '/hidden-tracks', query);
+/**
+ * Hidden Songs: the tracks the caller hid, newest first, a page at a time. With `fresh`, from the
+ * server alone.
+ */
+export const listHiddenTracks = (f: Fetch, libraryId: string, query: Query = {}, fresh = false) =>
+	device<TrackPage>(f, 'listHiddenTracks', libraryId, '/hidden-tracks', query, {}, fresh);
 
 /** A page of the library's artists. */
 export const listArtists = (f: Fetch, libraryId: string, query: Query = {}) =>
@@ -342,8 +433,9 @@ export const editPlaylist = (
 	key: string = crypto.randomUUID()
 ) => send<Playlist>(f, 'PATCH', playlist(libraryId, playlistId), edit, key);
 
-export const deletePlaylist = (f: Fetch, libraryId: string, playlistId: string) =>
-	send<void>(f, 'DELETE', playlist(libraryId, playlistId));
+/** Deletes the playlist. To retry, pass the first attempt's `key`. */
+export const deletePlaylist = (f: Fetch, libraryId: string, playlistId: string, key?: string) =>
+	send<void>(f, 'DELETE', playlist(libraryId, playlistId), undefined, key);
 
 /** Which of the tracks `items` stand for are already in the playlist, to warn before adding. */
 export const checkPlaylistDuplicates = (
@@ -422,7 +514,10 @@ export async function getWaveform(
 	libraryId: string,
 	trackId: string
 ): Promise<Waveform | null> {
-	const res = await f(url(`${lib(libraryId)}/tracks/${encodeURIComponent(trackId)}/waveform`));
+	const res = await request(
+		f,
+		url(`${lib(libraryId)}/tracks/${encodeURIComponent(trackId)}/waveform`)
+	);
 	if (res.status === 204 || !res.ok) return null;
 	return res.json();
 }

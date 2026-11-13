@@ -62,6 +62,19 @@ export async function imageCacheSize(user: string): Promise<{ count: number; byt
 }
 
 /**
+ * A URL for the image at `url` kept for `user`, or null if it is not kept: the way to show art
+ * without a request while the device works offline. The caller revokes the URL when done with it.
+ */
+export async function keptImageUrl(user: string, url: string): Promise<string | null> {
+	try {
+		const hit = await (await caches.open(imageCache(user))).match(url);
+		return hit ? URL.createObjectURL(await hit.blob()) : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
  * Deletes every account's kept images: the next person to sign in must not see the last one's art.
  */
 export async function clearImageCache() {

@@ -6,6 +6,7 @@ import {
 	logoutPending,
 	owner,
 	remember,
+	rememberDevice,
 	setLogoutPending
 } from './last-known';
 
@@ -49,6 +50,7 @@ describe('what the device keeps of who is signed in', () => {
 		remember({ server: { setupRequired: false } as never, me: { id: '1' } as never });
 		remember({ me: { id: '2' } as never });
 		claim('1');
+		rememberDevice('1', ['a']);
 
 		forget();
 

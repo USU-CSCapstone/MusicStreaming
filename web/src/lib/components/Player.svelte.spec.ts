@@ -5,7 +5,7 @@ import { render } from 'vitest-browser-svelte';
 const fake = vi.hoisted(() => ({
 	queue: { queueId: 'q' as string | null, shuffled: false, repeat: 'off' as 'off' | 'all' | 'one' },
 	player: { setShuffle: vi.fn(), setRepeat: vi.fn() },
-	realtime: { connected: true, offline: false, on: () => () => {} },
+	realtime: { connected: true, on: () => () => {} },
 	playback: {
 		elsewhere: false,
 		deviceName: 'Desk',
@@ -37,6 +37,8 @@ vi.mock('$lib/playback.svelte', () => ({ playback: fake.playback }));
 vi.mock('$lib/controls.svelte', () => ({ controls: fake.controls }));
 vi.mock('$lib/player.svelte', () => ({ player: fake.player }));
 vi.mock('$lib/queue/client.svelte', () => ({ queue: fake.queue }));
+
+import { connectivity } from '$lib/connectivity.svelte';
 
 const { default: Player } = await import('./Player.svelte');
 
@@ -84,14 +86,15 @@ describe('Player.svelte', () => {
 
 	it('says where playback is as the device list does, through a blip in the connection', async () => {
 		Object.assign(fake.controls, { stopped: false });
-		Object.assign(fake.realtime, { connected: false, offline: false });
+		Object.assign(fake.realtime, { connected: false });
+		connectivity.reach();
 		render(Player);
 		await expect.element(page.getByText('On Desk', { exact: true })).toBeVisible();
-		fake.realtime.offline = true;
-		render(Player);
+		connectivity.lose();
 		await expect.element(page.getByText('Last on Desk')).toBeVisible();
 		Object.assign(fake.controls, { stopped: true });
-		Object.assign(fake.realtime, { connected: true, offline: false });
+		Object.assign(fake.realtime, { connected: true });
+		connectivity.reach();
 	});
 
 	it('says why a command failed with nothing playing here', async () => {
