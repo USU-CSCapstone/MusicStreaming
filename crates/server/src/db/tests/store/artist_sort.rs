@@ -196,3 +196,66 @@ fn an_untagged_own_album_counts_once_against_an_artist_sort_tag() {
     check(&store, "the scan");
     assert_eq!(artist_key(&store, "Ludwig van Beethoven"), b"beethoven, ludwig van");
 }
+
+/// The sort keys a track's device row carries, `(artist, album)`, and its feed position.
+fn track_row(store: &SqliteStore, title: &'static str) -> (Vec<u8>, Vec<u8>, i64) {
+    let sql = "SELECT t.artist_sort_key, t.album_sort_key, c.seq FROM tracks t \
+               JOIN library_changes c ON c.entity_type = 'track' AND c.entity_id = t.id \
+               WHERE t.title = ?1";
+    store
+        .db()
+        .read_blocking(move |conn| {
+            conn.query_row(sql, [title], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        })
+        .unwrap()
+}
+
+/// Applies `edit` to the records of tracks `ids`, as retagged files of tracks already stored.
+fn retag(store: &SqliteStore, root: &Path, ids: &[usize], edit: impl Fn(&mut TrackRecord)) {
+    let stored = store.inspect_tracks(1);
+    let upserts = ids
+        .iter()
+        .map(|&i| {
+            let mut rec = track(root, i, "artist 0");
+            edit(&mut rec);
+            rec.id = stored.iter().find(|t| t.path == rec.path).map(|t| t.id);
+            rec
+        })
+        .collect();
+    store.apply(1, Batch { upserts, ..Batch::default() }).unwrap();
+}
+
+/// A track the batch did not touch, whose copied artist sort key changed with its artist's, is
+/// on the change feed again, since the device sorts by the key its row carries.
+#[test]
+fn an_untouched_track_following_its_artists_sort_key_is_a_feed_change() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    let store = make(&root);
+    let first = [0, 1, 10].map(|i| track(&root, i, "artist 0")).to_vec();
+    store.apply(1, Batch { upserts: first, ..Batch::default() }).unwrap();
+    let before = track_row(&store, "Track 10");
+
+    retag(&store, &root, &[0, 1], |rec| rec.sort.artist = "zero".into());
+    let after = track_row(&store, "Track 10");
+    assert_eq!(after.0, b"zero");
+    assert!(after.2 > before.2, "its feed position did not move: {before:?} -> {after:?}");
+}
+
+/// The same for a track following its album's sort key, which a trigger copies to every track
+/// of the album when a retagged track gives it the lowest key.
+#[test]
+fn an_untouched_track_following_its_albums_sort_key_is_a_feed_change() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    let store = make(&root);
+    let first = [0, 1, 2].map(|i| track(&root, i, "artist 0")).to_vec();
+    store.apply(1, Batch { upserts: first, ..Batch::default() }).unwrap();
+    let before = track_row(&store, "Track 2");
+    assert_eq!(before.1, b"album 0");
+
+    retag(&store, &root, &[0], |rec| rec.sort.album = "aaa".into());
+    let after = track_row(&store, "Track 2");
+    assert_eq!(after.1, b"aaa");
+    assert!(after.2 > before.2, "its feed position did not move: {before:?} -> {after:?}");
+}

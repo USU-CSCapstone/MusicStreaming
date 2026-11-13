@@ -6,12 +6,14 @@ use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, post, put};
 use tower_http::compression::CompressionLayer;
 
-use crate::api::{AppState, connections, devices, me, player, plays, queue};
+use crate::api::{AppState, account_changes, connections, devices, me, player, plays, queue};
 
 /// Every route under `/me`.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/me", get(me::get))
+        // Rows repeat the same few names, so a page is gzipped like the library's feed.
+        .route("/me/changes", get(account_changes::list).layer(CompressionLayer::new()))
         .route("/me/devices", get(devices::list))
         .route("/me/player", get(player::get))
         .route("/me/player/commands", post(player::send_command))
@@ -30,11 +32,9 @@ pub fn router() -> Router<AppState> {
         .route("/me/queue/lists/{hash}", get(queue::get_list).layer(CompressionLayer::new()))
         .route("/me/queue/rows", get(queue::get_rows))
         .route("/me/queues", get(queue::list))
-        .route(
-            "/me/queues/{queue_id}/restore",
-            // The answer is a snapshot, gzipped as `GET /me/queue` is.
-            post(queue::restore).layer(CompressionLayer::new()),
-        )
+        // Not gzipped: the idempotency layer stores the answer as the handler made it, and a
+        // compressed body has no size it can know.
+        .route("/me/queues/{queue_id}/restore", post(queue::restore))
         .route("/me/queues/{queue_id}", delete(queue::delete))
         .route("/me/plays", post(plays::record))
         .route("/me/plugins", get(connections::list))

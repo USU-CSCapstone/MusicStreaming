@@ -25,6 +25,7 @@ mod reenabling;
 mod reinstall;
 mod scans;
 mod searches;
+mod seen;
 mod turns;
 
 /// A plugin's answer to an event it handled.

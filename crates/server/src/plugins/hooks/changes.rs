@@ -1,5 +1,6 @@
 //! What `tracksChanged`, `albumsChanged`, `artistsChanged`, and `scanFinished` deliver: changes
-//! from the library change feed (`0004_feeds.sql`), and finished scans.
+//! from the library change feed (`0004_feeds.sql`) at the positions plugins see
+//! (`0010_plugin_changes.sql`), and finished scans.
 
 use jewelcase_plugins::{Changes, Event, ScanFinished};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -19,7 +20,8 @@ pub fn changed(
 }
 
 /// The next batch of changes to `library`'s entities of type `entity` (`track`, `album`, or
-/// `artist`) after `position`: the position after it, and the IDs it names, if there are any.
+/// `artist`) after `position` that changed what plugins see of them: the position after it, and
+/// the IDs it names, if there are any.
 pub fn batch(
     conn: &Connection,
     library: i64,
@@ -28,8 +30,9 @@ pub fn batch(
 ) -> rusqlite::Result<(i64, Option<Changes>)> {
     let rows: Vec<(i64, u64, String)> = conn
         .prepare_cached(
-            "SELECT seq, entity_id, op FROM library_changes \
-             WHERE library_id = ?1 AND entity_type = ?2 AND seq > ?3 ORDER BY seq LIMIT ?4",
+            "SELECT plugin_seq, entity_id, op FROM library_changes \
+             WHERE library_id = ?1 AND entity_type = ?2 AND plugin_seq > ?3 \
+             ORDER BY plugin_seq LIMIT ?4",
         )?
         .query_map(params![library, entity, position, BATCH], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?))

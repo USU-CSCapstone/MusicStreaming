@@ -3,14 +3,16 @@
 //! Devices send edits that name items, so the server applies them in the order they arrive
 //! (`design/queue.md` §9). An edit is applied through the shared core under the account's lock,
 //! which bumps the version by one and sends the edit, as applied, to every connection of the
-//! account. The server keeps the `editId`s of the latest edits, so one sent again is applied
-//! once and answered the same.
+//! account. An edit sent again is applied once and answered the same by the idempotency layer
+//! (`api/idempotency.rs`), under its `Idempotency-Key` or, when it sends none, its `editId`.
 
 use std::fmt;
 use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
+use axum::http::HeaderMap;
+use axum::response::{IntoResponse, Response};
 use jewelcase_core::{Anchor, Edit, ItemId, PlayRef, QueueError, Source};
 use serde::Deserialize;
 use serde::de::{self, Deserializer, Visitor};
@@ -18,12 +20,11 @@ use serde_json::value::RawValue;
 
 use super::small;
 use super::start::{NewSource, Resolved};
-use crate::api::realtime::{Hub, ServerMessage};
+use crate::api::idempotency;
+use crate::api::realtime::ServerMessage;
 use crate::api::scope::Caller;
-use crate::api::search::Indexes;
-use crate::api::{Code, Problem, Uuid, extract};
-use crate::db::Database;
-use crate::queue::{Added, Applied, EditError, Queues, list_hash};
+use crate::api::{AppState, Code, Problem, Uuid, extract};
+use crate::queue::{Added, Applied, EditError, list_hash};
 
 /// The spec's `EditQueue`.
 #[derive(Deserialize)]
@@ -124,15 +125,32 @@ struct Add {
 /// names. `404` without a queue, `409` if `queueId` is not the active queue or an anchor or the
 /// play a `rewind` names is gone, `422` for tracks out of reach or not in the library, a key
 /// that is not a UUID or already in use, an anchor or recipe over 4 KiB, any edit but those
-/// four over 4 KiB, or an edit the core refuses.
+/// four over 4 KiB, or an edit the core refuses. An edit
+/// sent again is answered as the first was, even if its source is gone: under its
+/// `Idempotency-Key`, and with none under its `editId`.
 pub async fn edit(
-    State(db): State<Arc<Database>>,
-    State(queues): State<Arc<Queues>>,
-    State(indexes): State<Arc<Indexes>>,
-    State(hub): State<Arc<Hub>>,
+    State(state): State<AppState>,
     caller: Caller,
+    headers: HeaderMap,
     extract::Json(request): extract::Json<EditRequest>,
+) -> Response {
+    // A request with a key was made once already, by the layer, under that key.
+    if idempotency::key(&headers).is_ok_and(|key| key.is_some()) {
+        return apply(state, caller, request).await.into_response();
+    }
+    let edit_id = request.edit_id.as_str().to_owned();
+    let (db, idempotency) = (state.db.clone(), state.idempotency.clone());
+    let work = apply(state, caller, request);
+    idempotency.once(db, caller.user, edit_id, async move { work.await.into_response() }).await
+}
+
+/// Applies the edit `request` makes. See [`edit`] for what it answers.
+async fn apply(
+    state: AppState,
+    caller: Caller,
+    request: EditRequest,
 ) -> Result<Json<Applied>, Problem> {
+    let AppState { db, queues, indexes, hub, .. } = state;
     let invalid = |error: serde_json::Error| Problem::invalid(error.to_string());
     let EditRequest { edit_id, queue_id, edit: raw } = request;
     let text = raw.get();
@@ -141,10 +159,6 @@ pub async fn edit(
     let (edit, added) = if kind == "add" {
         let Add { source, before } = serde_json::from_str(text).map_err(invalid)?;
         let before: Anchor = small(&before, ANCHOR)?;
-        // A retry of an applied add is answered as the first was, even if its source is gone.
-        if let Some(applied) = queues.answered(caller.user, &queue_id, &edit_id) {
-            return Ok(Json(applied));
-        }
         let Resolved { key, library, ids, recipe } = source.resolve(&db, &indexes, &caller).await?;
         let tracks: Arc<[u64]> = ids.into();
         let hash = list_hash(&tracks);
@@ -189,14 +203,13 @@ pub async fn edit(
         let (queue_id, edit_id) = announced;
         hub.broadcast(user, &ServerMessage::QueueEdit { queue_id, version, edit_id, edit });
     };
-    let applied = queues.apply(user, &queue_id, edit_id, edit, added, announce).map_err(
-        |error| match error {
+    let applied =
+        queues.apply(user, &queue_id, edit, added, announce).map_err(|error| match error {
             EditError::NoQueue => Problem::not_found(),
             EditError::Changed => Problem::new(Code::QueueChanged)
                 .detail("The account's active queue is not the one this edit is for."),
             EditError::Refused(error) => refusal(error),
-        },
-    )?;
+        })?;
     Ok(Json(applied))
 }
 

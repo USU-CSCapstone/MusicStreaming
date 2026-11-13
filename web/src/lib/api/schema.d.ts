@@ -127,6 +127,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/me/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the caller's changes
+         * @description The caller's own playlists, Liked Songs included, and the tracks they hid, as a feed of
+         *     changes, for a device that keeps a copy of them (`requirements/offline.md`). It is read
+         *     like `listLibraryChanges`: each playlist, each playlist item and each hidden track
+         *     appears at most once, as its latest change, in order, so `after=0` is all of them now and
+         *     a later `after` is only what changed since; a catch-up after one item edit is that item.
+         *     An upsert carries the current rows (`playlists`, `playlist_items` or `hidden_tracks` of
+         *     the device schema, `crates/catalog/src/schema.sql`) and a delete is a tombstone. A
+         *     deleted playlist is one tombstone: the device drops its items with it. An item's change
+         *     names its playlist in `id` and the item in `key`; an unhidden track is its hide's
+         *     tombstone. Nothing of another account is ever listed.
+         *
+         *     Only what is in libraries the caller reaches is listed. A library the caller lost
+         *     access to is left out, so its playlists neither arrive nor are deleted here: a device
+         *     that finds a library gone from `listLibraries` removes that library and its playlists.
+         *     A library's catalog file (`getLibraryCatalog`) holds no playlists, and changes made
+         *     while the caller could not reach a library are left out, so a device that installs a
+         *     library's catalog file, the first time or again, pulls this feed again from `after=0`.
+         *
+         *     Pass `next` as `after` until it equals `head`, when the client is current. `head` is the
+         *     position of the caller's latest change, comparable with `accountChanged`'s `seq`.
+         */
+        get: operations["listAccountChanges"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me/plugins": {
         parameters: {
             query?: never;
@@ -262,6 +301,83 @@ export interface paths {
         };
         /** Get a library */
         get: operations["getLibrary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/libraries/{libraryId}/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List the library's changes
+         * @description The library's catalog as a feed of changes, for a device that keeps a copy of it
+         *     (`requirements/offline.md`). Each track, album, artist, and tag appears at most once, as
+         *     its latest change, in the order the changes were made, so `after=0` is the whole catalog
+         *     and a later `after` is only what changed since. An upsert carries the entity's current
+         *     rows, keyed by table, each row an object keyed by column name; a delete is a tombstone
+         *     with no rows. The tables and columns are those of the device schema
+         *     (`crates/catalog/src/schema.sql`, `design/general.md` §3); a `sort_key` column is opaque
+         *     bytes to compare, not to show. IDs are strings and blobs are base64. A client ignores a
+         *     column it does not know, as the server may add columns.
+         *
+         *     An image or tag type is not a change of its own: its row is in the rows of every track,
+         *     album, artist, or tag that shows it, and a change to the image or the type puts them all
+         *     on the feed again.
+         *
+         *     Pass `next` as `after` until it equals `head`, when the client is current. A client that
+         *     has applied a page has applied every change up to its `next`, and may stop and resume
+         *     from there.
+         */
+        get: operations["listLibraryChanges"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/libraries/{libraryId}/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Download the library's catalog
+         * @description The library's catalog as one SQLite database in the device schema
+         *     (`crates/catalog/src/schema.sql`), for a device that has none of it yet. It holds the
+         *     rows `listLibraryChanges` carries, as of `X-Jewelcase-Seq`: the device then pulls the
+         *     feed with `after` set to that value. The file is built once and shared by everyone who
+         *     reaches the library. It is rebuilt in the background once the library's feed holds more
+         *     changes since the file than a tenth of its tracks, albums and artists, and the old file is
+         *     served meanwhile. It is gzipped for a client that accepts it.
+         *
+         *     `ETag` is the SHA-256 of the database itself, as a quoted lowercase hex string,
+         *     whether or not the response is compressed: a client checks it against the file it ends
+         *     up with. A file is served only after SQLite's `quick_check` passed on it.
+         *     `X-Jewelcase-Schema` is the device schema's version, which the database also carries as
+         *     its `user_version`: a client that doesn't know that version doesn't import the file. The
+         *     response is `no-store`, so no HTTP cache keeps a copy of the catalog.
+         *
+         *     Until the first build has finished there is no file, and the answer is `503`. The client
+         *     reads the catalog from the other endpoints in the meantime and asks again after
+         *     `Retry-After`.
+         */
+        get: operations["getLibraryCatalog"];
         put?: never;
         post?: never;
         delete?: never;
@@ -831,6 +947,11 @@ export interface paths {
          *     which folds any edits into it and creates it here, final contents and all, once online.
          *     Send an `Idempotency-Key`, so a retry does not create a second playlist: a key the
          *     caller already used for a request that created one returns that `201` and body again.
+         *
+         *     A client may choose the playlist's `id`, as a device that creates offline does so the
+         *     playlist keeps one address from the start. One already used by any playlist is
+         *     `409 id_taken`, without saying whose, and nothing is created; one that is not a positive
+         *     63-bit integer in decimal is `422`.
          *
          *     Planned: `fromMix` and `external` items answer `422`. Every other item must be in this
          *     library, or the caller's own playlist in it, or the answer is `422` and nothing is
@@ -1569,7 +1690,7 @@ export interface components {
              * @description `unsupported_media` comes only from planned operations.
              * @enum {string}
              */
-            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "queue_changed" | "queue_active" | "anchor_gone" | "play_gone" | "duplicate_key" | "version_conflict" | "cursor_expired" | "setup_required" | "unsupported_media" | "device_unavailable" | "plugin_settings_invalid" | "internal";
+            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "queue_changed" | "queue_active" | "anchor_gone" | "play_gone" | "duplicate_key" | "version_conflict" | "id_taken" | "cursor_expired" | "setup_required" | "catalog_building" | "unsupported_media" | "device_unavailable" | "plugin_settings_invalid" | "internal";
             /**
              * @description With `session_revoked`. `credentials_changed` — the device keeps its downloads and
              *     logs in again with its `deviceId`; `logged_out` — the device removes them
@@ -1579,6 +1700,74 @@ export interface components {
             reason?: "credentials_changed" | "logged_out";
             /** @description With `version_conflict`. */
             currentVersion?: number;
+        };
+        LibraryChanges: {
+            changes: components["schemas"]["LibraryChange"][];
+            /**
+             * Format: int64
+             * @description The `after` of the next page. It is `head` when this page was the last.
+             */
+            next: number;
+            /**
+             * Format: int64
+             * @description The position of the library's latest change when the page was read.
+             */
+            head: number;
+        };
+        LibraryChange: {
+            /** Format: int64 */
+            seq: number;
+            /** @enum {string} */
+            op: "upsert" | "delete";
+            /** @enum {string} */
+            kind: "track" | "album" | "artist" | "tag";
+            id: components["schemas"]["Id"];
+            /**
+             * @description With an upsert: the entity's rows by table name (`tracks`, `track_artists`, `images`
+             *     and so on). A table the entity has no rows in is left out.
+             */
+            rows?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                }[];
+            };
+        };
+        AccountChanges: {
+            changes: components["schemas"]["AccountChange"][];
+            /**
+             * Format: int64
+             * @description The `after` of the next page. It is `head` when this page was the last.
+             */
+            next: number;
+            /**
+             * Format: int64
+             * @description The position of the caller's latest change when the page was read.
+             */
+            head: number;
+        };
+        AccountChange: {
+            /** Format: int64 */
+            seq: number;
+            /** @enum {string} */
+            op: "upsert" | "delete";
+            /** @enum {string} */
+            kind: "playlist" | "playlistItem" | "hiddenTrack";
+            /** @description The playlist, for a `playlist` or `playlistItem`, or the track a `hiddenTrack` hid. */
+            id: components["schemas"]["Id"];
+            /**
+             * Format: int64
+             * @description The item's key in its playlist, which `id` names, for a `playlistItem`.
+             */
+            key?: number;
+            /**
+             * @description The rows by table name, `playlists`, `playlist_items` or `hidden_tracks`, with an
+             *     upsert. Liked Songs is a playlist like any other here.
+             */
+            rows?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                }[];
+            };
         };
         PageInfo: {
             nextCursor: string | null;
@@ -2190,6 +2379,12 @@ export interface components {
             items: components["schemas"]["PlaylistItem"][];
         };
         PlaylistCreate: {
+            /**
+             * @description The playlist's ID, chosen by the client: a positive 63-bit integer in decimal, as
+             *     IDs are shown. Omitted, the server chooses. See `createPlaylist`.
+             * @example 4611686018427387904
+             */
+            id?: string;
             title: string;
             description?: string;
             /** @description Albums, artists, and playlists expand to their tracks in order. */
@@ -2536,7 +2731,8 @@ export interface components {
         EditQueue: {
             /**
              * Format: uuid
-             * @description Client-generated. Names the edit, so one sent again is applied once.
+             * @description Client-generated. Names the edit, so one sent again is applied once: it is the
+             *     `Idempotency-Key` when the request sends none.
              */
             editId: string;
             /**
@@ -3286,6 +3482,17 @@ export interface components {
             hidden: boolean;
         } | {
             /** @constant */
+            type: "libraryChanged";
+            libraryId: components["schemas"]["Id"];
+            /** Format: int64 */
+            seq: number;
+        } | {
+            /** @constant */
+            type: "accountChanged";
+            /** Format: int64 */
+            seq: number;
+        } | {
+            /** @constant */
             type: "queueReplaced";
             /** Format: uuid */
             queueId: string;
@@ -3453,7 +3660,8 @@ export interface components {
          *     repeated key returns the original result without applying twice: the same status and
          *     body, whatever else the request says. Keys are the caller's own, so another user's
          *     identical key is another key. Only a request that applied is remembered, so one that was
-         *     refused (`409`, `422`) can be sent again with the same key. Kept for 24 hours.
+         *     refused (`409`, `422`) can be sent again with the same key. Kept for 8 days. Every write
+         *     takes it (**Idempotency** in the conventions); it is listed where a retry matters most.
          */
         IdempotencyKey: string;
     };
@@ -3628,6 +3836,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["User"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listAccountChanges: {
+        parameters: {
+            query?: {
+                /** @description The `next` of the last page applied, or 0 for everything. */
+                after?: number;
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountChanges"];
+                };
+            };
+            /** @description `cursor_expired` — `after` is past the caller's latest change; start again from `after=0`. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
                 };
             };
             default: components["responses"]["Problem"];
@@ -3826,6 +4068,110 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Library"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listLibraryChanges: {
+        parameters: {
+            query?: {
+                /** @description The `next` of the last page applied, or 0 for the whole catalog. */
+                after?: number;
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryChanges"];
+                };
+            };
+            /**
+             * @description `cursor_expired` — the server cannot continue from `after`, because it is past the
+             *     library's latest change or older than the feed reaches back; start again from
+             *     `after=0`.
+             */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getLibraryCatalog: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    /** @description The SHA-256 of the uncompressed database, in quotes. */
+                    ETag?: string;
+                    /** @description The feed position the file is current to, for `listLibraryChanges`'s `after`. */
+                    "X-Jewelcase-Seq"?: number;
+                    /** @description The device schema version of the file (`PRAGMA user_version`). */
+                    "X-Jewelcase-Schema"?: number;
+                    /** @description `no-store`. */
+                    "Cache-Control"?: string;
+                    /** @description `gzip` when the client accepts it. */
+                    "Content-Encoding"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.sqlite3": string;
+                };
+            };
+            /** @description Partial content (`Range`). A range applies to the encoding sent, so an interrupted download can resume. */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not modified (`If-Modified-Since`). */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Range not satisfiable. */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `catalog_building` — the first build has not finished; try again after `Retry-After`. */
+            503: {
+                headers: {
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
                 };
             };
             default: components["responses"]["Problem"];
@@ -4680,7 +5026,8 @@ export interface operations {
                  *     repeated key returns the original result without applying twice: the same status and
                  *     body, whatever else the request says. Keys are the caller's own, so another user's
                  *     identical key is another key. Only a request that applied is remembered, so one that was
-                 *     refused (`409`, `422`) can be sent again with the same key. Kept for 24 hours.
+                 *     refused (`409`, `422`) can be sent again with the same key. Kept for 8 days. Every write
+                 *     takes it (**Idempotency** in the conventions); it is listed where a retry matters most.
                  */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
@@ -4702,6 +5049,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Playlist"];
+                };
+            };
+            /** @description `id_taken` — a playlist already has the `id` the request chose. Nothing was created. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
                 };
             };
             default: components["responses"]["Problem"];
@@ -4762,7 +5118,8 @@ export interface operations {
                  *     repeated key returns the original result without applying twice: the same status and
                  *     body, whatever else the request says. Keys are the caller's own, so another user's
                  *     identical key is another key. Only a request that applied is remembered, so one that was
-                 *     refused (`409`, `422`) can be sent again with the same key. Kept for 24 hours.
+                 *     refused (`409`, `422`) can be sent again with the same key. Kept for 8 days. Every write
+                 *     takes it (**Idempotency** in the conventions); it is listed where a retry matters most.
                  */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };

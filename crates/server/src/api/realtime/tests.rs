@@ -13,6 +13,7 @@ use super::super::testing::{
 use super::{Hub, ServerMessage};
 use crate::db::testing::User;
 
+mod hints;
 mod origin;
 mod revoked;
 

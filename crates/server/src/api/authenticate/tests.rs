@@ -193,3 +193,33 @@ async fn a_bad_token_is_unauthenticated_before_any_library_is_looked_up() {
     let (status, _, _) = with_headers(&app, "GET", "/api/v1/libraries/9/tracks", &[]).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
+
+/// Every response to a signed-in caller names the account, the library a caller cannot reach and
+/// a refusal under `/admin` included, and no other does.
+#[tokio::test]
+async fn signed_in_responses_name_the_account() {
+    let (temp, _db, app) = app_with_tracks().await;
+    let conn = conn(&temp);
+    crate::api::testing::add_user(&conn, 2, "user");
+    add_device(&conn, 2, 2, "user-token");
+    let user = [("authorization", "Bearer user-token")];
+    let owner = [("authorization", BEARER)];
+    let named = |headers: &axum::http::HeaderMap| {
+        headers.get("x-jewelcase-user").map(|value| value.to_str().unwrap().to_owned())
+    };
+    for (who, headers, id) in [("the user", user, "2"), ("the owner", owner, "1")] {
+        for (method, uri, status) in [
+            ("GET", "/api/v1/me", StatusCode::OK),
+            ("GET", "/api/v1/libraries/9", StatusCode::NOT_FOUND),
+            ("POST", "/api/v1/me/plays", StatusCode::UNPROCESSABLE_ENTITY),
+        ] {
+            let (found, headers, _) = with_headers(&app, method, uri, &headers).await;
+            assert_eq!(found, status, "{who}: {method} {uri}");
+            assert_eq!(named(&headers).as_deref(), Some(id), "{who}: {method} {uri}");
+        }
+    }
+    let (status, headers, _) = with_headers(&app, "GET", "/api/v1/admin/plugins", &user).await;
+    assert_eq!((status, named(&headers).as_deref()), (StatusCode::FORBIDDEN, Some("2")));
+    let (status, headers, _) = with_headers(&app, "GET", "/api/v1/me", &[]).await;
+    assert_eq!((status, named(&headers)), (StatusCode::UNAUTHORIZED, None));
+}

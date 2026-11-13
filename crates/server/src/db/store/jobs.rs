@@ -120,9 +120,9 @@ fn files<K>(roots: &Roots, lib: i64, found: Vec<(K, i64, String)>) -> Vec<(K, Fi
 }
 
 /// Stores `placeholder` for `lib`'s image with content `hash`, and puts the albums and artists
-/// showing it on the change feed. An empty placeholder, one that could not be made, keeps the
-/// image from being picked again and changes nothing clients see. An image no longer there is
-/// left alone.
+/// showing it on the change feed, and the tracks showing it whose album does not. An empty
+/// placeholder, one that could not be made, keeps the image from being picked again and changes
+/// nothing clients see. An image no longer there is left alone.
 pub fn store_placeholder(
     store: &SqliteStore,
     lib: i64,
@@ -143,13 +143,24 @@ pub fn store_placeholder(
         else {
             return Ok(());
         };
-        // What clients see of an album or artist includes its image's placeholder. One
-        // that could not be made leaves them as they were.
+        // What clients see of a track, album or artist includes its image's placeholder. One
+        // that could not be made leaves them as they were. A device keeps one row per image, so
+        // the album's change brings the placeholder to its tracks showing the same image.
         if changed {
-            for (entity, table) in [(Entity::Album, "albums"), (Entity::Artist, "artists")] {
+            for (entity, table, unless) in [
+                (
+                    Entity::Track,
+                    "tracks",
+                    "AND NOT EXISTS (SELECT 1 FROM albums AS al \
+                     WHERE al.id = t.album_id AND al.image_id = ?2)",
+                ),
+                (Entity::Album, "albums", ""),
+                (Entity::Artist, "artists", ""),
+            ] {
                 let ids: Vec<i64> = tx
                     .prepare_cached(&format!(
-                        "SELECT id FROM {table} WHERE library_id = ?1 AND image_id = ?2"
+                        "SELECT t.id FROM {table} AS t WHERE t.library_id = ?1 \
+                         AND t.image_id = ?2 {unless}"
                     ))?
                     .query_map([lib, image], |r| r.get(0))?
                     .collect::<rusqlite::Result<_>>()?;

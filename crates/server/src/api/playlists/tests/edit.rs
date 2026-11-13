@@ -570,12 +570,13 @@ async fn an_edit_of_a_large_playlist_writes_only_the_rows_it_changes() {
     call(&app, TOKEN, "GET", &uri, None).await;
 
     // Three items moved far apart: each is a delete and an insert, and the playlist one update.
+    // Each row written to the account feed is one more write, the playlist's included.
     let ops = json!([{ "op": "move", "positions": [10, 20_000, 49_999], "at": 30_000 }]);
     let start = changes(&db).await;
     let (status, moved) =
         send(&app, TOKEN, "PATCH", &uri, None, json!({ "baseVersion": 1, "ops": ops })).await;
     assert_eq!(status, StatusCode::OK, "{moved}");
-    assert_eq!(changes(&db).await - start, 3 + 3 + 1);
+    assert_eq!(changes(&db).await - start, (3 + 3) * 2 + 2);
     model = apply_ops(model, vec![Op::Move { positions: vec![10, 20_000, 49_999], at: 30_000 }])
         .unwrap();
     let after = rows(&db, "900").await;
@@ -589,20 +590,20 @@ async fn an_edit_of_a_large_playlist_writes_only_the_rows_it_changes() {
     let add = json!({ "baseVersion": 2, "ops": [{ "op": "add", "items": [track(1), track(2)], "at": 100 }] });
     let (status, added) = send(&app, TOKEN, "PATCH", &uri, None, add).await;
     assert_eq!(status, StatusCode::OK, "{added}");
-    assert_eq!(changes(&db).await - start, 2 + 1);
+    assert_eq!(changes(&db).await - start, (2 + 1) * 2);
     let start = changes(&db).await;
     let remove = json!({ "baseVersion": 3, "ops": [{ "op": "remove", "positions": [5, 40_000] }] });
     let (status, removed) = send(&app, TOKEN, "PATCH", &uri, None, remove).await;
     assert_eq!(status, StatusCode::OK, "{removed}");
-    assert_eq!(changes(&db).await - start, 2 + 1);
+    assert_eq!(changes(&db).await - start, (2 + 1) * 2);
     assert_eq!(
         (&removed["trackCount"], &removed["durationUs"], &removed["version"]),
         (&json!(n), &json!(n * 1_000_000), &json!(4))
     );
-    // A change of details alone writes only the playlist.
+    // A change of details alone writes only the playlist, and its feed row.
     let start = changes(&db).await;
     send(&app, TOKEN, "PATCH", &uri, None, json!({ "baseVersion": 4, "title": "Bigger" })).await;
-    assert_eq!(changes(&db).await - start, 1);
+    assert_eq!(changes(&db).await - start, 2);
 }
 
 #[tokio::test]
@@ -732,4 +733,59 @@ async fn an_announced_add_leaves_out_tracks_purged_since_the_expansion() {
     assert_eq!(serde_json::to_value(track_ids).unwrap(), json!(["1"]));
     db.try_write(move |tx| super::super::edit::write(tx, 1, 1, id, 1, &plan)).await.unwrap();
     assert_eq!(tracks(&db, &playlist["id"]).await, [2, 1]);
+}
+
+/// A free `id` is the playlist's, and a taken one is `409 id_taken` whoever's it is, and changes
+/// nothing; one that is not a positive 63-bit integer in decimal is `422`.
+#[tokio::test]
+async fn a_playlist_is_created_under_the_id_the_client_chose() {
+    let (temp, db, app) = catalog().await;
+    add_user(&conn(&temp), 2, "user");
+    add_device(&conn(&temp), 2, 3, "user2");
+    access(&conn(&temp), 2, 1).unwrap();
+    let chosen = "4611686018427387904";
+
+    let (status, made) =
+        send(&app, TOKEN, "POST", URI, None, json!({ "title": "A", "id": chosen })).await;
+    assert_eq!((status, &made["id"]), (StatusCode::CREATED, &json!(chosen)));
+    let (status, got) = call(&app, TOKEN, "GET", &format!("{URI}/{chosen}"), None).await;
+    assert_eq!((status, got["title"].clone()), (StatusCode::OK, json!("A")));
+
+    for token in [TOKEN, "user2"] {
+        let (status, problem) =
+            send(&app, token, "POST", URI, None, json!({ "title": "B", "id": chosen })).await;
+        assert_eq!(
+            (status, &problem["code"]),
+            (StatusCode::CONFLICT, &json!("id_taken")),
+            "{token}"
+        );
+    }
+    let count = |db: Arc<Database>| async move {
+        db.read(|conn| conn.query_row("SELECT count(*) FROM playlists", [], |r| r.get::<_, i64>(0)))
+            .await
+            .unwrap()
+    };
+    assert_eq!(count(db.clone()).await, 1);
+
+    for id in
+        [json!("0"), json!("-1"), json!("01"), json!("abc"), json!("9223372036854775808"), json!(5)]
+    {
+        let (status, _) =
+            send(&app, TOKEN, "POST", URI, None, json!({ "title": "C", "id": id })).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{id}");
+    }
+    assert_eq!(count(db).await, 1);
+}
+
+/// A create repeated under its key after it applied answers as the first did, though its `id` is
+/// taken by then: it is the same request, not a second one.
+#[tokio::test]
+async fn a_create_with_an_id_repeated_under_its_key_is_answered_not_refused() {
+    let (_temp, _db, app) = catalog().await;
+    let body = json!({ "title": "A", "id": "77" });
+    let first = send(&app, TOKEN, "POST", URI, Some("create-77"), body.clone()).await;
+    assert_eq!(first.0, StatusCode::CREATED);
+    assert_eq!(send(&app, TOKEN, "POST", URI, Some("create-77"), body.clone()).await, first);
+    let (status, problem) = send(&app, TOKEN, "POST", URI, Some("another"), body).await;
+    assert_eq!((status, &problem["code"]), (StatusCode::CONFLICT, &json!("id_taken")));
 }

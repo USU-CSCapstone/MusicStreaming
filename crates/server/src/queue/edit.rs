@@ -9,11 +9,8 @@ use std::sync::Arc;
 use jewelcase_core::{Edit, QueueError, Source};
 use serde::Serialize;
 
-use super::store::{Done, Held, Queues};
+use super::store::{Held, Queues};
 use crate::api::Uuid;
-
-/// How many of an account's latest edits are remembered to answer one sent again.
-const REMEMBERED: usize = 32;
 
 /// Why an edit was not applied. Nothing changed.
 #[derive(Debug, PartialEq, Eq)]
@@ -46,25 +43,15 @@ pub struct Applied {
 }
 
 impl Queues {
-    /// The answer to `edit_id`, if it is among the latest edits applied to `user`'s queue
-    /// `queue_id`: what a retry gets without resolving or applying anything again.
-    pub fn answered(&self, user: i64, queue_id: &Uuid, edit_id: &Uuid) -> Option<Applied> {
-        let accounts = self.lock();
-        let account = accounts.get(&user).filter(|account| account.queue_id == *queue_id)?;
-        let done = account.done.iter().find(|done| done.edit_id == *edit_id)?;
-        Some(Applied { version: done.version, source: done.source.clone() })
-    }
-
-    /// Applies `edit`, which `edit_id` names, to `user`'s queue `queue_id`, holding the list of an
-    /// add (`added`, whose hash the edit's source must carry), and marks the account changed.
-    /// `announce` is called under the lock with the new version and the edit, to send it to
-    /// the account's connections. An `edit_id` among the latest is not applied again, and
-    /// answers as the first did without calling `announce`.
+    /// Applies `edit` to `user`'s queue `queue_id`, holding the list of an add (`added`, whose
+    /// hash the edit's source must carry), and marks the account changed. `announce` is called
+    /// under the lock with the new version and the edit, to send it to the account's
+    /// connections. An edit sent again is not recognised here: the idempotency layer answers it
+    /// before it gets this far (`api/idempotency.rs`).
     pub fn apply(
         &self,
         user: i64,
         queue_id: &Uuid,
-        edit_id: Uuid,
         edit: Edit,
         added: Option<Added>,
         announce: impl FnOnce(u32, Edit),
@@ -73,9 +60,6 @@ impl Queues {
         let account = accounts.get_mut(&user).ok_or(EditError::NoQueue)?;
         if account.queue_id != *queue_id {
             return Err(EditError::Changed);
-        }
-        if let Some(done) = account.done.iter().find(|done| done.edit_id == edit_id) {
-            return Ok(Applied { version: done.version, source: done.source.clone() });
         }
         account.state.apply(&edit).map_err(EditError::Refused)?;
         if let Some(Added { hash, library_id, tracks }) = added.filter(|a| !a.tracks.is_empty()) {
@@ -87,11 +71,7 @@ impl Queues {
             Edit::Add { source, .. } => Some(source.clone()),
             _ => None,
         };
-        if account.done.len() == REMEMBERED {
-            account.done.pop_front();
-        }
         let version = account.version;
-        account.done.push_back(Done { edit_id, version, source: source.clone() });
         announce(version, edit);
         Ok(Applied { version, source })
     }

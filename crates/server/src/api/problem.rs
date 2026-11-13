@@ -35,7 +35,9 @@ pub enum Code {
     DuplicateKey,
     PermissionsRequired,
     VersionConflict,
+    IdTaken,
     CursorExpired,
+    CatalogBuilding,
     DeviceUnavailable,
     SetupRequired,
     Internal,
@@ -60,12 +62,13 @@ impl Code {
             Self::PluginExists
             | Self::PermissionsRequired
             | Self::VersionConflict
+            | Self::IdTaken
             | Self::DeviceUnavailable
             | Self::QueueChanged
             | Self::QueueActive
             | Self::AnchorGone
             | Self::PlayGone => StatusCode::CONFLICT,
-            Self::SetupRequired => StatusCode::SERVICE_UNAVAILABLE,
+            Self::SetupRequired | Self::CatalogBuilding => StatusCode::SERVICE_UNAVAILABLE,
             Self::CursorExpired => StatusCode::GONE,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -88,7 +91,7 @@ pub struct Problem {
     /// The version the resource is at now, with `version_conflict`.
     #[serde(rename = "currentVersion", skip_serializing_if = "Option::is_none")]
     current_version: Option<i64>,
-    /// When to try again, in whole seconds, with `rate_limited`: sent as `Retry-After`.
+    /// When to try again, in whole seconds, with `rate_limited` or `catalog_building`: sent as `Retry-After`.
     #[serde(skip)]
     retry_after: Option<i64>,
 }
@@ -145,6 +148,11 @@ impl Problem {
         Problem { retry_after: Some(seconds), ..Problem::new(Code::RateLimited) }
     }
 
+    /// A `503 catalog_building` that says, in whole seconds, when to try again.
+    pub fn catalog_building(retry_after: i64) -> Problem {
+        Problem { retry_after: Some(retry_after), ..Problem::new(Code::CatalogBuilding) }
+    }
+
     /// Its explanation, if it has one.
     pub fn explanation(&self) -> Option<&str> {
         self.detail.as_deref()
@@ -176,5 +184,13 @@ impl From<rusqlite::Error> for Problem {
     /// A database error, logged and answered as a `500 internal`, as a [`DbError`] is.
     fn from(error: rusqlite::Error) -> Problem {
         DbError::from(error).into()
+    }
+}
+
+impl From<serde_json::Error> for Problem {
+    /// A value the server could not serialize, logged and answered as a `500 internal`.
+    fn from(error: serde_json::Error) -> Problem {
+        tracing::error!(%error, "cannot serialize a response");
+        Problem::new(Code::Internal)
     }
 }
