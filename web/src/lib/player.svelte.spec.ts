@@ -828,6 +828,42 @@ describe('player and the queue', () => {
 		expect(fake.sent.at(-1)!.report.itemId).toBe(`${queueWorker.key}.1`);
 	});
 
+	it('stays paused on the next track when paused while it is looked up', async () => {
+		let arrive: (track: unknown) => void = () => {};
+		fake.tracks.set('68', new Promise((resolve) => (arrive = resolve)));
+		const { play } = await playing('67', '68');
+		player.next();
+		await settle();
+		expect(player.current?.id, 'still on the track before').toBe('67');
+		const plays = play.mock.calls.length;
+
+		player.toggle();
+		expect(player.playing).toBe(false);
+		arrive(track('68', 60));
+		await vi.waitFor(() => expect(player.current?.id).toBe('68'));
+		await settle();
+		expect(player.playing).toBe(false);
+		expect(play.mock.calls.length, 'its audio waits, paused').toBe(plays);
+		expect(fake.sent.at(-1)!.report).toMatchObject({ itemId: own(), status: 'paused' });
+	});
+
+	it('plays the next track once it is looked up, when paused and played again meanwhile', async () => {
+		let arrive: (track: unknown) => void = () => {};
+		fake.tracks.set('70', new Promise((resolve) => (arrive = resolve)));
+		const { play } = await playing('69', '70');
+		player.next();
+		await settle();
+		player.toggle();
+		player.toggle();
+		const plays = play.mock.calls.length;
+
+		arrive(track('70', 60));
+		await vi.waitFor(() => expect(player.current?.id).toBe('70'));
+		await settle();
+		expect(player.playing).toBe(true);
+		expect(play.mock.calls.length).toBeGreaterThan(plays);
+	});
+
 	it('moves on with a next edit when the track ends, or plays it again under Repeat One', async () => {
 		const { play, audio } = await playing('64', '65');
 		audio.dispatchEvent(new Event('ended'));

@@ -99,6 +99,8 @@ class Player {
 	#wantsNext = false;
 	/** The queue moved to an item that is not loaded yet, which is being looked up. */
 	#moving = false;
+	/** The item the queue was moving to when the user paused, which loads paused once it is looked up. */
+	#pausedFor: string | null = null;
 	/** Which way the last move went, so a track that cannot play is passed over the same way. */
 	#direction: 1 | -1 = 1;
 	/** The items passed over in a row, so a run that comes round to one again, as under Repeat All, has tried the whole queue. */
@@ -236,7 +238,9 @@ class Player {
 		}
 		const startAt = this.#resumeAt?.item === item ? this.#resumeAt.seconds : 0;
 		this.#resumeAt = null;
-		this.#go(found.track, found.libraryId, item, startAt);
+		// Paused while it was being looked up: it waits paused, as one paused while its audio is
+		// on its way does.
+		this.#go(found.track, found.libraryId, item, startAt, this.#pausedFor !== item);
 		void this.#preload();
 	}
 
@@ -484,6 +488,8 @@ class Player {
 	async #resume(byUser: boolean) {
 		const audio = this.#audio;
 		if (!audio || !this.current) throw new Error('Nothing is loaded.');
+		// A track being looked up plays once it is, as it would have before the pause.
+		this.#pausedFor = null;
 		// The track is on its way, and its audio is not yet the audio element's.
 		if (this.#loading) return;
 		if (byUser) this.#started();
@@ -501,7 +507,9 @@ class Player {
 		// A pause is the user's word: a track waiting to be asked for again is not.
 		clearTimeout(this.#retryTimer);
 		this.#progress.paused();
-		// A track still on its way stays paused once its audio arrives.
+		// A track still on its way stays paused once its audio arrives, and one still being looked
+		// up once it is.
+		if (this.#moving) this.#pausedFor = queue.current;
 		this.playing = this.#loading = false;
 		this.#audio?.pause();
 	}
@@ -663,6 +671,7 @@ class Player {
 		this.#loaded = { track, libraryId };
 		this.#holds = true;
 		this.#moving = false;
+		this.#pausedFor = null;
 		this.current = track;
 		this.#item = item;
 		const load = ++this.#load;
