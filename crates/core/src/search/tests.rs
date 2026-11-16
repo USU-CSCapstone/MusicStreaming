@@ -374,3 +374,16 @@ fn a_rank_reads_back_from_its_bytes() {
     *text.last_mut().unwrap() = 0xff;
     assert_eq!(Rank::from_bytes(&text), None, "a word that is not UTF-8");
 }
+
+#[test]
+fn matching_finds_what_a_page_finds_in_any_order() {
+    let index = library();
+    let keep = |_: Kind, id: i64| id != 24;
+    let mut matching = index.matching("h", Kind::Track, keep);
+    matching.sort_unstable();
+    let mut paged = index.page("h", Kind::Track, None, 10, keep).ids;
+    paged.sort_unstable();
+    assert_eq!(matching, paged);
+    assert_eq!(matching, [23, 25]);
+    assert!(index.matching("", Kind::Track, keep).is_empty());
+}

@@ -9,7 +9,7 @@ use jewelcase_core::{
     Document, Index, IndexBuilder, Kind, Rank, Section as Found, SectionPage as FoundPage,
 };
 use rusqlite::types::Value;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, Row, params};
 use serde::de::IntoDeserializer;
 use serde::de::value::StrDeserializer;
 use serde::{Deserialize, Serialize};
@@ -20,8 +20,10 @@ use crate::artists::{self, ArtistSort, ArtistSummary};
 use crate::by_ids::by_ids;
 use crate::cursor;
 use crate::hidden::{self, Losses};
-use crate::page::{self, Lead, Order, Page, Request, Sort, library_number};
-use crate::tag_filter::{TagFilter, Tagged, Tags};
+use crate::page::{
+    self, Kept, Lead, Order, Page, Request, Sort, Source, Table, Total, library_number,
+};
+use crate::tag_filter::{LEAD_SHARE, TagFilter, Tagged, Tags};
 use crate::tracks::{self, TrackSort, TrackSummary};
 
 /// The spec's `SearchResponse`.
@@ -184,8 +186,8 @@ pub fn section(
             Ok(SectionPage { query: q, items, next_cursor, total })
         }
         SectionReading::Sorted(request) => {
-            // Every match: the sort orders them, whatever order they come in.
-            let ids = index.page(&q, kind, None, usize::MAX, keep).ids;
+            // Every match, unranked: the sort orders them.
+            let ids = index.matching(&q, kind, keep);
             let page = sorted(conn, user, library, kind, request, &ids, &hid.losses)?;
             let total = usize::try_from(page.total).unwrap_or(0);
             Ok(SectionPage { query: q, items: page.items, next_cursor: page.next_cursor, total })
@@ -195,8 +197,8 @@ pub fn section(
 
 /// The page `request` asks for of the matches `ids` of `kind`, sorted as their list sorts
 /// them, as `user` sees them, whose hidden tracks take `losses` from albums and artists. The
-/// matches are already only what the search keeps, and they lead the page however many there
-/// are, as one JSON array, so the cost is theirs and not the library's.
+/// matches are already only what the search keeps. Only their IDs and sort keys are read, their
+/// summaries after, by ID, as a ranked section's are.
 fn sorted(
     conn: &Connection,
     user: i64,
@@ -206,36 +208,63 @@ fn sorted(
     ids: &[i64],
     losses: &Losses,
 ) -> rusqlite::Result<Page<SearchResult>> {
+    let (table, id): (&Table, &'static [&'static str]) = match kind {
+        Kind::Track => (&tracks::TRACKS, &["t.id"]),
+        Kind::Album => (&albums::ALBUMS, &["al.id"]),
+        Kind::Artist => (&artists::ARTISTS, &["ar.id"]),
+    };
+    let page = read_matches(conn, library, table, id, request, ids)?;
+    let found = Found { kind, ids: page.items, total: ids.len() };
+    let items = sections(conn, user, library, vec![found], losses)?.pop();
+    let items = items.map_or_else(Vec::new, |section| section.items);
+    Ok(Page { items, next_cursor: page.next_cursor, total: page.total })
+}
+
+/// The fewest rows a sorted section's walk reads before it gives up and leads: a few
+/// milliseconds' worth, which leading a few thousand matches costs too.
+const MIN_WALK: u32 = 10_000;
+
+/// The IDs of the page `request` asks for of the rows of `table` that `ids` names, whose `id`
+/// column is the one selected (`design/database.md` §4). Only IDs and sort keys are read, so rows
+/// passed over cost little. Many of the table's rows, more than one in [`LEAD_SHARE`], walk the
+/// sort's index, keeping those named ([`Kept`]), which reads about a page's worth over the share
+/// named where they are spread through the sort. Few lead the page, as one JSON array, which
+/// sorts them all and so costs what they are; and so does a walk that has read as many rows as
+/// there are named, or [`MIN_WALK`] if more, without filling the page, since those named bunch
+/// together in the sort, so a page costs at most about twice what leading would.
+fn read_matches(
+    conn: &Connection,
+    library: i64,
+    table: &Table,
+    id: &'static [&'static str],
+    request: Request,
+    ids: &[i64],
+) -> rusqlite::Result<Page<i64>> {
+    let total = i64::try_from(ids.len()).unwrap_or(i64::MAX);
+    let rows = library_number(conn, library, table.count)?;
+    let source = |lead| -> rusqlite::Result<Source> {
+        let source = table.source(conn, library, lead, None)?;
+        Ok(Source { select: id, joins: "", total: Total::Stored(total), ..source })
+    };
+    let id_of = |row: &Row| row.get::<_, i64>(0);
+    if total.saturating_mul(LEAD_SHARE) > rows {
+        let named: HashSet<i64> = ids.iter().copied().collect();
+        let kept = Kept {
+            keeps: &|id| named.contains(&id),
+            // More than none, or they would lead.
+            spread: u32::try_from((rows + total - 1) / total).unwrap_or(u32::MAX),
+            budget: u32::try_from(total).unwrap_or(u32::MAX).max(MIN_WALK),
+        };
+        if let Some(page) = request.read_kept(conn, &source(None)?, &kept, total, id_of)? {
+            return Ok(page);
+        }
+    }
     let lead = Lead {
         ids: "SELECT value AS id FROM json_each(?)".to_owned(),
         params: vec![Value::Text(serde_json::to_string(ids).expect("IDs are JSON"))],
-        size: i64::try_from(ids.len()).unwrap_or(i64::MAX),
+        size: total,
     };
-    Ok(match kind {
-        Kind::Track => {
-            let source = tracks::TRACKS.source(conn, library, Some(lead), None)?;
-            let mut page = request.read(conn, &source, tracks::list_summary)?;
-            tracks::mark_liked(conn, user, library, &mut page.items)?;
-            let items = page.items.into_iter().map(|track| SearchResult::Track { track });
-            Page { items: items.collect(), next_cursor: page.next_cursor, total: page.total }
-        }
-        Kind::Album => {
-            let source = albums::ALBUMS.source(conn, library, Some(lead), None)?;
-            request.read(conn, &source, |row| {
-                let mut album = albums::summary(row)?;
-                album.lose(losses);
-                Ok(SearchResult::Album { album })
-            })?
-        }
-        Kind::Artist => {
-            let source = artists::ARTISTS.source(conn, library, Some(lead), None)?;
-            request.read(conn, &source, |row| {
-                let mut artist = artists::summary(row)?;
-                artist.lose(losses);
-                Ok(SearchResult::Artist { artist })
-            })?
-        }
-    })
+    request.read(conn, &source(Some(lead))?, id_of)
 }
 
 /// The spec's `SearchResult`: `{"type": "track", "track": {…}}` and so on.

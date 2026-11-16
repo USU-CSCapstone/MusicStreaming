@@ -178,9 +178,10 @@ async fn benchmark_tag_filters() {
 /// What paging through one section of a search costs on the generated library
 /// (`searchSection`), for queries matching about 2,000 tracks, 31,000, and every one (every
 /// generated title is `Track` and eight hex digits): in the search's ranking, and sorted by
-/// name, album, and duration, which reads and sorts every match for each page; and the albums
-/// of a query every album matches, by name. Each is a first and a deep page. Run it as
-/// [`benchmark_list_pages`] is, with `benchmark_search_sections`.
+/// name, album, and duration, which lead or walk by how many matched (`design/database.md` §4),
+/// the matches of `track b` bunched together by name; and the albums of a query every album
+/// matches, by name. Each is a first and a deep page. Run it as [`benchmark_list_pages`] is,
+/// with `benchmark_search_sections`.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "benchmark"]
 async fn benchmark_search_sections() {

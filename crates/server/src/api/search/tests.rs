@@ -233,12 +233,18 @@ async fn a_search_with_tags_finds_what_carries_them() {
     assert_eq!(body["sections"], json!([]), "another library's tag");
 }
 
+/// Track `id` of library 1 on album 101 called `title`, sorting by it as the scanner sorts it.
+fn titled(id: i64, title: &str) -> Track {
+    let sort_key = jewelcase_core::sort_key(title, None).into_bytes();
+    Track { title: title.to_owned(), sort_key, ..Track::new(id, 1, 101) }
+}
+
 /// Library 1 gets five tracks called "Lullaby" and a letter, 1101 to 1105, A to E.
 async fn app_with_lullabies() -> (tempfile::TempDir, Arc<Database>, Router) {
     let (temp, db, app) = app_with_catalog().await;
     db.write(|tx| {
         for (id, letter) in (1101..).zip(["A", "B", "C", "D", "E"]) {
-            Track { title: format!("Lullaby {letter}"), ..Track::new(id, 1, 101) }.insert(tx)?;
+            titled(id, &format!("Lullaby {letter}")).insert(tx)?;
         }
         Ok::<_, rusqlite::Error>(())
     })
@@ -307,7 +313,7 @@ async fn a_page_continues_after_the_last_match_once_the_index_is_rebuilt() {
     let cursor = first["nextCursor"].as_str().unwrap().to_owned();
     // One that ranks before the cursor is added, and one after it removed.
     db.write(|tx| {
-        Track { title: "Lullaby AA".into(), ..Track::new(1106, 1, 101) }.insert(tx)?;
+        titled(1106, "Lullaby AA").insert(tx)?;
         tx.execute_batch("DELETE FROM tracks WHERE id = 1104")
     })
     .await
@@ -402,7 +408,7 @@ async fn a_section_sorts_its_matches_as_its_list_does() {
             )?;
         }
         for (id, title) in [(106, "Lullaby Two"), (107, "Lullaby One")] {
-            let sort_key = title.to_lowercase().into_bytes();
+            let sort_key = jewelcase_core::sort_key(title, None).into_bytes();
             Album { title: Some(title.into()), sort_key, ..Album::new(id, 1) }.insert(tx)?;
         }
         Ok(())
@@ -457,4 +463,65 @@ async fn a_sorted_section_takes_only_its_lists_sorts_and_cursors() {
         let (status, _, _) = send(app.clone(), "GET", &uri).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{uri}");
     }
+}
+
+#[tokio::test]
+async fn a_sorted_section_reads_the_same_walked_or_led() {
+    let (_temp, db, app) = app_with_lullabies().await;
+    // "Lullaby F" has no sortable title, so it sorts last either way. Fillers sort ahead of every
+    // lullaby by name, so a walk's first read is all fillers and it reads again.
+    let fill = |ids: std::ops::Range<i64>| {
+        let db = db.clone();
+        async move {
+            db.write(move |tx| {
+                for id in ids {
+                    titled(id, &format!("Filler {id}")).insert(tx)?;
+                }
+                Ok::<_, rusqlite::Error>(())
+            })
+            .await
+            .unwrap();
+        }
+    };
+    db.write(|tx| Track { sort_key: Vec::new(), ..titled(1106, "Lullaby F") }.insert(tx))
+        .await
+        .unwrap();
+    fill(5000..5300).await;
+    let ids = |ids: [&str; 2]| ids.map(str::to_owned).to_vec();
+    let asc = [ids(["1101", "1102"]), ids(["1103", "1104"]), ids(["1105", "1106"])];
+    let desc = [ids(["1105", "1104"]), ids(["1103", "1102"]), ids(["1101", "1106"])];
+    // Six matches in some 300 tracks walk; in some 1,000, one in 128 at most, they lead.
+    for way in ["walked", "led"] {
+        let pages = section_pages(&app, "tracks", "q=lullaby&sort=name&limit=2").await;
+        assert_eq!(pages, asc, "{way}");
+        let pages = section_pages(&app, "tracks", "q=lullaby&sort=name&order=desc&limit=2").await;
+        assert_eq!(pages, desc, "{way}");
+        let (_, page) = json(&app, "/api/v1/libraries/1/search/tracks?q=lullaby&sort=name").await;
+        assert_eq!(page["total"], 6, "{way}");
+        if way == "walked" {
+            fill(5300..6000).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_walk_that_finds_the_matches_bunched_together_gives_way_to_the_lead() {
+    let (_temp, db, app) = app_with_lullabies().await;
+    // Two hundred lullabies in some 25,200 tracks, more than one in 128, so they walk; but every
+    // filler sorts ahead of them by name, more than a walk reads before it gives up.
+    db.write(|tx| {
+        for n in 0..195 {
+            titled(1201 + n, &format!("Lullaby {n:03}")).insert(tx)?;
+        }
+        for id in 10_000..35_000 {
+            titled(id, &format!("Filler {id}")).insert(tx)?;
+        }
+        Ok::<_, rusqlite::Error>(())
+    })
+    .await
+    .unwrap();
+    let pages = section_pages(&app, "tracks", "q=lullaby&sort=name&limit=100").await;
+    // Digits sort before letters: 000 to 194, then A to E.
+    let expected: Vec<String> = (1201..1396).chain(1101..1106).map(|id| id.to_string()).collect();
+    assert_eq!(pages, [expected[..100].to_vec(), expected[100..].to_vec()]);
 }
