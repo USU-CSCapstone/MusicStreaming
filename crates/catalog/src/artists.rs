@@ -83,7 +83,7 @@ pub fn artist(
 }
 
 /// The artists a list reads.
-const ARTISTS: Table =
+pub(crate) const ARTISTS: Table =
     Table { name: "artists", alias: "ar", select: SELECT, joins: "", count: "artist_count" };
 
 /// How artists carry tags: those of the tracks that credit them (`requirements/tags.md` §6).

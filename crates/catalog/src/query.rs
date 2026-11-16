@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::fmt::{self, Write};
 
-use jewelcase_core::{Index, Kind, SectionPage, list_hash};
+use jewelcase_core::{Index, Kind, list_hash};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
@@ -178,6 +178,8 @@ struct SearchParams {
 struct SectionParams {
     section: String,
     q: String,
+    sort: Option<String>,
+    order: Option<Order>,
     cursor: Option<String>,
     limit: Option<u32>,
     tag_all: Option<String>,
@@ -315,34 +317,38 @@ pub fn answer(
             if p.q.is_empty() {
                 return Err(Error("q must not be empty".to_owned()));
             }
-            let limit = page::limit(p.limit)?;
             let kind = match search::SectionType::named(&p.section) {
-                Some(search::SectionType::Kind(kind)) => Some(kind),
-                Some(search::SectionType::Playlists) => None,
+                Some(search::SectionType::Kind(kind)) => kind,
+                Some(search::SectionType::Playlists) => {
+                    page::limit(p.limit)?;
+                    return json(search::SectionPage::empty(p.q));
+                }
                 Some(search::SectionType::Lyrics) => {
                     return Err(Error("lyrics cannot be searched yet".to_owned()));
                 }
                 None => return Err(Error(format!("no section {}", p.section))),
             };
-            let after = search::after(p.cursor.as_deref(), &p.section)?;
+            let reading = search::SectionReading::new(
+                &p.section,
+                kind,
+                p.sort.as_deref(),
+                p.order,
+                p.cursor,
+                p.limit,
+            )?;
             let filter = TagFilter::new(p.tag_all.as_deref(), p.tag_any.as_deref())?;
-            let kinds: Vec<Kind> = kind.into_iter().collect();
             let tagged = if filter.is_empty() {
                 None
             } else {
-                Some(search::tagged(conn, library, &filter, &kinds)?)
+                Some(search::tagged(conn, library, &filter, &[kind])?)
             };
             let hid = search::Hid::read(conn, user, library, &filter)?;
-            let found = match kind {
-                Some(kind) => {
-                    built(index)?.page(&p.q, kind, after.as_ref(), limit as usize, |kind, id| {
-                        !hid.contains(kind, id)
-                            && tagged.as_ref().is_none_or(|sets| sets[kind as usize].contains(&id))
-                    })
-                }
-                None => SectionPage { ids: Vec::new(), total: 0, next: None },
+            let keep = |kind: Kind, id| {
+                !hid.contains(kind, id)
+                    && tagged.as_ref().is_none_or(|sets| sets[kind as usize].contains(&id))
             };
-            json(search::section_page(conn, user, library, p.q, kind, found, &hid)?)
+            let index = built(index)?;
+            json(search::section(conn, user, library, p.q, kind, reading, index, keep, &hid)?)
         }
         "listHiddenTracks" => {
             let p: HiddenParams = serde_json::from_str(params)?;
