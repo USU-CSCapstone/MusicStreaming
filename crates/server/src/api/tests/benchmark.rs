@@ -175,6 +175,31 @@ async fn benchmark_tag_filters() {
     }
 }
 
+/// What paging through one section of a search costs on the generated library
+/// (`searchSection`), for queries matching about 2,000 tracks, 31,000, and every one (every
+/// generated title is `Track` and eight hex digits): in the search's ranking, and sorted by
+/// name, album, and duration, which reads and sorts every match for each page; and the albums
+/// of a query every album matches, by name. Each is a first and a deep page. Run it as
+/// [`benchmark_list_pages`] is, with `benchmark_search_sections`.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "benchmark"]
+async fn benchmark_search_sections() {
+    let (_temp, _db, app) = filled().await;
+    let section = "/api/v1/libraries/1/search";
+    for q in ["track%20bc", "track%20b", "track"] {
+        let (_, page) = json(&app, &format!("{section}/tracks?q={q}&limit=1")).await;
+        println!("\n{q}: {} tracks", page["total"]);
+        time_pages(&app, &format!("{section}/tracks?q={q}&limit=100")).await;
+        for sort in ["name", "album", "duration"] {
+            time_pages(&app, &format!("{section}/tracks?q={q}&sort={sort}&limit=100")).await;
+        }
+    }
+    let (_, page) = json(&app, &format!("{section}/albums?q=album&limit=1")).await;
+    println!("\nalbum: {} albums", page["total"]);
+    time_pages(&app, &format!("{section}/albums?q=album&limit=100")).await;
+    time_pages(&app, &format!("{section}/albums?q=album&sort=name&limit=100")).await;
+}
+
 /// What resolving a queue's recipe costs on the generated library, the whole library in each
 /// sort, the artists of [`ARTISTS`] in each credit and the library filtered to each tag of
 /// [`TAGS`], as [`resolve`] reads them, with the library's length checked against what the sort's
