@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 pub use filter::{Check, Lead, Table};
 #[cfg(any(test, feature = "testing"))]
 pub use keyset::assert_indexed;
-pub use keyset::{Counting, Sort, Source, Total, Unknown, Walk, ids};
+pub use keyset::{Counting, Kept, Sort, Source, Total, Unknown, Walk, ids};
 pub use totals::{Memo, Totals};
 
 use crate::Invalid;
@@ -90,6 +90,20 @@ impl<'a> Request<'a> {
         };
         let (items, next_cursor) = keyset::fetch(conn, source, &self, map)?;
         Ok(Page { items, next_cursor, total })
+    }
+
+    /// Reads the page of the rows of `source` that `kept` keeps, walking the sort's index for
+    /// them, with `total` as the caller counted them; `None` if the walk gave up ([`Kept`]).
+    pub fn read_kept<T>(
+        &self,
+        conn: &Connection,
+        source: &Source,
+        kept: &Kept,
+        total: i64,
+        map: impl FnMut(&Row) -> rusqlite::Result<T>,
+    ) -> rusqlite::Result<Option<Page<T>>> {
+        let page = keyset::fetch_kept(conn, source, self, kept, map)?;
+        Ok(page.map(|(items, next_cursor)| Page { items, next_cursor, total }))
     }
 }
 
