@@ -406,6 +406,34 @@ describe('player', () => {
 		expect(fake.sent.map((m) => m.type)).toEqual(['commandResult']);
 	});
 
+	it('does not pick up what was playing elsewhere once a track is started here meanwhile', async () => {
+		let arrive: (track: Track) => void = () => {};
+		fake.tracks.set('46', new Promise((resolve) => (arrive = resolve)));
+		await heldAs('46');
+		const pickUp = player.pickUp();
+		player.play([track('81', 60), track('82', 60)], 0, { type: 'album', id: '9' });
+		await settle();
+		arrive(track('46', 60));
+		// The start won, which is no failure to show.
+		await expect(pickUp).resolves.toBeUndefined();
+		await settle();
+		expect(player.current?.id).toBe('81');
+		expect(player.item).toBe(queue.current);
+	});
+
+	it('picks up once when asked to twice', async () => {
+		let arrive: (track: Track) => void = () => {};
+		fake.tracks.set('48', new Promise((resolve) => (arrive = resolve)));
+		await heldAs('48');
+		const first = player.pickUp();
+		const second = player.pickUp();
+		arrive(track('48', 60));
+		await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+		expect(player.current?.id).toBe('48');
+		expect(player.item).toBe('K48.0');
+		expect(fake.sent.filter((m) => m.type === 'progress')).toHaveLength(1);
+	});
+
 	it('starts no later than the end of the track', async () => {
 		await heldAs('44', { positionMs: 0 });
 		fake.tracks.set('45', Promise.resolve(track('45', 5)));

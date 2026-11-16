@@ -111,6 +111,8 @@ class Player {
 	#resumeAt: { item: string; seconds: number } | null = null;
 	/** Bumped on every item opened, so a slow lookup for an earlier one is ignored. */
 	#opens = 0;
+	/** Bumped each time the user starts or moves playback here, so a slow pick-up gives way to one since. */
+	#takeovers = 0;
 	#audio: HTMLAudioElement | null = null;
 	/** Bumped on every load, so a slow response for an earlier track is ignored. */
 	#load = 0;
@@ -349,9 +351,11 @@ class Player {
 	 * without rebuilding the queue, `requirements/queue.md` §7). It fails, and starts nothing,
 	 * if the queue here is not that far yet, or the item is of another library than this
 	 * device's. The volume stays this device's own. Fails too if there is nothing to pick up, or
-	 * playback moves on meanwhile.
+	 * playback moves on elsewhere meanwhile. Playback started or moved here meanwhile, a pick-up
+	 * too, wins: this settles having done nothing, since nothing failed.
 	 */
 	async pickUp(play = true) {
+		const takeovers = this.#takeovers;
 		const state = playback.state;
 		const itemId = state?.itemId;
 		if (!itemId) throw new Error('Nothing here to pick up.');
@@ -365,6 +369,9 @@ class Player {
 		const { libraryId, track: trackId } = row;
 		const track =
 			playback.track?.id === trackId ? playback.track : await getTrack(fetch, libraryId, trackId!);
+		// Something started or moved here while the track was on its way. The state does not show
+		// it, since a start here is not in it until the server has its queue.
+		if (this.#takeovers !== takeovers) return;
 		// Another device took over, or this one changed library, while the track was on its way.
 		const now = playback.state;
 		const moved = now?.itemId !== itemId || now.activeDeviceId !== state?.activeDeviceId;
@@ -592,6 +599,7 @@ class Player {
 
 	/** The user started or moved playback here, which takes it over from anywhere else. */
 	#started() {
+		this.#takeovers++;
 		this.#progress.started();
 		this.#tabs?.postMessage('started');
 	}
