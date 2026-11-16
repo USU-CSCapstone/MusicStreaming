@@ -288,3 +288,89 @@ fn an_index_made_a_little_at_a_time_is_the_index_made_at_once() {
         assert!(steps > 300 / budget, "budget {budget} took {steps} steps");
     }
 }
+
+/// Every match of `kind` for `query`, read `limit` at a time, as the pages' IDs.
+fn pages(index: &Index, query: &str, kind: Kind, limit: usize) -> Vec<Vec<i64>> {
+    let mut pages = Vec::new();
+    let mut after = None;
+    loop {
+        let page = index.page(query, kind, after.as_ref(), limit, |_, _| true);
+        pages.push(page.ids);
+        match page.next {
+            Some(next) => after = Some(next),
+            None => return pages,
+        }
+    }
+}
+
+#[test]
+fn a_section_reads_a_page_at_a_time_in_its_ranking() {
+    let index = library();
+    // "Hallo" and "Hello" tie, and "hallo" sorts first; "Hello World" has a word more.
+    assert_eq!(index.search("h", &[Kind::Track], 10)[0].ids, [25, 23, 24]);
+    assert_eq!(pages(&index, "h", Kind::Track, 2), [vec![25, 23], vec![24]]);
+    assert_eq!(pages(&index, "h", Kind::Track, 3), [vec![25, 23, 24]], "no page past the last");
+    let first = index.page("h", Kind::Track, None, 2, |_, _| true);
+    assert_eq!(first.total, 3);
+    let rest = index.page("h", Kind::Track, first.next.as_ref(), 2, |_, _| true);
+    assert_eq!((rest.total, rest.next), (3, None), "the total counts every match");
+}
+
+#[test]
+fn pages_put_together_are_the_whole_section() {
+    let index = Index::build((0..25).map(|id| doc(Kind::Track, id, &format!("Love {}", id % 7))));
+    let whole = index.search("love", &[Kind::Track], 100);
+    assert_eq!(pages(&index, "love", Kind::Track, 4).concat(), whole[0].ids);
+}
+
+#[test]
+fn a_page_is_only_of_its_kind_and_what_the_filter_keeps() {
+    let index = library();
+    let blue = |keep: fn(Kind, i64) -> bool| {
+        let page = index.page("blue", Kind::Album, None, 10, keep);
+        (page.ids, page.total)
+    };
+    assert_eq!(blue(|_, _| true), (vec![11, 10], 2));
+    assert_eq!(blue(|_, id| id != 11), (vec![10], 1));
+    assert_eq!(blue(|_, _| false), (vec![], 0));
+    assert_eq!(index.page("", Kind::Album, None, 10, |_, _| true).total, 0);
+}
+
+#[test]
+fn a_page_continues_in_an_index_rebuilt_since() {
+    let names = ["Love A", "Love B", "Love C", "Love D", "Love E"];
+    let before = Index::build(names.iter().zip(1..).map(|(name, id)| doc(Kind::Track, id, name)));
+    let first = before.page("love", Kind::Track, None, 2, |_, _| true);
+    assert_eq!(first.ids, [1, 2]);
+    // Since then, one before the cursor was added and one after it removed, and the documents'
+    // positions all moved.
+    let after = Index::build([
+        doc(Kind::Track, 6, "Love AA"),
+        doc(Kind::Track, 1, "Love A"),
+        doc(Kind::Track, 2, "Love B"),
+        doc(Kind::Track, 3, "Love C"),
+        doc(Kind::Track, 5, "Love E"),
+        doc(Kind::Artist, 7, "Love"),
+    ]);
+    let next = after.page("love", Kind::Track, first.next.as_ref(), 10, |_, _| true);
+    assert_eq!(next.ids, [3, 5], "nothing shown twice, nothing still there passed over");
+}
+
+#[test]
+fn a_rank_reads_back_from_its_bytes() {
+    let index = library();
+    let next = index.page("say it", Kind::Track, None, 0, |_, _| true).next;
+    assert_eq!(next, None, "an empty page continues after nothing");
+    let index = Index::build([doc(Kind::Track, -4, "Ça va"), doc(Kind::Track, 9, "Ça va mieux")]);
+    let rank = index.page("ca", Kind::Track, None, 1, |_, _| true).next.unwrap();
+    assert_eq!(Rank::from_bytes(&rank.to_bytes()), Some(rank.clone()));
+    let bytes = rank.to_bytes();
+    assert_eq!(Rank::from_bytes(&bytes[..bytes.len() - 1]), None, "truncated");
+    assert_eq!(Rank::from_bytes(&[]), None);
+    let mut flag = bytes.clone();
+    flag[0] = 2;
+    assert_eq!(Rank::from_bytes(&flag), None, "a flag that is neither 0 nor 1");
+    let mut text = bytes;
+    *text.last_mut().unwrap() = 0xff;
+    assert_eq!(Rank::from_bytes(&text), None, "a word that is not UTF-8");
+}
