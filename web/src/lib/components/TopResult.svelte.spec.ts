@@ -1,0 +1,127 @@
+import { page } from 'vitest/browser';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { render } from 'vitest-browser-svelte';
+import type { AlbumSummary, ArtistSummary, PlayContext, TrackSummary } from '$lib/api/types';
+
+vi.mock('$app/state', () => ({ page: { data: { library: { id: '1' } } } }));
+const fake = vi.hoisted(() => ({
+	plays: [] as unknown[][],
+	listed: [] as Record<string, unknown>[],
+	tracks: (async () => ({ items: [], nextCursor: null, total: 0 })) as () => Promise<unknown>
+}));
+vi.mock('$lib/player.svelte', () => ({
+	player: { play: (...args: unknown[]) => void fake.plays.push(args) }
+}));
+vi.mock('$lib/api/client', async (actual) => ({
+	...(await actual<typeof import('$lib/api/client')>()),
+	listTracks: (_f: unknown, _l: string, query: Record<string, unknown>) => {
+		fake.listed.push(query);
+		return fake.tracks();
+	}
+}));
+
+const { toaster } = await import('$lib/toast.svelte');
+const { default: TopResult } = await import('./TopResult.svelte');
+
+const track = (id: string, title: string) =>
+	({
+		id,
+		title,
+		artists: [{ id: '21', name: 'Weezer' }],
+		album: { id: '31', title: 'Blue Album', artists: [], image: null },
+		availability: 'available',
+		liked: false
+	}) as unknown as TrackSummary;
+const album = {
+	id: '31',
+	title: 'Blue Album',
+	artists: [{ id: '21', name: 'Weezer' }],
+	releaseDate: '1994-05-10',
+	image: null,
+	trackCount: 10
+} as unknown as AlbumSummary;
+const artist = {
+	id: '21',
+	name: 'Weezer',
+	image: null,
+	albumCount: 3,
+	trackCount: 30
+} as unknown as ArtistSummary;
+
+const context: PlayContext = { type: 'search', query: 'say it', section: 'tracks' };
+const from = { recipe: { type: 'search' as const, q: 'say it' }, total: 4 };
+
+beforeEach(() => {
+	fake.plays.length = 0;
+	fake.listed.length = 0;
+	fake.tracks = async () => ({ items: [], nextCursor: null, total: 0 });
+});
+
+afterEach(() => toaster.dismiss());
+
+describe('TopResult.svelte', () => {
+	it('plays a track first of the search’s songs, and keeps the search', async () => {
+		const acted = vi.fn();
+		const song = track('5', "Say It Ain't So");
+		render(TopResult, { props: { result: { type: 'track', track: song }, context, from, onact: acted } });
+
+		await expect.element(page.getByText('Song', { exact: true })).toBeVisible();
+		await expect.element(page.getByText("Say It Ain't So")).toBeVisible();
+		await expect.element(page.getByRole('link', { name: 'Blue Album' })).toBeVisible();
+		await page.getByRole('button', { name: "Play Say It Ain't So" }).click();
+
+		expect(fake.plays).toEqual([[[song], 0, context, from]]);
+		expect(acted).toHaveBeenCalledWith({ type: 'track', id: '5' });
+	});
+
+	it('plays an album from its first song, the server resolving the rest', async () => {
+		const acted = vi.fn();
+		const first = [track('7', 'My Name Is Jonas'), track('8', 'No One Else')];
+		fake.tracks = async () => ({ items: first, nextCursor: 'next', total: 10 });
+		render(TopResult, { props: { result: { type: 'album', album }, context, from, onact: acted } });
+
+		await expect.element(page.getByText('Album', { exact: true })).toBeVisible();
+		await expect.element(page.getByRole('link', { name: 'Blue Album' })).toBeVisible();
+		await page.getByRole('button', { name: 'Play Blue Album' }).click();
+
+		await vi.waitFor(() => expect(fake.plays).toHaveLength(1));
+		expect(fake.listed).toEqual([{ albumId: '31', sort: 'album' }]);
+		const [tracks, index, played, by] = fake.plays[0];
+		expect([tracks, index, played]).toEqual([first, 0, { type: 'album', id: '31' }]);
+		expect(by).toEqual({ recipe: expect.objectContaining({ type: 'album', albumId: '31' }), total: 10 });
+		expect(acted).toHaveBeenCalledWith({ type: 'album', id: '31' });
+	});
+
+	it('plays an artist as their page does', async () => {
+		const acted = vi.fn();
+		fake.tracks = async () => ({ items: [track('7', 'Buddy Holly')], nextCursor: null, total: 1 });
+		render(TopResult, { props: { result: { type: 'artist', artist }, context, from, onact: acted } });
+
+		await expect.element(page.getByText('Artist', { exact: true })).toBeVisible();
+		await page.getByRole('button', { name: 'Play Weezer' }).click();
+
+		await vi.waitFor(() => expect(fake.plays).toHaveLength(1));
+		expect(fake.listed).toEqual([{ artistId: '21', sort: 'album' }]);
+		expect(fake.plays[0][2]).toEqual({ type: 'artist', id: '21', scope: 'all' });
+		expect(acted).toHaveBeenCalledWith({ type: 'artist', id: '21' });
+	});
+
+	it('says so when an album’s songs cannot be read, and keeps nothing', async () => {
+		const acted = vi.fn();
+		fake.tracks = async () => {
+			throw new Error('offline');
+		};
+		render(TopResult, { props: { result: { type: 'album', album }, context, from, onact: acted } });
+
+		await page.getByRole('button', { name: 'Play Blue Album' }).click();
+
+		await vi.waitFor(() => expect(toaster.current?.message).toBe("Couldn't play Blue Album."));
+		expect(fake.plays).toEqual([]);
+		expect(acted).not.toHaveBeenCalled();
+	});
+
+	it('offers the actions for what it is', async () => {
+		render(TopResult, { props: { result: { type: 'album', album }, context, from, onact: vi.fn() } });
+		await expect.element(page.getByRole('button', { name: 'Actions for “Blue Album”' })).toBeVisible();
+	});
+});

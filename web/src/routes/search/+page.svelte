@@ -5,13 +5,14 @@
 	import { beforeNavigate } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { view } from '$lib/adding.svelte';
-	import type { SearchResult } from '$lib/api/types';
+	import type { PlayContext, SearchResult } from '$lib/api/types';
 	import { albumCard, artistCard, playlistCard, type Card } from '$lib/cards';
 	import AddToPlaylistButton from '$lib/components/AddToPlaylistButton.svelte';
 	import CollectionView from '$lib/components/CollectionView.svelte';
 	import FilterPicker from '$lib/components/FilterPicker.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import SearchBox, { settler } from '$lib/components/SearchBox.svelte';
+	import TopResult from '$lib/components/TopResult.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
 	import { UNFILTERED, isFiltered, showFiltered, shownFilter } from '$lib/filters';
 	import { tagTypePlural } from '$lib/tags';
@@ -57,16 +58,24 @@
 		];
 	});
 
-	// Unsorted, the songs are the first of what the search finds under the loaded filter, in its
-	// ranking, which the server resolves to the end. Sorted, they play as shown.
-	const from = $derived<PlayFrom | undefined>(
-		sort || !data.q
-			? undefined
-			: {
+	// The songs the search finds under the loaded filter, in its ranking, which the server
+	// resolves to the end. Unsorted, the songs shown are the first of them; sorted, they play as
+	// shown. The top result, a track, always plays first of them.
+	const ranked = $derived<PlayFrom | undefined>(
+		data.q
+			? {
 					recipe: searchRecipe(data.q, data.filter),
 					total: sections.find((s) => s.type === 'tracks')?.total ?? songs.length
 				}
+			: undefined
 	);
+	const from = $derived(sort ? undefined : ranked);
+	const context = $derived<PlayContext>({
+		type: 'search',
+		query: data.q ?? '',
+		section: 'tracks',
+		...(filtered && { filter: { tagAll: data.filter.all, tagAny: data.filter.any } })
+	});
 
 	// All the songs the search finds, in its ranking, which only queues. Sorted, there is no
 	// recipe for the order shown, and the rows queue one by one.
@@ -168,6 +177,14 @@
 		{/if}
 	</div>
 {:else}
+	{#if data.results.top}
+		<TopResult
+			result={data.results.top}
+			{context}
+			from={ranked}
+			onact={(selected) => settler.settle(selected)}
+		/>
+	{/if}
 	{#each sections as section (section.type)}
 		<section>
 			<header>
@@ -181,14 +198,7 @@
 					{sort}
 					onsort={showSorted}
 					filter={data.filter}
-					context={{
-						type: 'search',
-						query: data.q ?? '',
-						section: 'tracks',
-						...(filtered && {
-							filter: { tagAll: data.filter.all, tagAny: data.filter.any }
-						})
-					}}
+					{context}
 					{from}
 					onplay={(track) => settler.settle({ type: 'track', id: track.id })}
 				/>
