@@ -75,7 +75,7 @@ Anticipated but not built: **personal labels**, if user tagging is added later. 
 
 ## 7. Browsing and Filtering
 
-- **Filter by tag anywhere entities are listed** ([`conventions.md` §4](conventions.md#4-sorting--browsing)).
+- **Filter by tag anywhere entities are listed** ([`conventions.md` §4](conventions.md#4-sorting--browsing)), **except search results**, which find tags by name rather than apply them ([`search.md` §5](search.md#5-scope)).
 - **A tag has a page** — the artists, albums, and tracks carrying it, browsable and playable like any other collection.
 - **Filters compose.** Genre with mood, genre with year, genre with listening data, or several tags at once, narrowing or widening as the user chooses.
 - **A filtered view is not a playlist** ([`playlists.md`](playlists.md) Overview). It leaves nothing behind.
