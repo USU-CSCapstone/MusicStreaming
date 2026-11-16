@@ -604,6 +604,35 @@ async fn every_list_sort_and_filter_and_every_get_give_identical_json_on_the_ser
         let answer = ask(&db, &device, "search", params.clone()).await;
         cases.push(case("search", params, answer));
     }
+    // Each section of a few searches, walked in pages of one, and the sections and cursors a
+    // section refuses.
+    for (section, q) in [("albums", "a"), ("artists", "road"), ("tracks", "come"), ("tracks", "a")]
+    {
+        let mut next: Option<String> = None;
+        loop {
+            let params = json!({ "section": section, "q": q, "limit": 1, "cursor": next });
+            let answer = ask(&db, &device, "searchSection", params.clone()).await;
+            next = answer["nextCursor"].as_str().map(str::to_owned);
+            cases.push(case("searchSection", params, answer));
+            if next.is_none() {
+                break;
+            }
+        }
+    }
+    let first = json!({ "section": "albums", "q": "a", "limit": 1 });
+    let albums = ask(&db, &device, "searchSection", first).await;
+    let cursor = albums["nextCursor"].as_str().unwrap().to_owned();
+    for params in [
+        json!({ "section": "albums", "q": "a", "tagAll": "30" }),
+        json!({ "section": "playlists", "q": "a" }),
+        json!({ "section": "lyrics", "q": "a" }),
+        json!({ "section": "songs", "q": "a" }),
+        json!({ "section": "tracks", "q": "a", "cursor": cursor }),
+        json!({ "section": "albums", "q": "" }),
+    ] {
+        let answer = ask(&db, &device, "searchSection", params.clone()).await;
+        cases.push(case("searchSection", params, answer));
+    }
     // Every recipe's tracks, and the list hash they are named by.
     for recipe in recipes() {
         let params = json!({ "recipe": recipe });
@@ -626,7 +655,8 @@ async fn every_list_sort_and_filter_and_every_get_give_identical_json_on_the_ser
     });
     let (playlists, rest): (Vec<_>, Vec<_>) =
         rest.into_iter().partition(|c| query(c).contains("Playlist"));
-    let (search, rest): (Vec<_>, Vec<_>) = rest.into_iter().partition(|c| query(c) == "search");
+    let (search, rest): (Vec<_>, Vec<_>) =
+        rest.into_iter().partition(|c| query(c).starts_with("search"));
     let (recipes, browse): (Vec<_>, Vec<_>) =
         rest.into_iter().partition(|c| query(c) == "resolveRecipe");
     golden("tracks.json", &lines(&tracks));

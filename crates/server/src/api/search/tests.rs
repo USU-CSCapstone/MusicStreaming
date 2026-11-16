@@ -232,3 +232,148 @@ async fn a_search_with_tags_finds_what_carries_them() {
     let (_, body) = json(&app, "/api/v1/libraries/2/search?q=elsewhere&tagAny=30").await;
     assert_eq!(body["sections"], json!([]), "another library's tag");
 }
+
+/// Library 1 gets five tracks called "Lullaby" and a letter, 1101 to 1105, A to E.
+async fn app_with_lullabies() -> (tempfile::TempDir, Arc<Database>, Router) {
+    let (temp, db, app) = app_with_catalog().await;
+    db.write(|tx| {
+        for (id, letter) in (1101..).zip(["A", "B", "C", "D", "E"]) {
+            Track { title: format!("Lullaby {letter}"), ..Track::new(id, 1, 101) }.insert(tx)?;
+        }
+        Ok::<_, rusqlite::Error>(())
+    })
+    .await
+    .unwrap();
+    (temp, db, app)
+}
+
+/// Every page of the tracks section for `q`, read `limit` at a time from library 1, as each
+/// page's track IDs.
+async fn pages(app: &Router, q: &str, limit: u32) -> Vec<Vec<String>> {
+    let mut pages = Vec::new();
+    let mut cursor = String::new();
+    loop {
+        let uri = format!("/api/v1/libraries/1/search/tracks?q={q}&limit={limit}{cursor}");
+        let (status, page) = json(app, &uri).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        pages.push(track_ids(&page));
+        match page["nextCursor"].as_str() {
+            Some(next) => cursor = format!("&cursor={next}"),
+            None => return pages,
+        }
+    }
+}
+
+/// The track IDs of a section page's items.
+fn track_ids(page: &Value) -> Vec<String> {
+    let items = page["items"].as_array().unwrap();
+    items.iter().map(|item| item["track"]["id"].as_str().unwrap().to_owned()).collect()
+}
+
+#[tokio::test]
+async fn a_section_pages_through_every_match_in_the_searchs_ranking() {
+    let (_temp, _db, app) = app_with_lullabies().await;
+    let (_, search) = json(&app, "/api/v1/libraries/1/search?q=lullaby&sectionLimit=50").await;
+    assert_eq!(sections(&search)[0].1, ["1101", "1102", "1103", "1104", "1105"]);
+    let pages = pages(&app, "lullaby", 2).await;
+    assert_eq!(pages, [vec!["1101", "1102"], vec!["1103", "1104"], vec!["1105"]]);
+
+    // Each page is the whole section's total, and its items are as `search` shows them.
+    let (_, page) = json(&app, "/api/v1/libraries/1/search/tracks?q=lullaby&limit=1").await;
+    assert_eq!(page["query"], "lullaby");
+    assert_eq!(page["total"], 5);
+    assert_eq!(page["items"][0], search["sections"][0]["items"][0]);
+    let (_, page) = json(&app, "/api/v1/libraries/1/search/tracks?q=lullaby").await;
+    assert_eq!((track_ids(&page).len(), &page["nextCursor"]), (5, &Value::Null), "100 by default");
+}
+
+#[tokio::test]
+async fn a_page_continues_after_the_last_match_once_the_index_is_rebuilt() {
+    let (_temp, db, app) = app_with_lullabies().await;
+    let (_, first) = json(&app, "/api/v1/libraries/1/search/tracks?q=lullaby&limit=2").await;
+    assert_eq!(track_ids(&first), ["1101", "1102"]);
+    let cursor = first["nextCursor"].as_str().unwrap().to_owned();
+    // One that ranks before the cursor is added, and one after it removed.
+    db.write(|tx| {
+        Track { title: "Lullaby AA".into(), ..Track::new(1106, 1, 101) }.insert(tx)?;
+        tx.execute_batch("DELETE FROM tracks WHERE id = 1104")
+    })
+    .await
+    .unwrap();
+    // Once the index is rebuilt, which finding the new track shows.
+    eventually("the index catches up", async || {
+        let (_, page) = json(&app, "/api/v1/libraries/1/search/tracks?q=lullaby%20aa").await;
+        (track_ids(&page) == ["1106"]).then_some(())
+    })
+    .await;
+    let uri = format!("/api/v1/libraries/1/search/tracks?q=lullaby&limit=10&cursor={cursor}");
+    let (_, page) = json(&app, &uri).await;
+    assert_eq!(page["total"], 5);
+    assert_eq!(
+        track_ids(&page),
+        ["1103", "1105"],
+        "nothing twice, nothing still there passed over"
+    );
+}
+
+#[tokio::test]
+async fn a_section_leaves_out_what_the_caller_hid_and_what_lacks_the_tags() {
+    let (_temp, db, app) = app_with_lullabies().await;
+    let hide = "/api/v1/libraries/1/tracks/1102/hidden";
+    assert_eq!(send(app.clone(), "PUT", hide).await.0, StatusCode::NO_CONTENT);
+    let (_, page) = json(&app, "/api/v1/libraries/1/search/tracks?q=lullaby").await;
+    assert_eq!(
+        (track_ids(&page), &page["total"]),
+        (vec!["1101", "1103", "1104", "1105"].into_iter().map(String::from).collect(), &json!(4))
+    );
+
+    db.write(|tx| {
+        tx.execute_batch(
+            "INSERT INTO track_tags (library_id, track_id, tag_id, tag_name)
+             VALUES (1, 1103, 30, 'Rock'), (1, 1105, 30, 'Rock');",
+        )
+    })
+    .await
+    .unwrap();
+    let (_, page) = json(&app, "/api/v1/libraries/1/search/tracks?q=lullaby&tagAny=30").await;
+    assert_eq!(
+        (track_ids(&page), &page["total"]),
+        (vec!["1103".to_owned(), "1105".to_owned()], &json!(2))
+    );
+}
+
+#[tokio::test]
+async fn section_problems() {
+    let (_temp, _db, app) = app_with_lullabies().await;
+    let (_, page) = json(&app, "/api/v1/libraries/1/search/albums?q=lullaby&limit=1").await;
+    let albums = page["nextCursor"].as_str().map(str::to_owned);
+    assert_eq!(albums, None, "no album matches");
+    let (_, page) = json(&app, "/api/v1/libraries/1/search/tracks?q=lullaby&limit=1").await;
+    let tracks = page["nextCursor"].as_str().unwrap().to_owned();
+    let base = "/api/v1/libraries/1/search";
+    for (uri, status) in [
+        ("/api/v1/libraries/9/search/tracks?q=a".to_owned(), StatusCode::NOT_FOUND),
+        (format!("{base}/songs?q=a"), StatusCode::NOT_FOUND),
+        (format!("{base}/lyrics?q=a"), StatusCode::UNPROCESSABLE_ENTITY),
+        (format!("{base}/tracks"), StatusCode::UNPROCESSABLE_ENTITY),
+        (format!("{base}/tracks?q="), StatusCode::UNPROCESSABLE_ENTITY),
+        (format!("{base}/tracks?q=a&limit=0"), StatusCode::UNPROCESSABLE_ENTITY),
+        (format!("{base}/tracks?q=a&limit=1001"), StatusCode::UNPROCESSABLE_ENTITY),
+        (format!("{base}/tracks?q=a&cursor=nope"), StatusCode::UNPROCESSABLE_ENTITY),
+        (format!("{base}/albums?q=a&cursor={tracks}"), StatusCode::UNPROCESSABLE_ENTITY),
+        (format!("{base}/tracks?q=a&sectionLimit=5"), StatusCode::UNPROCESSABLE_ENTITY),
+    ] {
+        let (actual, content_type, _) = send(app.clone(), "GET", &uri).await;
+        assert_eq!(actual, status, "{uri}");
+        assert_eq!(content_type.as_deref(), Some("application/problem+json"), "{uri}");
+    }
+    // A list cursor's sort values are not a rank.
+    let list = crate::api::cursor::encode("search.tracks", &[rusqlite::types::Value::Integer(1)]);
+    let (status, _, _) =
+        send(app.clone(), "GET", &format!("{base}/tracks?q=a&cursor={list}")).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let (status, page) = json(&app, &format!("{base}/playlists?q=lullaby")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page, json!({ "query": "lullaby", "items": [], "nextCursor": null, "total": 0 }));
+}

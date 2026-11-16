@@ -1,11 +1,14 @@
-//! Search: the documents a library's search index is built from, and the response a search
-//! gives (`search`, `api/openapi.yaml`). The index itself is the core's
+//! Search: the documents a library's search index is built from, and the responses a search
+//! gives (`search` and `searchSection`, `api/openapi.yaml`). The index itself is the core's
 //! (`jewelcase_core::Index`), which the server keeps in memory and a device builds from the same
 //! documents.
 
 use std::collections::HashSet;
 
-use jewelcase_core::{Document, Index, IndexBuilder, Kind, Section as Found};
+use jewelcase_core::{
+    Document, Index, IndexBuilder, Kind, Rank, Section as Found, SectionPage as FoundPage,
+};
+use rusqlite::types::Value;
 use rusqlite::{Connection, params};
 use serde::Serialize;
 
@@ -13,6 +16,7 @@ use crate::Invalid;
 use crate::albums::{self, AlbumSummary};
 use crate::artists::{self, ArtistSummary};
 use crate::by_ids::by_ids;
+use crate::cursor;
 use crate::hidden::{self, Losses};
 use crate::page::library_number;
 use crate::tag_filter::{TagFilter, Tagged, Tags};
@@ -36,6 +40,81 @@ struct Section {
     kind: &'static str,
     items: Vec<SearchResult>,
     total: usize,
+}
+
+/// The spec's `SearchSectionPage`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SectionPage {
+    query: String,
+    items: Vec<SearchResult>,
+    next_cursor: Option<String>,
+    total: usize,
+}
+
+/// What a `searchSection` names: one kind's matches, or a section that has none yet.
+pub enum SectionType {
+    Kind(Kind),
+    /// The caller's playlists, which the index does not hold yet: an empty page.
+    Playlists,
+    /// Lyrics, which are not indexed yet: [`Invalid`].
+    Lyrics,
+}
+
+impl SectionType {
+    /// The section `name` names, as the spec's `SearchSectionType` spells it, if any.
+    pub fn named(name: &str) -> Option<SectionType> {
+        match name {
+            "playlists" => Some(SectionType::Playlists),
+            "lyrics" => Some(SectionType::Lyrics),
+            name => Kind::ALL
+                .into_iter()
+                .find(|&kind| section_type(kind) == name)
+                .map(SectionType::Kind),
+        }
+    }
+}
+
+/// The rank a page of the section `section` continues after, from its `cursor`: a cursor of
+/// another section, or none of ours, is [`Invalid`].
+pub fn after(cursor: Option<&str>, section: &str) -> Result<Option<Rank>, Invalid> {
+    let Some(cursor) = cursor else { return Ok(None) };
+    match cursor::decode(cursor, &label(section), 1)?.as_slice() {
+        [Value::Blob(bytes)] => Rank::from_bytes(bytes),
+        _ => None,
+    }
+    .map(Some)
+    .ok_or_else(|| Invalid("cursor is not valid for this list".to_owned()))
+}
+
+/// The label of a section's cursors, so one is only accepted where it came from.
+fn label(section: &str) -> String {
+    format!("search.{section}")
+}
+
+/// A page of the section of `kind` that a search for `q` in `library` found as `found`, as the
+/// browse lists show it to `user`, whose hidden tracks `hid` says, with the cursor to the next.
+/// No `kind` is a section with nothing in it yet.
+pub fn section_page(
+    conn: &Connection,
+    user: i64,
+    library: i64,
+    q: String,
+    kind: Option<Kind>,
+    found: FoundPage,
+    hid: &Hid,
+) -> rusqlite::Result<SectionPage> {
+    let Some(kind) = kind else {
+        return Ok(SectionPage { query: q, items: Vec::new(), next_cursor: None, total: 0 });
+    };
+    let label = label(section_type(kind));
+    let next_cursor =
+        found.next.map(|rank| cursor::encode(&label, &[Value::Blob(rank.to_bytes())]));
+    let FoundPage { ids, total, .. } = found;
+    let items = sections(conn, user, library, vec![Found { kind, ids, total }], &hid.losses)?
+        .pop()
+        .map_or_else(Vec::new, |section| section.items);
+    Ok(SectionPage { query: q, items, next_cursor, total })
 }
 
 /// The spec's `SearchResult`: `{"type": "track", "track": {…}}` and so on.
