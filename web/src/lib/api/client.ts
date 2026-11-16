@@ -34,6 +34,8 @@ import type {
 	RestoredQueue,
 	Scan,
 	SearchResponse,
+	SearchSectionPage,
+	SearchSectionType,
 	ServerInfo,
 	Session,
 	SetupRequest,
@@ -483,6 +485,22 @@ export const search = (f: Fetch, libraryId: string, q: string, query: Query = {}
 	readSearch<SearchResponse>('search', libraryId, { q, ...query }, () =>
 		get<SearchResponse>(f, `${lib(libraryId)}/search`, { q, ...query })
 	);
+
+/**
+ * A page of every match in one of a search's sections: in the search's ranking, or by `sort` and
+ * `order` as the section's own list sorts it. Pass the previous page's `nextCursor` as `cursor`.
+ */
+export const searchSection = (
+	f: Fetch,
+	libraryId: string,
+	section: SearchSectionType,
+	q: string,
+	query: Query = {}
+) =>
+	get<SearchSectionPage>(f, `${lib(libraryId)}/search/${encodeURIComponent(section)}`, {
+		q,
+		...query
+	});
 
 const recent = (libraryId: string) => `${lib(libraryId)}/recent-searches`;
 
