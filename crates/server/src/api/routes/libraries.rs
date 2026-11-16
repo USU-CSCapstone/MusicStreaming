@@ -45,6 +45,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/libraries/{library_id}/hidden-tracks", get(hidden::list))
         .route("/libraries/{library_id}/search", get(search::search))
+        .route("/libraries/{library_id}/search/{section}", get(search::section))
         .route(
             "/libraries/{library_id}/recent-searches",
             get(recent_searches::list).post(recent_searches::record).delete(recent_searches::clear),
