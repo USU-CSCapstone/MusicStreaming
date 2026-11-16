@@ -99,8 +99,11 @@ class Player {
 	#wantsNext = false;
 	/** The queue moved to an item that is not loaded yet, which is being looked up. */
 	#moving = false;
-	/** The item the queue was moving to when the user paused, which loads paused once it is looked up. */
-	#pausedFor: string | null = null;
+	/**
+	 * Paused during a move: what it moves to loads paused once it is looked up, one passed over on
+	 * the way too. A move or play of the user's, here or from another device, clears it.
+	 */
+	#pausedMove = false;
 	/** Which way the last move went, so a track that cannot play is passed over the same way. */
 	#direction: 1 | -1 = 1;
 	/** The items passed over in a row, so a run that comes round to one again, as under Repeat All, has tried the whole queue. */
@@ -240,7 +243,7 @@ class Player {
 		this.#resumeAt = null;
 		// Paused while it was being looked up: it waits paused, as one paused while its audio is
 		// on its way does.
-		this.#go(found.track, found.libraryId, item, startAt, this.#pausedFor !== item);
+		this.#go(found.track, found.libraryId, item, startAt, !this.#pausedMove);
 		void this.#preload();
 	}
 
@@ -489,7 +492,7 @@ class Player {
 		const audio = this.#audio;
 		if (!audio || !this.current) throw new Error('Nothing is loaded.');
 		// A track being looked up plays once it is, as it would have before the pause.
-		this.#pausedFor = null;
+		this.#pausedMove = false;
 		// The track is on its way, and its audio is not yet the audio element's.
 		if (this.#loading) return;
 		if (byUser) this.#started();
@@ -509,7 +512,7 @@ class Player {
 		this.#progress.paused();
 		// A track still on its way stays paused once its audio arrives, and one still being looked
 		// up once it is.
-		if (this.#moving) this.#pausedFor = queue.current;
+		if (this.#moving) this.#pausedMove = true;
 		this.playing = this.#loading = false;
 		this.#audio?.pause();
 	}
@@ -533,6 +536,7 @@ class Player {
 			return;
 		}
 		if (byUser) this.#started();
+		this.#pausedMove = false;
 		this.#direction = -1;
 		this.#tried.clear();
 		this.#adoptable = false;
@@ -608,6 +612,7 @@ class Player {
 	/** The user started or moved playback here, which takes it over from anywhere else. */
 	#started() {
 		this.#takeovers++;
+		this.#pausedMove = false;
 		this.#progress.started();
 		this.#tabs?.postMessage('started');
 	}
@@ -624,6 +629,8 @@ class Player {
 			this.#wantsNext = true;
 			return;
 		}
+		// A Next plays what it moves to, though a move before it was paused.
+		this.#pausedMove = false;
 		if (!this.#hasNext()) return this.#end();
 		this.#direction = 1;
 		this.#tried.clear();
@@ -671,7 +678,7 @@ class Player {
 		this.#loaded = { track, libraryId };
 		this.#holds = true;
 		this.#moving = false;
-		this.#pausedFor = null;
+		this.#pausedMove = false;
 		this.current = track;
 		this.#item = item;
 		const load = ++this.#load;

@@ -864,6 +864,39 @@ describe('player and the queue', () => {
 		expect(play.mock.calls.length).toBeGreaterThan(plays);
 	});
 
+	it('stays paused when the track paused while it is looked up cannot play', async () => {
+		let arrive: (track: unknown) => void = () => {};
+		fake.tracks.set('91', new Promise((resolve) => (arrive = resolve)));
+		const { play } = await playing('90', '91', '92');
+		player.next();
+		await settle();
+		player.toggle();
+		const plays = play.mock.calls.length;
+
+		arrive(track('91', 60, 'missing'));
+		await vi.waitFor(() => expect(player.current?.id).toBe('92'));
+		await settle();
+		expect(player.playing).toBe(false);
+		expect(play.mock.calls.length).toBe(plays);
+	});
+
+	it('plays what Next moves to, when pressed again during a paused lookup', async () => {
+		let arrive: (track: unknown) => void = () => {};
+		fake.tracks.set('94', new Promise((resolve) => (arrive = resolve)));
+		const { play } = await playing('93', '94', '95');
+		player.next();
+		await settle();
+		player.toggle();
+		const plays = play.mock.calls.length;
+
+		player.next();
+		await vi.waitFor(() => expect(player.current?.id).toBe('95'));
+		await settle();
+		expect(player.playing).toBe(true);
+		expect(play.mock.calls.length).toBeGreaterThan(plays);
+		arrive(track('94', 60));
+	});
+
 	it('moves on with a next edit when the track ends, or plays it again under Repeat One', async () => {
 		const { play, audio } = await playing('64', '65');
 		audio.dispatchEvent(new Event('ended'));
