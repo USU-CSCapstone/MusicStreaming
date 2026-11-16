@@ -250,13 +250,18 @@ async fn app_with_lullabies() -> (tempfile::TempDir, Arc<Database>, Router) {
 /// Every page of the tracks section for `q`, read `limit` at a time from library 1, as each
 /// page's track IDs.
 async fn pages(app: &Router, q: &str, limit: u32) -> Vec<Vec<String>> {
+    section_pages(app, "tracks", &format!("q={q}&limit={limit}")).await
+}
+
+/// Every page of library 1's `section` for `query`, as each page's item IDs.
+async fn section_pages(app: &Router, section: &str, query: &str) -> Vec<Vec<String>> {
     let mut pages = Vec::new();
     let mut cursor = String::new();
     loop {
-        let uri = format!("/api/v1/libraries/1/search/tracks?q={q}&limit={limit}{cursor}");
+        let uri = format!("/api/v1/libraries/1/search/{section}?{query}{cursor}");
         let (status, page) = json(app, &uri).await;
         assert_eq!(status, StatusCode::OK, "{page}");
-        pages.push(track_ids(&page));
+        pages.push(item_ids(&page));
         match page["nextCursor"].as_str() {
             Some(next) => cursor = format!("&cursor={next}"),
             None => return pages,
@@ -268,6 +273,13 @@ async fn pages(app: &Router, q: &str, limit: u32) -> Vec<Vec<String>> {
 fn track_ids(page: &Value) -> Vec<String> {
     let items = page["items"].as_array().unwrap();
     items.iter().map(|item| item["track"]["id"].as_str().unwrap().to_owned()).collect()
+}
+
+/// The IDs of a section page's items, of whatever type.
+fn item_ids(page: &Value) -> Vec<String> {
+    let items = page["items"].as_array().unwrap();
+    let id = |item: &Value| item[item["type"].as_str().unwrap()]["id"].as_str().unwrap().to_owned();
+    items.iter().map(id).collect()
 }
 
 #[tokio::test]
@@ -376,4 +388,73 @@ async fn section_problems() {
     let (status, page) = json(&app, &format!("{base}/playlists?q=lullaby")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(page, json!({ "query": "lullaby", "items": [], "nextCursor": null, "total": 0 }));
+}
+
+#[tokio::test]
+async fn a_section_sorts_its_matches_as_its_list_does() {
+    let (_temp, db, app) = app_with_lullabies().await;
+    // Longest first, and the last added shortest; two albums, and a track that does not match.
+    db.write(|tx| {
+        for (id, seconds) in (1101..).zip([3, 5, 1, 4, 2]) {
+            tx.execute(
+                "UPDATE tracks SET duration_us = ?2 WHERE id = ?1",
+                (id, seconds * 1_000_000),
+            )?;
+        }
+        for (id, title) in [(106, "Lullaby Two"), (107, "Lullaby One")] {
+            let sort_key = title.to_lowercase().into_bytes();
+            Album { title: Some(title.into()), sort_key, ..Album::new(id, 1) }.insert(tx)?;
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let ids = |ids: &[&str]| ids.iter().map(|&id| id.to_owned()).collect::<Vec<_>>();
+    let pages = section_pages(&app, "tracks", "q=lullaby&sort=name&order=desc&limit=2").await;
+    assert_eq!(pages, [ids(&["1105", "1104"]), ids(&["1103", "1102"]), ids(&["1101"])]);
+    let pages = section_pages(&app, "tracks", "q=lullaby&sort=duration&limit=3").await;
+    assert_eq!(pages, [ids(&["1103", "1105", "1101"]), ids(&["1104", "1102"])]);
+    let pages = section_pages(&app, "albums", "q=lullaby&sort=name").await;
+    assert_eq!(pages, [ids(&["107", "106"])]);
+
+    // The total is the section's, and the items are as the ranked section shows them.
+    let base = "/api/v1/libraries/1/search/tracks?q=lullaby";
+    let (_, sorted) = json(&app, &format!("{base}&sort=name&limit=1")).await;
+    let (_, ranked) = json(&app, &format!("{base}&limit=1")).await;
+    assert_eq!(sorted["total"], 5);
+    assert_eq!(sorted["items"], ranked["items"], "A is first both ways");
+
+    // What the caller hid is left out of a sorted section, and out of its total.
+    let hide = "/api/v1/libraries/1/tracks/1103/hidden";
+    assert_eq!(send(app.clone(), "PUT", hide).await.0, StatusCode::NO_CONTENT);
+    let (_, page) = json(&app, &format!("{base}&sort=duration")).await;
+    assert_eq!(
+        (item_ids(&page), &page["total"]),
+        (ids(&["1105", "1101", "1104", "1102"]), &json!(4))
+    );
+}
+
+#[tokio::test]
+async fn a_sorted_section_takes_only_its_lists_sorts_and_cursors() {
+    let (_temp, _db, app) = app_with_lullabies().await;
+    let base = "/api/v1/libraries/1/search";
+    let cursor = |uri: String| {
+        let app = app.clone();
+        async move { json(&app, &uri).await.1["nextCursor"].as_str().unwrap().to_owned() }
+    };
+    let ranked = cursor(format!("{base}/tracks?q=lullaby&limit=1")).await;
+    let sorted = cursor(format!("{base}/tracks?q=lullaby&sort=name&limit=1")).await;
+    for uri in [
+        format!("{base}/tracks?q=a&sort=nope"),
+        format!("{base}/tracks?q=a&sort=playCount"),
+        format!("{base}/albums?q=a&sort=album"),
+        format!("{base}/artists?q=a&sort=releaseDate"),
+        format!("{base}/tracks?q=a&order=desc"),
+        format!("{base}/tracks?q=a&sort=name&cursor={ranked}"),
+        format!("{base}/tracks?q=a&sort=name&order=desc&cursor={sorted}"),
+        format!("{base}/tracks?q=a&cursor={sorted}"),
+    ] {
+        let (status, _, _) = send(app.clone(), "GET", &uri).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{uri}");
+    }
 }
