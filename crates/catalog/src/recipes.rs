@@ -6,7 +6,9 @@
 //! text ([`jewelcase_core::Recipe`]); here they are typed as the API needs them. A device
 //! resolves with the same code, so the core's list hash of the IDs matches the server's.
 
-use jewelcase_core::{Recipe as Stored, SortField, SortRow, sort_rows};
+use std::collections::HashSet;
+
+use jewelcase_core::{Kind, Recipe as Stored, SortField, SortRow, sort_rows};
 use rusqlite::Connection;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -18,6 +20,7 @@ use crate::playlists::{self, ItemsError};
 use crate::tag_filter::{TagFilter, Tags};
 use crate::time::rfc3339;
 use crate::tracks::{self, TrackOrder, TrackSort};
+use crate::within::{self, Within};
 use crate::{AnyId, Invalid, hidden, search};
 
 /// How a source's list is made, as a request sends it: the spec's `QueueRecipe` without
@@ -50,12 +53,14 @@ pub enum Recipe {
     },
     /// A library's tracks under a browse filter, in a sort.
     Library { filters: Map<String, Value>, sort: TrackSort, order: Order },
-    /// The tracks a search finds under a filter, in its ranking or, with `sort` and `order`
-    /// together, in a sort of `listTracks`, as its Songs tab sorts them.
+    /// The tracks a search finds under a filter and within a container, if it names one, in its
+    /// ranking or, with `sort` and `order` together, in a sort of `listTracks`, as its Songs tab
+    /// sorts them.
     Search {
         q: String,
         #[serde(default)]
         filters: Map<String, Value>,
+        within: Option<String>,
         sort: Option<TrackSort>,
         order: Option<Order>,
     },
@@ -120,10 +125,11 @@ impl Recipe {
                 let (sort, order) = names(*sort, *order);
                 Stored::Library { filters: filters.clone(), sort, order }
             }
-            Recipe::Search { q, filters, sort, order } => {
+            Recipe::Search { q, filters, within, sort, order } => {
                 let sorted = sort.zip(*order).map(|(sort, order)| names(sort, order));
                 let (sort, order) = sorted.unzip();
-                Stored::Search { q: q.clone(), filters: filters.clone(), sort, order }
+                let (q, filters, within) = (q.clone(), filters.clone(), within.clone());
+                Stored::Search { q, filters, within, sort, order }
             }
             Recipe::Playlist { playlist_id, filters, sort, order } => Stored::Playlist {
                 playlist_id: playlist_id.clone(),
@@ -147,6 +153,10 @@ impl Recipe {
             }
             Recipe::Search { sort, order, .. } if sort.is_some() != order.is_some() => {
                 Err(Invalid("A search recipe's sort and order come together.".to_owned()))
+            }
+            Recipe::Search { within: Some(within), filters, .. } => {
+                Within::parse(within)?;
+                tag_filter(filters)
             }
             Recipe::Album { filters, .. }
             | Recipe::Playlist { filters, .. }
@@ -199,10 +209,25 @@ pub fn resolve(
             let sort = TrackOrder { sort: *sort, order: *order };
             tracks::resolve(conn, user, library, None, None, ArtistCredit::Any, tags, sort)?
         }
-        Recipe::Search { q, sort, order, .. } => {
+        Recipe::Search { q, within, sort, order, .. } => {
+            // Within a container, only the tracks it holds. An album, artist or tag the library
+            // lacks holds none, as its own recipe resolves to none; a playlist not `user`'s own
+            // is not theirs to read, as a playlist recipe's is not.
+            let held = match within.as_deref().map(Within::parse).transpose()? {
+                None => None,
+                // An ID that is no ID names nothing there is.
+                Some(None) => Some(HashSet::new()),
+                Some(Some(within)) => match within::read(conn, user, library, within)? {
+                    Some(held) => Some(held[Kind::Track as usize].clone()),
+                    None if matches!(within, Within::Playlist(_)) => return Ok(None),
+                    None => Some(HashSet::new()),
+                },
+            };
             let hid = hidden::ids(conn, user, library)?;
             let mut ranked = ranked(q);
-            ranked.retain(|id| !hid.contains(id));
+            ranked.retain(|id| {
+                !hid.contains(id) && held.as_ref().is_none_or(|held| held.contains(id))
+            });
             match sort.zip(*order) {
                 // The matches lead, as a sorted section's few do, and sort as the list does.
                 Some((sort, order)) => {

@@ -308,6 +308,14 @@ fn recipes() -> Vec<Value> {
         }
         for q in ["a", "e", "come", "zzz"] {
             recipes.push(json!({ "type": "search", "q": q, "filters": filters }));
+            // Within each kind of container, one out of reach and one that is not there.
+            for within in
+                ["album:101", "artist:10", "playlist:501", "tag:30", "playlist:503", "album:999"]
+            {
+                recipes.push(
+                    json!({ "type": "search", "q": q, "filters": filters, "within": within }),
+                );
+            }
             // And as its Songs tab sorts them.
             for (sort, order) in [("name", "asc"), ("album", "desc"), ("duration", "asc")] {
                 recipes.push(json!({
