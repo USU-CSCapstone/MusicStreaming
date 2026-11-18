@@ -1214,11 +1214,13 @@ paths:
       summary: Search a library
       description: |
         Names, with typo tolerance, diacritic and case folding, word-order independence, and
-        exact-match precedence (`requirements/search.md` §3). Results are identical to on-device
-        search over the same corpus (`requirements/search.md` §2.1). Playlists are not searched
-        until they are built, so no playlists section comes back. A track the caller hid is not
-        found, nor counted in its section's `total`, and nor is an album or artist every track of
-        which they hid (`requirements/conventions.md` §8).
+        exact-match precedence (`requirements/search.md` §3): of tracks, albums, artists, and
+        tags of every type, by their names (`requirements/search.md` §1). Results are identical
+        to on-device search over the same corpus (`requirements/search.md` §2.1). Playlists are
+        not searched until they are built, so no playlists section comes back. A track the caller
+        hid is not found, nor counted in its section's `total`, and nor is an album, artist or
+        tag every track of which they hid (`requirements/conventions.md` §8); a tag's counts are
+        of what they see, as `listTags` gives them.
 
         Search is not filtered by year or listening data, and the shipped apps do not filter it by
         tag either: they find tags by name, and narrow to one by searching within it
@@ -1228,6 +1230,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Query'
         - $ref: '#/components/parameters/SearchTypes'
+        - $ref: '#/components/parameters/SearchTagType'
         - $ref: '#/components/parameters/Within'
         - $ref: '#/components/parameters/TagAll'
         - $ref: '#/components/parameters/TagAny'
@@ -1258,19 +1261,21 @@ paths:
         (`requirements/search.md` §4): in the same ranking, or by `sort` as the section's own
         list sorts it. A ranked page continues after the last match of the one before, so a
         library that changes between pages neither repeats a match nor passes over one still
-        there. What the caller hid is left out as `search` leaves it out. The `playlists`
-        section is empty until playlists are searched, and `lyrics` answers `422` until they are
-        indexed. A section that is none of these is `404`.
+        there. What the caller hid is left out as `search` leaves it out. The `tags` section is
+        one type of tag, which `tagType` names; without it, `422`. The `playlists` section is
+        empty until playlists are searched, and `lyrics` answers `422` until they are indexed. A
+        section that is none of these is `404`.
       operationId: searchSection
       parameters:
         - $ref: '#/components/parameters/Query'
+        - $ref: '#/components/parameters/SearchTagType'
         - name: sort
           in: query
           description: |
             One of the sorts the section's list takes, as it takes them: `listTracks`' for
             `tracks`, `listAlbums`' for `albums`, and `listArtists`' for `artists`, the planned
-            ones answering `422` as there. Left out, the matches come in the search's ranking,
-            which has no `order`.
+            ones answering `422` as there; `playlists` and `tags` have none. Left out, the matches
+            come in the search's ranking, which has no `order`.
           schema: { type: string }
         - $ref: '#/components/parameters/Order'
         - $ref: '#/components/parameters/Cursor'
@@ -2531,6 +2536,13 @@ components:
       schema:
         type: array
         items: { $ref: '#/components/schemas/SearchSectionType' }
+    SearchTagType:
+      name: tagType
+      in: query
+      description: |
+        With the `tags` section, only tags of this type (`TagType.key`), such as `genre`. A type
+        the library lacks finds none.
+      schema: { type: string, minLength: 1 }
     Within:
       name: within
       in: query
@@ -3512,7 +3524,7 @@ components:
     # ───────────────────────────── Search ─────────────────────────────
     SearchSectionType:
       type: string
-      enum: [tracks, albums, artists, playlists, lyrics]
+      enum: [tracks, albums, artists, playlists, tags, lyrics]
 
     LyricMatch:
       type: object
@@ -3539,11 +3551,12 @@ components:
       properties:
         type:
           type: string
-          enum: [track, album, artist, playlist, lyric]
+          enum: [track, album, artist, playlist, tag, lyric]
         track: { $ref: '#/components/schemas/TrackSummary' }
         album: { $ref: '#/components/schemas/AlbumSummary' }
         artist: { $ref: '#/components/schemas/ArtistSummary' }
         playlist: { $ref: '#/components/schemas/Playlist' }
+        tag: { $ref: '#/components/schemas/Tag' }
         lyric: { $ref: '#/components/schemas/LyricMatch' }
 
     SearchResponse:
@@ -3560,12 +3573,20 @@ components:
             - type: 'null'
         sections:
           type: array
-          description: Ordered by how well each matches; ties break tracks, then albums, then artists. A section with no match is left out.
+          description: |
+            Ordered by how well each matches; ties break tracks, then albums, then artists, then
+            playlists, then tags (`requirements/search.md` §4). Each type of tag is a section of
+            its own, ties between them by `tagType`. A section with no match is left out.
           items:
             type: object
             required: [type, items, total]
             properties:
               type: { $ref: '#/components/schemas/SearchSectionType' }
+              tagType:
+                type: string
+                description: |
+                  On a `tags` section, and only there: its tags' type (`TagType.key`). Its tags
+                  that match equally well come with the most tracks first.
               items:
                 type: array
                 items: { $ref: '#/components/schemas/SearchResult' }
