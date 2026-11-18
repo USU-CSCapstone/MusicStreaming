@@ -10,8 +10,9 @@
 //!   a leading article, so `taylor swift live` nearly finds Taylor Swift.
 //!
 //! A word of fewer than three letters is matched as a search matches it, or one letter would
-//! nearly find every name there is. Near misses rank by fewer words left unmatched, then fewer
-//! typos, then fewer words matched only as a prefix, then fewer words in the name beyond those
+//! nearly find every name there is. Only the near misses that leave the fewest words unmatched
+//! are offered: where a name matches every word, one that matches only some of them would only
+//! be noise beside it. They rank by fewer typos, then fewer words matched only as a prefix, then fewer words in the name beyond those
 //! matched, then as a search breaks ties. Names that fold to the same words are one near miss.
 //! What a search would leave out, the caller's `keep` leaves out here too, so a near miss never
 //! names what the search could not have found.
@@ -122,6 +123,8 @@ impl Index {
         }
         // Document order is a search's tie-break.
         scored.sort_unstable();
+        let fewest_missed = scored.first().map(|((missed, ..), _)| *missed);
+        scored.retain(|((missed, ..), _)| Some(*missed) == fewest_missed);
 
         let mut seen: HashSet<Vec<&str>> = HashSet::new();
         let mut misses = Vec::new();
@@ -182,6 +185,9 @@ impl Union<'_> {
         let mut misses: Vec<Miss> =
             self.0.iter().flat_map(|index| index.ranked_misses(query, kinds, n, &keep)).collect();
         misses.sort_unstable();
+        // Each index offers its own fewest missed; together, the fewest of all.
+        let fewest_missed = misses.first().map(|miss| miss.nearness.0);
+        misses.retain(|miss| Some(miss.nearness.0) == fewest_missed);
         let mut seen = HashSet::new();
         misses.retain(|miss| seen.insert(miss.words.clone()));
         misses.truncate(n);

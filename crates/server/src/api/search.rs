@@ -24,7 +24,7 @@ use tagged::Sets;
 use super::extract::{Path, Query};
 use super::scope::Scope;
 use super::tag_filter::TagFilter;
-use super::{Id, Problem};
+use super::{Code, Id, Problem};
 use crate::db::Database;
 
 /// The spec's `search` parameters.
@@ -70,13 +70,31 @@ pub async fn search(
         })
         .await?;
     let held = reached(within, held, &hid)?;
-    let found = Union(&[&index, &mine]).search_within(&query.q, &kinds, limit, |kind, id| {
-        !hid.contains(kind, id)
-            && tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
-            && held.as_ref().is_none_or(|held| held[kind as usize].contains(&id))
-    });
-    let found = search::of_tag_type(found, query.tag_type.as_deref());
-    let response = db.read(move |conn| response(conn, user, library, query.q, found, &hid)).await?;
+    // Found nothing, what was nearly found, of what the search could have found, and so as
+    // narrowed and without what the caller hid (`requirements/search.md` §8). Matching the whole
+    // vocabulary again takes a while, so it runs off the async threads, with the search.
+    let (q, tag_type) = (query.q.clone(), query.tag_type.clone());
+    let (found, misses, hid) = tokio::task::spawn_blocking(move || {
+        let both = Union(&[&index, &mine]);
+        let keep = |kind: Kind, id| {
+            !hid.contains(kind, id)
+                && tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
+                && held.as_ref().is_none_or(|held| held[kind as usize].contains(&id))
+        };
+        let found = both.search_within(&q, &kinds, limit, keep);
+        let found = search::of_tag_type(found, tag_type.as_deref());
+        let misses = search::misses(&both, &q, &kinds, &found, keep);
+        (found, misses, hid)
+    })
+    .await
+    .map_err(|_| Problem::new(Code::Internal))?;
+    let tag_type = query.tag_type;
+    let response = db
+        .read(move |conn| {
+            let tag_type = tag_type.as_deref();
+            response(conn, user, library, query.q, found, &hid, &misses, tag_type)
+        })
+        .await?;
     Ok(Json(response))
 }
 
