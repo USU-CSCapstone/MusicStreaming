@@ -361,8 +361,10 @@ enum SearchResult {
     Artist { artist: ArtistSummary },
 }
 
-/// Calls `add` with each of the library's tracks, albums and artists, as the core's rule makes
-/// them documents, one row at a time, so that none of them need be held at once.
+/// Calls `add` with each of the library's tracks, albums, artists and tags, as the core's rule
+/// makes them documents, one row at a time, so that none of them need be held at once. A tag is in
+/// the section of its type and weighs the tracks that carry it; one that no track carries, which
+/// the scanner is about to delete, has nothing to show and is left out.
 pub fn documents(
     conn: &Connection,
     library: i64,
@@ -387,11 +389,24 @@ pub fn documents(
             add(artist);
         }
     }
+    let mut tags = conn.prepare_cached(
+        "SELECT id, type, name, track_count FROM tags WHERE library_id = ?1 AND track_count > 0",
+    )?;
+    let mut rows = tags.query([library])?;
+    while let Some(row) = rows.next()? {
+        add(tag(row)?);
+    }
     Ok(())
 }
 
+/// The tag of a row of `id, type, name, track_count`, as a document.
+fn tag(row: &Row) -> rusqlite::Result<Document> {
+    let tracks = u64::try_from(row.get::<_, i64>(3)?).unwrap_or(0);
+    Ok(Document::from_tag(row.get(0)?, row.get(1)?, row.get(2)?, tracks))
+}
+
 /// Where a read of a library's documents in batches stands ([`documents_from`]): the table it is
-/// in (tracks, albums, then artists) and the lowest ID of it not yet read.
+/// in (tracks, albums, artists, then tags) and the lowest ID of it not yet read.
 #[derive(Debug, Default)]
 pub struct Reading {
     table: usize,
@@ -410,14 +425,19 @@ pub fn documents_from(
     limit: usize,
     mut add: impl FnMut(Document),
 ) -> rusqlite::Result<bool> {
-    /// The tables read, in `reading.table` order, with the column each document's text comes from.
-    const TABLES: [(&str, &str); 3] =
-        [("tracks", "title"), ("albums", "title"), ("artists", "name")];
+    /// The tables read, in `reading.table` order, with the columns each document is made from
+    /// and any condition beyond the library's, as [`documents`] reads them.
+    const TABLES: [(&str, &str, &str); 4] = [
+        ("tracks", "title", ""),
+        ("albums", "title", ""),
+        ("artists", "name", ""),
+        ("tags", "type, name, track_count", "AND track_count > 0"),
+    ];
     let mut left = limit;
-    while let Some(&(table, column)) = TABLES.get(reading.table) {
+    while let Some(&(table, columns, condition)) = TABLES.get(reading.table) {
         let mut statement = conn.prepare_cached(&format!(
-            "SELECT id, {column} FROM {table} NOT INDEXED \
-             WHERE library_id = ?1 AND id >= ?2 ORDER BY id LIMIT ?3"
+            "SELECT id, {columns} FROM {table} NOT INDEXED \
+             WHERE library_id = ?1 AND id >= ?2 {condition} ORDER BY id LIMIT ?3"
         ))?;
         let mut rows = statement.query(params![
             library,
@@ -429,7 +449,8 @@ pub fn documents_from(
             let document = match reading.table {
                 0 => Some(Document::from_track(id, row.get(1)?)),
                 1 => Document::from_album(id, row.get(1)?),
-                _ => Document::from_artist(id, row.get(1)?),
+                2 => Document::from_artist(id, row.get(1)?),
+                _ => Some(tag(row)?),
             };
             document.into_iter().for_each(&mut add);
             reading.from = id + 1;
