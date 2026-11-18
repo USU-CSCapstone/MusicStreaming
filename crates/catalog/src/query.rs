@@ -298,7 +298,8 @@ pub fn answer(
         "search" => {
             let p: SearchParams = serde_json::from_str(params)?;
             let limit = search::section_limit(&p.q, p.section_limit)?;
-            let kinds = p.types.as_deref().map_or_else(|| Ok(Kind::ALL.to_vec()), search::kinds)?;
+            let kinds =
+                p.types.as_deref().map_or_else(|| Ok(search::SEARCHED.to_vec()), search::kinds)?;
             let filter = TagFilter::new(p.tag_all.as_deref(), p.tag_any.as_deref())?;
             let tagged = if filter.is_empty() {
                 None

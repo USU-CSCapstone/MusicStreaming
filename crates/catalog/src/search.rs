@@ -26,6 +26,10 @@ use crate::page::{
 use crate::tag_filter::{LEAD_SHARE, TagFilter, Tagged, Tags};
 use crate::tracks::{self, TrackSort, TrackSummary};
 
+/// The kinds a search finds so far: playlists and tags are not indexed yet, so their sections are
+/// always empty.
+pub const SEARCHED: [Kind; 3] = [Kind::Track, Kind::Album, Kind::Artist];
+
 /// The spec's `SearchResponse`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -71,10 +75,9 @@ impl SectionType {
         match name {
             "playlists" => Some(SectionType::Playlists),
             "lyrics" => Some(SectionType::Lyrics),
-            name => Kind::ALL
-                .into_iter()
-                .find(|&kind| section_type(kind) == name)
-                .map(SectionType::Kind),
+            name => {
+                SEARCHED.into_iter().find(|&kind| section_type(kind) == name).map(SectionType::Kind)
+            }
         }
     }
 }
@@ -186,6 +189,10 @@ fn list_sort(kind: Kind, name: &str) -> Result<&'static Sort, Invalid> {
         Kind::Track => TrackSort::deserialize(name).map(TrackSort::sort),
         Kind::Album => AlbumSort::deserialize(name).map(AlbumSort::sort),
         Kind::Artist => ArtistSort::deserialize(name).map(ArtistSort::sort),
+        // Neither has a list of its own to sort as.
+        Kind::Playlist | Kind::Tag => {
+            return Err(Invalid("this section has no sorts".to_owned()));
+        }
     }
     .map_err(|_| Invalid(format!("sort must be one the {} list takes", section_type(kind))))
 }
@@ -219,12 +226,14 @@ pub fn section(
     let losses = &keep.hid.losses;
     match reading {
         SectionReading::Ranked { after, limit } => {
-            let found = index
-                .page(&q, kind, after.as_ref(), limit as usize, |kind, id| keep.keeps(kind, id));
+            let found = index.page(&q, kind, None, after.as_ref(), limit as usize, |kind, id| {
+                keep.keeps(kind, id)
+            });
             let label = label(kind);
             let next_cursor = found.next.map(|rank| cursor::encode(&label, &rank_values(&rank)));
             let FoundPage { ids, total, .. } = found;
-            let items = sections(conn, user, library, vec![Found { kind, ids, total }], losses)?
+            let found = vec![Found { kind, group: None, ids, total }];
+            let items = sections(conn, user, library, found, losses)?
                 .pop()
                 .map_or_else(Vec::new, |section| section.items);
             Ok(SectionPage { query: q, items, next_cursor, total })
@@ -256,9 +265,13 @@ fn sorted(
         Kind::Track => (&tracks::TRACKS, &["t.id"]),
         Kind::Album => (&albums::ALBUMS, &["al.id"]),
         Kind::Artist => (&artists::ARTISTS, &["ar.id"]),
+        // `list_sort` refuses a sort of either.
+        Kind::Playlist | Kind::Tag => {
+            return Ok(Page { items: Vec::new(), next_cursor: None, total: 0 });
+        }
     };
     let page = read_matches(conn, library, table, id, request, ids)?;
-    let found = Found { kind, ids: page.items, total: ids.len() };
+    let found = Found { kind, group: None, ids: page.items, total: ids.len() };
     let items = sections(conn, user, library, vec![found], losses)?.pop();
     let items = items.map_or_else(Vec::new, |section| section.items);
     Ok(Page { items, next_cursor: page.next_cursor, total: page.total })
@@ -450,7 +463,7 @@ pub fn kinds(types: &str) -> Result<Vec<Kind>, Invalid> {
             "playlists" => {}
             "lyrics" => return Err(Invalid("lyrics cannot be searched yet".to_owned())),
             _ => {
-                let Some(kind) = Kind::ALL.into_iter().find(|&kind| section_type(kind) == section)
+                let Some(kind) = SEARCHED.into_iter().find(|&kind| section_type(kind) == section)
                 else {
                     return Err(Invalid(
                         "types must be tracks, albums, artists, playlists, or lyrics".to_owned(),
@@ -472,13 +485,15 @@ pub fn tagged(
     library: i64,
     filter: &TagFilter,
     kinds: &[Kind],
-) -> rusqlite::Result<[HashSet<i64>; 3]> {
-    let mut sets: [HashSet<i64>; 3] = Default::default();
+) -> rusqlite::Result<[HashSet<i64>; Kind::ALL.len()]> {
+    let mut sets: [HashSet<i64>; Kind::ALL.len()] = Default::default();
     for &kind in kinds {
         let tagged: &Tagged = match kind {
             Kind::Track => &tracks::TAGGED,
             Kind::Album => &albums::TAGGED,
             Kind::Artist => &artists::TAGGED,
+            // A playlist or a tag carries no tags, so a filter keeps none of them.
+            Kind::Playlist | Kind::Tag => continue,
         };
         let ids = Tags::read(conn, library, tagged, filter)?.ids(conn, tagged)?;
         sets[kind as usize] = ids.unwrap_or_default();
@@ -491,7 +506,7 @@ pub fn tagged(
 /// `filter` names reach only through hidden tracks; and what the hidden tracks take from the
 /// counts of the albums and artists found.
 pub struct Hid {
-    sets: [HashSet<i64>; 3],
+    sets: [HashSet<i64>; Kind::ALL.len()],
     losses: Losses,
 }
 
@@ -505,11 +520,10 @@ impl Hid {
     ) -> rusqlite::Result<Hid> {
         let losses = hidden::losses(conn, user, library)?;
         // By `Kind`, as the tagged sets are.
-        let mut sets: [HashSet<i64>; 3] = [
-            hidden::ids(conn, user, library)?,
-            losses.whole_albums.iter().copied().collect(),
-            losses.whole_artists.iter().copied().collect(),
-        ];
+        let mut sets: [HashSet<i64>; Kind::ALL.len()] = Default::default();
+        sets[Kind::Track as usize] = hidden::ids(conn, user, library)?;
+        sets[Kind::Album as usize] = losses.whole_albums.iter().copied().collect();
+        sets[Kind::Artist as usize] = losses.whole_artists.iter().copied().collect();
         if !filter.is_empty() && !sets[Kind::Track as usize].is_empty() {
             let albums = losses.albums.iter().map(|(&album, loss)| (album, &loss.tags));
             let tagged = &albums::TAGGED;
@@ -534,11 +548,11 @@ impl Hid {
 pub struct Keep<'a> {
     hid: &'a Hid,
     /// By [`Kind`], what has the tags, under a tag filter.
-    tagged: Option<&'a [HashSet<i64>; 3]>,
+    tagged: Option<&'a [HashSet<i64>; Kind::ALL.len()]>,
 }
 
 impl<'a> Keep<'a> {
-    pub fn new(hid: &'a Hid, tagged: Option<&'a [HashSet<i64>; 3]>) -> Keep<'a> {
+    pub fn new(hid: &'a Hid, tagged: Option<&'a [HashSet<i64>; Kind::ALL.len()]>) -> Keep<'a> {
         Keep { hid, tagged }
     }
 
@@ -555,6 +569,8 @@ fn section_type(kind: Kind) -> &'static str {
         Kind::Track => "tracks",
         Kind::Album => "albums",
         Kind::Artist => "artists",
+        Kind::Playlist => "playlists",
+        Kind::Tag => "tags",
     }
 }
 
@@ -610,6 +626,8 @@ fn sections(
                 artist.lose(losses);
                 Ok(SearchResult::Artist { artist })
             })?,
+            // Not searched yet ([`SEARCHED`]), so never found.
+            Kind::Playlist | Kind::Tag => Vec::new(),
         };
         // Gone since the index was built: nothing of it is left to show.
         if !items.is_empty() {
