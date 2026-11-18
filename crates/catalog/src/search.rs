@@ -11,7 +11,7 @@ use jewelcase_core::{
     Union,
 };
 use rusqlite::types::Value;
-use rusqlite::{Connection, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::de::IntoDeserializer;
 use serde::de::value::StrDeserializer;
 use serde::{Deserialize, Serialize};
@@ -648,6 +648,7 @@ fn section_type(kind: Kind) -> &'static str {
 /// The response to a search for `q` in `library` that found `found` for `user`, whose hidden
 /// tracks `hid` says: the summaries of what the index found, as the browse lists show them to
 /// `user`, and whether the library holds no track at all.
+#[expect(clippy::too_many_arguments, reason = "a search's caller, query, and what it found")]
 pub fn response(
     conn: &Connection,
     user: i64,
@@ -655,15 +656,86 @@ pub fn response(
     q: String,
     found: Vec<Found>,
     hid: &Hid,
+    misses: &[(Kind, i64)],
+    tag_type: Option<&str>,
 ) -> rusqlite::Result<SearchResponse> {
     let sections = sections(conn, user, library, found, &hid.losses)?;
+    let library_empty = library_number(conn, library, "track_count")? == 0;
+    // Nothing found in a library with music: what was nearly found (`requirements/search.md` §8).
+    let near_misses = if sections.is_empty() && !library_empty {
+        near_names(conn, library, misses, tag_type)?
+    } else {
+        Vec::new()
+    };
     Ok(SearchResponse {
         query: q,
         top: sections.first().map(|section| section.items[0].clone()),
         sections,
-        near_misses: Vec::new(),
-        library_empty: library_number(conn, library, "track_count")? == 0,
+        near_misses,
+        library_empty,
     })
+}
+
+/// How many near misses a search that found nothing offers.
+const NEAR_MISSES: usize = 3;
+
+/// How many near misses are read to offer [`NEAR_MISSES`]: more, since tags of a type other than
+/// the one asked for are left out, and names alike but for case are one.
+pub const NEAR_MISSES_READ: usize = 10;
+
+/// What a search for `q` of `kinds` in `both` that found `found` nearly found, of what `keep`
+/// keeps, so as narrowed and without what the caller hid: [`NEAR_MISSES_READ`] of them, nearest
+/// first, for [`response`] to name. None where it found anything, since they are offered only
+/// when nothing was. Matching the whole vocabulary again takes a while, so a caller that can runs
+/// it off its async threads.
+pub fn misses(
+    both: &Union,
+    q: &str,
+    kinds: &[Kind],
+    found: &[Found],
+    keep: &Keep,
+) -> Vec<(Kind, i64)> {
+    if !found.is_empty() {
+        return Vec::new();
+    }
+    both.near_misses(q, kinds, NEAR_MISSES_READ, |kind, id| keep.keeps(kind, id))
+}
+
+/// The names of `misses` in `library`, as their own pages name them, at most [`NEAR_MISSES`] of
+/// them, nearest first: each once whatever its case, and of tags only those of `tag_type` if it
+/// names one. One gone since the index was built is left out.
+fn near_names(
+    conn: &Connection,
+    library: i64,
+    misses: &[(Kind, i64)],
+    tag_type: Option<&str>,
+) -> rusqlite::Result<Vec<String>> {
+    let mut names: Vec<String> = Vec::new();
+    for &(kind, id) in misses {
+        let sql = match kind {
+            Kind::Track => "SELECT title, NULL FROM tracks WHERE library_id = ?1 AND id = ?2",
+            Kind::Album => "SELECT title, NULL FROM albums WHERE library_id = ?1 AND id = ?2",
+            Kind::Artist => "SELECT name, NULL FROM artists WHERE library_id = ?1 AND id = ?2",
+            // Only the caller's own are in the index searched ([`mine`]).
+            Kind::Playlist => "SELECT title, NULL FROM playlists WHERE library_id = ?1 AND id = ?2",
+            Kind::Tag => "SELECT name, type FROM tags WHERE library_id = ?1 AND id = ?2",
+        };
+        let row: Option<(Option<String>, Option<String>)> = conn
+            .prepare_cached(sql)?
+            .query_row([library, id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .optional()?;
+        let Some((Some(name), of_type)) = row else { continue };
+        if tag_type.is_some_and(|wanted| of_type.as_deref().is_some_and(|of| of != wanted)) {
+            continue;
+        }
+        if !names.iter().any(|named| named.to_lowercase() == name.to_lowercase()) {
+            names.push(name);
+        }
+        if names.len() == NEAR_MISSES {
+            break;
+        }
+    }
+    Ok(names)
 }
 
 /// The summaries of what the index found, a section for each kind that has any left to show, as

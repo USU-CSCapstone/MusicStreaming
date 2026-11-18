@@ -588,8 +588,8 @@ fn near(index: &Index, query: &str) -> Vec<(Kind, i64)> {
 #[test]
 fn a_near_miss_may_have_a_wrong_first_letter() {
     let index = library();
-    // Taylor Swift, both words matched, before Swiftly, which leaves `baylor` unmatched.
-    assert_eq!(near(&index, "baylor swift"), [(Kind::Artist, 1), (Kind::Track, 26)]);
+    // Taylor Swift, both words matched; not Swiftly, which leaves `baylor` unmatched.
+    assert_eq!(near(&index, "baylor swift"), [(Kind::Artist, 1)]);
 }
 
 #[test]
@@ -628,6 +628,7 @@ fn near_misses_of_the_same_name_are_one() {
 fn near_misses_keep_to_what_a_search_keeps_and_to_how_many() {
     let index = library();
     let keep = |kind: Kind, id: i64| !(kind == Kind::Artist && id == 1);
+    // Without Taylor Swift, Swiftly is the nearest left, though it leaves a word unmatched.
     assert_eq!(index.near_misses("baylor swift", &Kind::ALL, 3, keep), [(Kind::Track, 26)]);
     assert_eq!(
         index.near_misses("baylor swift", &[Kind::Track], 3, |_, _| true),

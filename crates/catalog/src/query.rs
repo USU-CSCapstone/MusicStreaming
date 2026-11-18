@@ -337,8 +337,11 @@ pub fn answer(
             let both = Union(&[built(index)?, &mine]);
             let keep = search::Keep::new(&hid, tagged.as_ref(), held.as_ref());
             let found = both.search_within(&p.q, &kinds, limit, |kind, id| keep.keeps(kind, id));
-            let found = search::of_tag_type(found, p.tag_type.as_deref());
-            json(search::response(conn, user, library, p.q, found, &hid)?)
+            let tag_type = p.tag_type.as_deref();
+            let found = search::of_tag_type(found, tag_type);
+            // Found nothing, what was nearly found (`requirements/search.md` §8).
+            let misses = search::misses(&both, &p.q, &kinds, &found, &keep);
+            json(search::response(conn, user, library, p.q, found, &hid, &misses, tag_type)?)
         }
         "searchSection" => {
             let p: SectionParams = serde_json::from_str(params)?;
