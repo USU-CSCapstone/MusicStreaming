@@ -5,6 +5,7 @@
 	import { beforeNavigate } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { view } from '$lib/adding.svelte';
+	import { searchSection } from '$lib/api/client';
 	import type { PlayContext, SearchResult } from '$lib/api/types';
 	import { albumCard, artistCard, playlistCard, type Card } from '$lib/cards';
 	import AddToPlaylistButton from '$lib/components/AddToPlaylistButton.svelte';
@@ -14,6 +15,7 @@
 	import SearchTabs from '$lib/components/SearchTabs.svelte';
 	import TopResult from '$lib/components/TopResult.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
+	import { Paged } from '$lib/paged.svelte';
 	import { tagTypePlural } from '$lib/tags';
 	import type { Selected } from '$lib/recent';
 	import { searchRecipe, type PlayFrom } from '$lib/queue';
@@ -40,22 +42,35 @@
 		return [];
 	}
 
-	const sections = $derived(data.results?.sections ?? []);
+	// The Songs tab's songs, a page at a time as the list scrolls.
+	const paged = $derived(
+		data.songs &&
+			new Paged(data.songs.first, (cursor) =>
+				searchSection(fetch, data.lib, 'tracks', data.q, { ...data.songs?.query, cursor })
+			)
+	);
+	const searched = $derived(Boolean(data.results || data.songs));
+	const sections = $derived(
+		paged
+			? paged.total
+				? [{ type: 'tracks' as const, items: paged.items, total: paged.total }]
+				: []
+			: (data.results?.sections ?? [])
+	);
+	const libraryEmpty = $derived(data.results?.libraryEmpty ?? data.library?.trackCount === 0);
+	const nearMisses = $derived(data.results?.nearMisses ?? []);
 	// What nothing found on a tab is called, as the tab is.
 	const looking = $derived(
 		SEARCH_TABS.find((tab) => tab.type === data.tab)?.label.toLowerCase() ?? 'music'
 	);
 	const tagTypes = $derived(data.tagTypes ?? []);
 	// Songs come in match order; sorted, they play as shown (`requirements/conventions.md` §4.1).
+	// All sorts the few it shows itself; the Songs tab's come sorted by the server.
 	const sort = $derived(currentSort(FIELDS));
 	const songs = $derived.by(() => {
 		const found = sections.find((s) => s.type === 'tracks')?.items ?? [];
-		return [
-			...sortTracks(
-				found.flatMap((r) => (r.track ? [r.track] : [])),
-				sort
-			)
-		];
+		const tracks = found.flatMap((r) => (r.track ? [r.track] : []));
+		return paged ? tracks : [...sortTracks(tracks, sort)];
 	});
 
 	// The songs the search finds, in its ranking, which the server resolves to the end. Unsorted,
@@ -111,11 +126,11 @@
 <!-- The sidebar holds the box on wide screens; at phone width this page does. -->
 <div class="box"><SearchBox /></div>
 
-{#if data.results && !data.results.libraryEmpty}
+{#if searched && !libraryEmpty}
 	<SearchTabs q={data.q} current={data.tab} />
 {/if}
 
-{#if !data.results}
+{#if !searched}
 	<p class="state muted">Search songs, albums, artists, and playlists.</p>
 	<!-- Each type's tags to browse, which on a phone, without the sidebar, are only here. -->
 	{#if tagTypes.length}
@@ -131,15 +146,15 @@
 {:else if sections.length === 0}
 	<!-- "No music yet" and "nothing matches" call for different responses (`requirements/search.md` §8). -->
 	<div class="state">
-		{#if data.results.libraryEmpty}
+		{#if libraryEmpty}
 			<h2>You have no music yet</h2>
 			<p class="muted">Songs appear here once the library has been scanned.</p>
 		{:else}
 			<h2>No {looking} {looking === 'music' ? 'matches' : 'match'} “{data.q}”</h2>
-			{#if data.results.nearMisses.length}
+			{#if nearMisses.length}
 				<p class="muted">
 					Did you mean
-					{#each data.results.nearMisses as miss, i (miss)}
+					{#each nearMisses as miss, i (miss)}
 						{#if i > 0},
 						{/if}<a href="{resolve('/search')}?{new URLSearchParams({ q: miss })}">{miss}</a>
 					{/each}?
@@ -150,7 +165,7 @@
 		{/if}
 	</div>
 {:else}
-	{#if !data.tab && data.results.top}
+	{#if !data.tab && data.results?.top}
 		<TopResult
 			result={data.results.top}
 			{context}
@@ -181,6 +196,7 @@
 			{#if section.type === 'tracks'}
 				<TrackList
 					tracks={marks.unhidden(data.lib, songs)}
+					sentinel={paged?.sentinel}
 					{sort}
 					onsort={showSorted}
 					{context}
