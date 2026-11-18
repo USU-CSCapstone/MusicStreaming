@@ -3,6 +3,7 @@
 //! (`jewelcase_core::Index`), which the server keeps in memory and a device builds from the same
 //! documents.
 
+use std::cmp::Reverse;
 use std::collections::HashSet;
 
 use jewelcase_core::{
@@ -130,10 +131,10 @@ fn after(cursor: Option<&str>, kind: Kind) -> Result<Option<Rank>, Invalid> {
 }
 
 /// How many values a rank is written as in a cursor.
-const RANK_VALUES: usize = 7;
+const RANK_VALUES: usize = 8;
 
-/// `rank` as a cursor's values: its score's, its name's words between spaces, which no folded
-/// word holds, then its ID.
+/// `rank` as a cursor's values: its score's, its weight, its name's words between spaces, which
+/// no folded word holds, then its ID.
 fn rank_values(rank: &Rank) -> [Value; RANK_VALUES] {
     let Score { inexact, typos, skipped, prefixes, extra_words } = rank.score;
     [
@@ -142,6 +143,7 @@ fn rank_values(rank: &Rank) -> [Value; RANK_VALUES] {
         Value::Integer(skipped.into()),
         Value::Integer(prefixes.into()),
         Value::Integer(extra_words.into()),
+        Value::Integer(rank.weight.0.into()),
         Value::Text(rank.words.join(" ")),
         Value::Integer(rank.id),
     ]
@@ -158,8 +160,16 @@ fn rank(values: &[Value]) -> Option<Rank> {
         Value::Integer(n) => u32::try_from(*n).ok(),
         _ => None,
     };
-    let [inexact, typos, skipped, prefixes, extra_words, Value::Text(words), Value::Integer(id)] =
-        values
+    let [
+        inexact,
+        typos,
+        skipped,
+        prefixes,
+        extra_words,
+        weight,
+        Value::Text(words),
+        Value::Integer(id),
+    ] = values
     else {
         return None;
     };
@@ -171,6 +181,7 @@ fn rank(values: &[Value]) -> Option<Rank> {
             prefixes: count(prefixes)?,
             extra_words: count(extra_words)?,
         },
+        weight: Reverse(count(weight)?),
         words: words.split(' ').filter(|word| !word.is_empty()).map(str::to_owned).collect(),
         id: *id,
     })
@@ -644,7 +655,8 @@ mod tests {
 
     fn rank() -> Rank {
         let score = Score { inexact: true, typos: 2, skipped: false, prefixes: 1, extra_words: 3 };
-        Rank { score, words: vec!["ca".to_owned(), "va".to_owned()], id: -4 }
+        let words = vec!["ca".to_owned(), "va".to_owned()];
+        Rank { score, weight: Reverse(12), words, id: -4 }
     }
 
     #[test]

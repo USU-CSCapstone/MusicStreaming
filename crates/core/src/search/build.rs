@@ -1,7 +1,7 @@
 //! Building an index: every distinct word, which documents hold it, and each document's words in
 //! tie-break order.
 
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
 use std::collections::HashMap;
 
 use super::words::fold;
@@ -16,9 +16,10 @@ pub struct IndexBuilder {
     numbers: HashMap<Box<str>, u32>,
     /// Each distinct group so far, numbered in the order first seen from 1: 0 is none.
     group_numbers: HashMap<Box<str>, u32>,
-    /// Each document's kind, group by those numbers, and ID, in the order added.
+    /// Each document's kind, group by those numbers, weight and ID, in the order added.
     kinds: Vec<Kind>,
     groups_of: Vec<u32>,
+    weights: Vec<u32>,
     ids: Vec<i64>,
     /// Each document's words by those numbers: `words[span(&ends, d)]`.
     words: Vec<u32>,
@@ -53,6 +54,7 @@ impl IndexBuilder {
             },
         };
         self.groups_of.push(group);
+        self.weights.push(document.weight);
         self.ids.push(document.id);
     }
 
@@ -66,7 +68,16 @@ impl IndexBuilder {
     /// The making of the index of every document added, which [`Finishing::step`] does a bounded
     /// amount at a time, as [`finish`](Self::finish) does all at once.
     pub fn finishing(self) -> Finishing {
-        let IndexBuilder { numbers, group_numbers, kinds, mut groups_of, ids, words, ends } = self;
+        let IndexBuilder {
+            numbers,
+            group_numbers,
+            kinds,
+            mut groups_of,
+            weights,
+            ids,
+            words,
+            ends,
+        } = self;
         let mut vocabulary = vec![Box::<str>::default(); numbers.len()];
         for (word, number) in numbers {
             vocabulary[number as usize] = word;
@@ -93,6 +104,7 @@ impl IndexBuilder {
             kinds,
             groups_of,
             groups,
+            weights,
             ids,
             words,
             ends,
@@ -114,6 +126,7 @@ pub struct Finishing {
     /// once the vocabulary is sorted, as its indexes, and their groups as indexes of `groups`.
     kinds: Vec<Kind>,
     groups_of: Vec<u32>,
+    weights: Vec<u32>,
     ids: Vec<i64>,
     /// Every distinct group, sorted, after the empty one.
     groups: Vec<String>,
@@ -139,10 +152,14 @@ impl Finishing {
             return false;
         }
         // In tie-break order. Comparing indexes is comparing the words and groups, and cheaper.
-        let (kinds, groups, ids) = (&self.kinds, &self.groups_of, &self.ids);
+        let (kinds, groups, weights, ids) =
+            (&self.kinds, &self.groups_of, &self.weights, &self.ids);
         let (words, ends) = (&self.words, &self.ends);
         let doc_words = |d: u32| &words[span(ends, d as usize)];
-        let key = |d: u32| (kinds[d as usize], groups[d as usize], doc_words(d), ids[d as usize]);
+        let key = |d: u32| {
+            let d = d as usize;
+            (kinds[d], groups[d], Reverse(weights[d]), doc_words(d as u32), ids[d])
+        };
         self.sort.step(budget, |&a, &b| key(a).cmp(&key(b)))
     }
 
@@ -169,8 +186,19 @@ impl Finishing {
 
     /// The index, once [`step`](Self::step) has said the sorts are done.
     pub fn into_index(self) -> Index {
-        let Finishing { text, word_ends, kinds, groups_of, groups, ids, words, ends, sort, .. } =
-            self;
+        let Finishing {
+            text,
+            word_ends,
+            kinds,
+            groups_of,
+            groups,
+            weights,
+            ids,
+            words,
+            ends,
+            sort,
+            ..
+        } = self;
         let order = sort.items;
         let doc_words = |d: usize| &words[span(&ends, d)];
         let mut index = Index {
@@ -178,6 +206,7 @@ impl Finishing {
             word_ends,
             kinds: order.iter().map(|&d| kinds[d as usize]).collect(),
             groups_of: order.iter().map(|&d| groups_of[d as usize]).collect(),
+            weights: order.iter().map(|&d| weights[d as usize]).collect(),
             ids: order.iter().map(|&d| ids[d as usize]).collect(),
             groups,
             words: Vec::with_capacity(words.len()),
@@ -188,7 +217,7 @@ impl Finishing {
             index.words.extend_from_slice(doc_words(d as usize));
             index.ends.push(index.words.len() as u32);
         }
-        drop((order, kinds, groups_of, ids, words, ends));
+        drop((order, kinds, groups_of, weights, ids, words, ends));
 
         // Each word's documents, counted first so that they fill one array, each document once.
         let distinct = |words: &[u32], i: usize| !words[..i].contains(&words[i]);

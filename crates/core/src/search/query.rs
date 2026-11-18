@@ -1,6 +1,7 @@
 //! Answering a query from an index: matching each word, scoring each document, and ranking the
 //! sections.
 
+use std::cmp::Reverse;
 use std::ops::Range;
 
 use super::distance::distance;
@@ -159,14 +160,15 @@ impl Index {
     /// The rank of document `d`, scored `score`.
     fn rank(&self, score: Score, d: u32) -> Rank {
         let words = self.doc_words(d).map(str::to_owned).collect();
-        Rank { score, words, id: self.ids[d as usize] }
+        Rank { score, weight: Reverse(self.weights[d as usize]), words, id: self.ids[d as usize] }
     }
 
     /// Whether document `d`, scored `score`, ranks after `after`. Its words are read only when
-    /// the scores tie.
+    /// the scores and weights tie.
     fn ranks_after(&self, score: Score, d: u32, after: &Rank) -> bool {
         score
             .cmp(&after.score)
+            .then_with(|| Reverse(self.weights[d as usize]).cmp(&after.weight))
             .then_with(|| self.doc_words(d).cmp(after.words.iter().map(String::as_str)))
             .then_with(|| self.ids[d as usize].cmp(&after.id))
             .is_gt()

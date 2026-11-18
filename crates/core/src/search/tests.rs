@@ -2,7 +2,7 @@ use super::*;
 
 /// A document of `kind` named `name`, made directly rather than through a constructor.
 pub(super) fn doc(kind: Kind, id: i64, name: &str) -> Document {
-    Document { kind, group: None, id, name: name.to_owned() }
+    Document { kind, group: None, id, name: name.to_owned(), weight: 0 }
 }
 
 /// An index of a small library: a few artists, albums, and tracks with names that share words.
@@ -387,9 +387,9 @@ fn rocks() -> Index {
     Index::build([
         Document::from_track(1, "Rock".into()),
         Document::from_album(2, Some("Rock".into())).unwrap(),
-        Document::from_tag(3, "genre".into(), "Rock".into()),
-        Document::from_tag(4, "genre".into(), "Punk Rock".into()),
-        Document::from_tag(5, "mood".into(), "Rock".into()),
+        Document::from_tag(3, "genre".into(), "Rock".into(), 1),
+        Document::from_tag(4, "genre".into(), "Punk Rock".into(), 1),
+        Document::from_tag(5, "mood".into(), "Rock".into(), 1),
         Document::from_playlist(6, "Rock".into()),
     ])
 }
@@ -437,10 +437,60 @@ fn a_page_reads_one_type_of_tag() {
 fn playlists_and_tags_are_searched_by_their_names() {
     assert_eq!(
         Document::from_playlist(7, "Road Trip".into()),
-        Document { kind: Kind::Playlist, group: None, id: 7, name: "Road Trip".into() }
+        Document { kind: Kind::Playlist, group: None, id: 7, name: "Road Trip".into(), weight: 0 }
     );
     assert_eq!(
-        Document::from_tag(8, "mood".into(), "Calm".into()),
-        Document { kind: Kind::Tag, group: Some("mood".into()), id: 8, name: "Calm".into() }
+        Document::from_tag(8, "mood".into(), "Calm".into(), 12),
+        Document {
+            kind: Kind::Tag,
+            group: Some("mood".into()),
+            id: 8,
+            name: "Calm".into(),
+            weight: 12
+        }
     );
+}
+
+/// Genres with the tracks that carry them: Rock on one, and three that contain the word.
+fn genres() -> Vec<Document> {
+    [(1, "Rock", 1), (2, "Alt Rock", 3), (3, "Hard Rock", 12), (4, "Punk Rock", 40)]
+        .map(|(id, name, tracks)| Document::from_tag(id, "genre".into(), name.into(), tracks))
+        .into()
+}
+
+#[test]
+fn tags_that_match_equally_well_put_the_one_with_more_music_first() {
+    let index = Index::build(genres());
+    // Rock is exact, so it leads however little it carries; the rest are one word more each.
+    assert_eq!(index.search("rock", &[Kind::Tag], 10)[0].ids, [1, 4, 3, 2]);
+    // Equal weights fall back to the name.
+    let even = Index::build([
+        Document::from_tag(5, "genre".into(), "Punk Rock".into(), 7),
+        Document::from_tag(6, "genre".into(), "Alt Rock".into(), 7),
+    ]);
+    assert_eq!(even.search("rock", &[Kind::Tag], 10)[0].ids, [6, 5]);
+    // Weight never reaches past the match: a name the query only begins stays behind an exact
+    // one, however heavy.
+    let typo = Index::build([
+        Document::from_tag(7, "genre".into(), "Rockk".into(), 1_000),
+        Document::from_tag(8, "genre".into(), "Rock".into(), 1),
+    ]);
+    assert_eq!(typo.search("rock", &[Kind::Tag], 10)[0].ids, [8, 7]);
+}
+
+#[test]
+fn a_page_of_weighed_tags_continues_where_it_left_off() {
+    let index = Index::build(genres());
+    let first = index.page("rock", Kind::Tag, Some("genre"), None, 2, |_, _| true);
+    assert_eq!(first.ids, [1, 4]);
+    let rank = first.next.unwrap();
+    // Since then Alt Rock outgrew Punk Rock, and Hard Rock was added to.
+    let mut changed = genres();
+    changed[1] = Document::from_tag(2, "genre".into(), "Alt Rock".into(), 50);
+    changed[2] = Document::from_tag(3, "genre".into(), "Hard Rock".into(), 20);
+    let rebuilt = Index::build(changed);
+    let next = rebuilt.page("rock", Kind::Tag, Some("genre"), Some(&rank), 10, |_, _| true);
+    // Alt Rock moved ahead of where the page left off, so this pass skips it, as a list does a row
+    // whose sort value moved behind its cursor; nothing already shown comes again.
+    assert_eq!(next.ids, [3]);
 }
