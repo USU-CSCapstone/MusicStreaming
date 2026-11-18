@@ -52,7 +52,7 @@ Built, and described where it is built: matching and ranking in `crates/core/src
 
 ### 2.5 Memory, on the server
 
-**An index in memory, as names are, with compact postings, under 100 MB for the heavy case: 76 MB, measured.** The heavy case is 150,000 tracks with lyrics, each 30 lines of its own and a chorus of five sung three times, so 45 lines and 35 distinct, of 4 to 10 words from a 60,000-word vocabulary that occurs as a language's does (`benchmark_lyrics_full_scale`). Its 5.25 million distinct lines build in 10 s on an M5.
+**An index in memory, as names are, with compact postings, under 100 MB for the heavy case: 76 MB, measured.** The heavy case is 150,000 tracks with lyrics, each 30 lines of its own and a chorus of five sung three times, so 45 lines and 35 distinct, of 4 to 10 words from a 60,000-word vocabulary that occurs as a language's does (`benchmark_lyrics_full_scale`). Its 5.25 million distinct lines build in 7 s on an M5, a track at a time, so building holds 144 MB at its peak, the index and its postings' spare room, however many lyrics are read: the server reads them a batch at a time.
 
 | What | Measured |
 |---|---|
