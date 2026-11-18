@@ -4721,7 +4721,8 @@ components:
       required: [type, q]
       description: |
         A search's tracks, all of them: in the search's ranking, or with `sort` and `order` in
-        that sort, as `searchSection`'s `tracks` pages them to the end.
+        that sort, as `searchSection`'s `tracks` pages them to the end, under its filter and
+        `within`.
       properties:
         type: { const: search }
         q: { type: string, minLength: 1 }
@@ -4733,6 +4734,14 @@ components:
             tracks it finds under it. Left out for none. Any other filter of `BrowseFilter` is
             `422` on a start, as are more than 100 tags together; a tag the library lacks matches
             no track.
+        within:
+          type: string
+          pattern: '^(album|artist|playlist|tag):.+$'
+          description: |
+            The container the search is narrowed to, as `search`'s `within` names it; left out for
+            the whole library. Another shape is `422` on a start. An album, artist or tag the
+            library lacks holds no track, as its own recipe resolves to none; a playlist not the
+            caller's own is `404`, as a playlist recipe's is.
         sort:
           allOf:
             - $ref: '#/components/schemas/QueueTrackSort'
