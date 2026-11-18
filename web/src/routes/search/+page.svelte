@@ -20,7 +20,7 @@
 	import { tagTypePlural } from '$lib/tags';
 	import type { Selected } from '$lib/recent';
 	import { searchRecipe, type PlayFrom } from '$lib/queue';
-	import { SEARCH_TABS, tabHref } from '$lib/search-tabs';
+	import { SEARCH_TABS, tabHref, tabLabel, type Tab } from '$lib/search-tabs';
 	import { currentSort, showSorted } from '$lib/sort-url';
 	import { FIELDS, serverSort } from '$lib/sorting';
 	import { sortTracks } from '$lib/track-sort';
@@ -59,9 +59,9 @@
 		return new Paged(
 			section.first,
 			(cursor, limit) =>
-				searchSection(fetch, data.lib, tab, data.q, { ...section.query, cursor, limit }),
+				searchSection(fetch, data.lib, tab.type, data.q, { ...section.query, cursor, limit }),
 			data.lib,
-			DEPENDS[tab],
+			DEPENDS[tab.type],
 			data.since
 		);
 	});
@@ -69,7 +69,14 @@
 	const sections = $derived(
 		paged && data.tab
 			? paged.total
-				? [{ type: data.tab, items: paged.items, total: paged.total }]
+				? [
+						{
+							type: data.tab.type,
+							tagType: data.tab.tagType,
+							items: paged.items,
+							total: paged.total
+						}
+					]
 				: []
 			: (data.results?.sections ?? [])
 	);
@@ -77,10 +84,16 @@
 	const libraryEmpty = $derived(data.results?.libraryEmpty ?? data.library?.trackCount === 0);
 	const nearMisses = $derived(data.results?.nearMisses ?? []);
 	// What nothing found on a tab is called, as the tab is.
-	const looking = $derived(
-		SEARCH_TABS.find((tab) => tab.type === data.tab)?.label.toLowerCase() ?? 'music'
-	);
 	const tagTypes = $derived(data.tagTypes ?? []);
+	const looking = $derived(tabLabel(data.tab, tagTypes)?.toLowerCase() ?? 'music');
+
+	/** The tab that holds every match of `section`, which on All it leads to. */
+	function tabOf(section: { type: string; tagType?: string }): Tab | undefined {
+		if (section.type === 'tags')
+			return section.tagType ? { type: 'tags', tagType: section.tagType } : undefined;
+		const found = SEARCH_TABS.find((t) => t.type === section.type);
+		return found && { type: found.type };
+	}
 	// Songs come in match order; sorted, they play as shown (`requirements/conventions.md` §4.1).
 	// All sorts the few it shows itself; the Songs tab's come sorted by the server.
 	const sort = $derived(currentSort(FIELDS));
@@ -208,19 +221,19 @@
 		/>
 	{/if}
 	{#each sections as section (`${section.type}:${section.tagType ?? ''}`)}
-		{@const tab = data.tab ? undefined : SEARCH_TABS.find((t) => t.type === section.type)}
+		{@const tab = data.tab ? undefined : tabOf(section)}
 		<section>
 			<header>
 				<!-- On All, a section leads to its tab, which holds every match (`requirements/search.md` §4). -->
 				{#if tab}
 					<!-- eslint-disable svelte/no-navigation-without-resolve -- resolved in search-tabs.ts -->
-					<h2><a href={tabHref(data.q, tab.type)}>{title(section)}</a></h2>
+					<h2><a href={tabHref(data.q, tab)}>{title(section)}</a></h2>
 				{:else}
 					<h2>{title(section)}</h2>
 				{/if}
 				<div class="actions">
 					{#if tab && section.total > section.items.length}
-						<a class="all" href={tabHref(data.q, tab.type)}>Show all {section.total}</a>
+						<a class="all" href={tabHref(data.q, tab)}>Show all {section.total}</a>
 						<!-- eslint-enable svelte/no-navigation-without-resolve -->
 					{/if}
 					{#if section.type === 'tracks' && everySong}<AddToPlaylistButton what={everySong} />{/if}

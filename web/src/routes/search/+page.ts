@@ -14,10 +14,14 @@ export const load: PageLoad = async ({ fetch, parent, url }) => {
 	const since = catalog.changes;
 	if (!q.trim()) return { lib, q, tab, since, results: null, section: null };
 	// A tab is every match of its type, a page at a time, in the search's ranking; the Songs tab's
-	// may be sorted instead, by the server, which holds them all (`requirements/search.md` §4).
+	// may be sorted instead, by the server, which holds them all, and a tags tab is one type of
+	// tag (`requirements/search.md` §4).
 	if (tab) {
-		const query = tab === 'tracks' ? (serverSort(readSort(url.searchParams, FIELDS)) ?? {}) : {};
-		const first = await searchSection(fetch, lib, tab, q, query);
+		const query =
+			tab.type === 'tracks'
+				? (serverSort(readSort(url.searchParams, FIELDS)) ?? {})
+				: { tagType: tab.tagType };
+		const first = await searchSection(fetch, lib, tab.type, q, query);
 		return { lib, q, tab, since, results: null, section: { query, first } };
 	}
 	// All shows each section's best. Search is not filtered by tag: tags are found by name
