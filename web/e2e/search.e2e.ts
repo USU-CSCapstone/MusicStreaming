@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { Page } from '@playwright/test';
 import { setupOwner, type Server } from './server';
-import { expect, login, test } from './test';
+import { createPlaylist, expect, login, test } from './test';
 
 const run = promisify(execFile);
 
@@ -87,6 +87,70 @@ test('a tab shows one type of result, and stays as the search is typed', async (
 	await page.goBack();
 	await expect(page).toHaveURL(/type=tracks$/);
 	await expect(songTitles(page)).toHaveText(['Kindling']);
+});
+
+test('a genre or a mood is found by its name, in a section and a tab of its type', async ({
+	page,
+	server
+}) => {
+	const searches = recentSearches(server);
+	await page.goto('/search?q=ambient');
+	const top = page.getByRole('region', { name: 'Top result' });
+	await expect(top.getByText('Genre', { exact: true })).toBeVisible();
+	await expect(top.getByRole('link', { name: 'Ambient' })).toBeVisible();
+	// A tab for each type of tag the library has, after the rest, as the sidebar lists them.
+	await expect(tabs(page).getByRole('link')).toHaveText([
+		'All',
+		'Albums',
+		'Artists',
+		'Playlists',
+		'Songs',
+		'Genres',
+		'Moods'
+	]);
+
+	// Played, the genre plays its songs album by album, and the search is kept, naming nothing.
+	await top.getByRole('button', { name: 'Play Ambient' }).click();
+	await expect(player(page).getByText('Signal Part 1')).toBeVisible();
+	await expect.poll(searches).toEqual([['ambient', null]]);
+
+	await main(page).getByRole('heading', { name: 'Genres' }).getByRole('link').click();
+	await expect(page).toHaveURL(/\/search\?q=ambient&type=tags&tagType=genre$/);
+	await expect(main(page).getByRole('link', { name: /^Ambient/ })).toBeVisible();
+	await searchBox(page).fill('calm');
+	await expect(page).toHaveURL(/q=calm&type=tags&tagType=genre$/);
+	await expect(main(page).getByRole('heading', { name: 'No genres match “calm”' })).toBeVisible();
+	await tabs(page).getByRole('link', { name: 'Moods' }).click();
+	await expect(page).toHaveURL(/type=tags&tagType=mood$/);
+	await main(page).getByRole('link', { name: /^Calm/ }).click();
+	await expect(page.getByRole('heading', { level: 1, name: 'Calm' })).toBeVisible();
+});
+
+test('a genre every song of which is hidden is not found', async ({ page, server }) => {
+	// Folk is on Kindling alone.
+	const { library, tracks } = server.ids;
+	await server.api(`/libraries/${library}/tracks/${tracks.Kindling}/hidden`, { method: 'PUT' });
+	await page.goto('/search?q=folk');
+	await expect(main(page).getByRole('heading', { name: 'No music matches “folk”' })).toBeVisible();
+	await page.goto('/search?q=ambient');
+	await expect(main(page).getByRole('heading', { name: 'Genres' })).toBeVisible();
+});
+
+test('the caller’s playlists are found by their titles, and play from where they stand', async ({
+	page,
+	server
+}) => {
+	await createPlaylist(server, 'Road Trip', ['Kindling', 'Signal Remix']);
+	await page.goto('/search?q=road%20trip');
+	const top = page.getByRole('region', { name: 'Top result' });
+	await expect(top.getByText('Playlist', { exact: true })).toBeVisible();
+	await top.getByRole('button', { name: 'Play Road Trip' }).click();
+	await expect(player(page).getByText('Kindling')).toBeVisible();
+
+	await tabs(page).getByRole('link', { name: 'Playlists' }).click();
+	await expect(page).toHaveURL(/type=playlists$/);
+	await main(page).getByRole('link', { name: /^Road Trip/ }).click();
+	await expect(page.getByRole('heading', { level: 1, name: 'Road Trip' })).toBeVisible();
 });
 
 test.describe('on a server of its own, with many songs', () => {
