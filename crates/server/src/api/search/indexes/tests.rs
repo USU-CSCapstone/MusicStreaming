@@ -144,6 +144,81 @@ async fn only_what_search_indexes_moves_the_names_version() {
     }
 }
 
+#[tokio::test]
+async fn only_lyrics_move_the_lyrics_version_and_they_move_nothing_else() {
+    let (_temp, db, _app) = catalog::app().await;
+    let versions = async || {
+        db.read(|conn| {
+            Ok((
+                library_number(conn, 1, "names_version")?,
+                library_number(conn, 1, "lyrics_version")?,
+            ))
+        })
+        .await
+        .unwrap()
+    };
+    let changes: [(&str, Write, bool); 7] = [
+        (
+            "lyrics added",
+            |tx| {
+                tx.execute_batch(
+                    "INSERT INTO track_lyrics (library_id, track_id, plain)
+                     VALUES (1, 1001, 'Hi'), (1, 1002, 'Hi')",
+                )
+            },
+            true,
+        ),
+        (
+            "lyrics rewritten as they were",
+            |tx| tx.execute_batch("UPDATE track_lyrics SET plain = plain"),
+            false,
+        ),
+        (
+            "lyrics changed",
+            |tx| tx.execute_batch("UPDATE track_lyrics SET plain = 'Bye' WHERE track_id = 1001"),
+            true,
+        ),
+        (
+            "plain lyrics made timed",
+            |tx| {
+                tx.execute_batch(
+                    r#"UPDATE track_lyrics SET plain = NULL,
+                           synced = '[{"startMs":0,"text":"Bye"}]' WHERE track_id = 1001"#,
+                )
+            },
+            true,
+        ),
+        (
+            "lyrics removed",
+            |tx| tx.execute_batch("DELETE FROM track_lyrics WHERE track_id = 1001"),
+            true,
+        ),
+        (
+            "a track with lyrics deleted",
+            |tx| tx.execute_batch("DELETE FROM tracks WHERE id = 1002"),
+            true,
+        ),
+        (
+            "another library's lyrics",
+            |tx| {
+                tx.execute_batch(
+                    "INSERT INTO track_lyrics (library_id, track_id, plain) VALUES (2, 2001, 'Hi')",
+                )
+            },
+            false,
+        ),
+    ];
+    for (change, write, moves) in changes {
+        let (names, lyrics) = versions().await;
+        db.write(write).await.unwrap();
+        let (names_after, lyrics_after) = versions().await;
+        assert_eq!(lyrics_after != lyrics, moves, "{change}");
+        if change != "a track with lyrics deleted" {
+            assert_eq!(names_after, names, "{change} names nothing");
+        }
+    }
+}
+
 /// Library 1's index before `change`, and after it, once any rebuild it makes due is done.
 async fn around(change: &'static str) -> (Arc<Index>, Arc<Index>) {
     let (_temp, db, _app) = catalog::app().await;

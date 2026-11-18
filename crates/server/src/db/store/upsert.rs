@@ -209,19 +209,22 @@ fn replace_tags(
     Ok(())
 }
 
-/// Replaces track `id`'s lyrics with `lyrics`, or removes them when it is `None`.
+/// Replaces track `id`'s lyrics with `lyrics`, or removes them when it is `None`. Lyrics rewritten
+/// as they were are left alone, so rescanning a file does not make the lyric index rebuild.
 fn replace_lyrics(tx: &Transaction<'_>, lib: i64, id: i64, lyrics: Option<&Lyrics>) -> Result<()> {
-    tx.prepare_cached("DELETE FROM track_lyrics WHERE track_id = ?1")?.execute([id])?;
-    if let Some(lyrics) = lyrics {
-        let (plain, synced) = match lyrics {
-            Lyrics::Plain(text) => (Some(text), None),
-            Lyrics::Synced(lines) => (None, Some(Json(lines))),
-        };
-        tx.prepare_cached(
-            "INSERT INTO track_lyrics (library_id, track_id, plain, synced) \
-             VALUES (?1, ?2, ?3, ?4)",
-        )?
-        .execute(params![lib, id, plain, synced])?;
-    }
+    let Some(lyrics) = lyrics else {
+        tx.prepare_cached("DELETE FROM track_lyrics WHERE track_id = ?1")?.execute([id])?;
+        return Ok(());
+    };
+    let (plain, synced) = match lyrics {
+        Lyrics::Plain(text) => (Some(text), None),
+        Lyrics::Synced(lines) => (None, Some(Json(lines))),
+    };
+    tx.prepare_cached(
+        "INSERT INTO track_lyrics (library_id, track_id, plain, synced) VALUES (?1, ?2, ?3, ?4) \
+         ON CONFLICT (track_id) DO UPDATE SET plain = excluded.plain, synced = excluded.synced \
+         WHERE plain IS NOT excluded.plain OR synced IS NOT excluded.synced",
+    )?
+    .execute(params![lib, id, plain, synced])?;
     Ok(())
 }

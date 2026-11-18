@@ -3,7 +3,7 @@
 
 use jewelcase_scanner::testing::{self, ItemKey};
 
-use super::{make, tagged};
+use super::{make, retag, scalar, tagged};
 use crate::db::store::SqliteStore;
 
 /// Each track's title, lyrics kind, plain text and timed lines as stored, by title.
@@ -89,4 +89,42 @@ fn an_embedded_tag_holding_only_a_byte_order_mark_leaves_the_lyrics_file() {
 
     let lines = r#"[{"startMs":1000,"text":"x"}]"#;
     assert_eq!(stored(&store), [("1".into(), "synced".into(), None, Some(lines.into()))]);
+}
+
+/// A file rescanned with its lyrics as they were leaves the library's lyrics version, so the lyric
+/// index is not rebuilt; lyrics changed or removed move it (`0007_catalog_counts.sql`).
+#[test]
+fn only_lyrics_that_change_move_the_lyrics_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    tagged(&root, "a/1.wav", &[(ItemKey::TrackTitle, "1"), (ItemKey::UnsyncLyrics, "Hello")]);
+    let store = make(&root);
+    let lib = testing::library(&root);
+    let read = || {
+        (
+            scalar::<i64>(&store, "SELECT lyrics_version FROM libraries").unwrap(),
+            scalar::<String>(&store, "SELECT plain FROM track_lyrics"),
+        )
+    };
+    testing::scan_library(&store, &lib);
+    let (first, _) = read();
+    assert!(first > 0, "lyrics added");
+    let scan = |items: &[(ItemKey, &str)]| {
+        retag(&root, "a/1.wav", items);
+        assert_eq!(testing::scan_library(&store, &lib).progress.updated, 1);
+        read()
+    };
+    let (version, plain) = scan(&[(ItemKey::TrackTitle, "One"), (ItemKey::UnsyncLyrics, "Hello")]);
+    assert_eq!(
+        (version, plain.as_deref()),
+        (first, Some("Hello")),
+        "retitled, lyrics as they were"
+    );
+    let (changed, plain) =
+        scan(&[(ItemKey::TrackTitle, "One"), (ItemKey::UnsyncLyrics, "Goodbye")]);
+    assert!(changed > first, "lyrics changed");
+    assert_eq!(plain.as_deref(), Some("Goodbye"));
+    let (removed, plain) = scan(&[(ItemKey::TrackTitle, "One"), (ItemKey::UnsyncLyrics, "")]);
+    assert!(removed > changed, "lyrics removed");
+    assert_eq!(plain, None);
 }
