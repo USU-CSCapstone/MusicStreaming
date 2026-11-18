@@ -8,14 +8,13 @@
 //! its words recur. Each line indexed keeps its place among the track's lines, for the lines
 //! around it to be read back from where the lyrics are stored.
 //!
-//! The index holds, for each word, the lines it is in, and for each line, its words in order:
+//! The index holds, for each word, the lines it is in, and for each line, how many words it has,
+//! but not which, which would double it (`design/search.md` §2.5): matching ranks the lines it
+//! finds by what the postings say, and reads the text of only the best few back to see whether
+//! they hold the query's words in order.
 //!
-//! - **words are numbered by how often they occur**, most first, so the commonest, which most
-//!   lines are made of, are the smallest numbers;
-//! - **a line's words are those numbers in order, a few bytes each and most one** (variable
-//!   length, seven bits to a byte);
 //! - **a word's lines are ascending, kept as the gaps between them**, which are small for a
-//!   common word, in the same variable-length bytes;
+//!   common word, in variable-length bytes (seven bits to a byte), most of them one;
 //! - **a line's track is found, not stored**: lines are in track order, and each track keeps
 //!   where its lines start.
 
@@ -40,20 +39,16 @@ type TrackLines = (i64, Vec<(u16, Vec<String>)>);
 /// Every track's lyrics by their lines, ready to search.
 #[derive(Debug, Default)]
 pub struct LyricIndex {
-    /// Every distinct word, most frequent first: a word's number is its place here.
+    /// Every distinct word, sorted: a word's number is its place here.
     vocabulary: Vec<String>,
-    /// The word numbers in alphabetical order, for finding words by prefix or with typos.
-    alphabetical: Vec<u32>,
     /// Each word's lines, ascending, as gaps in variable-length bytes:
     /// `postings[posting_starts[w]..posting_starts[w + 1]]`.
     postings: Vec<u8>,
     posting_starts: Vec<u32>,
-    /// Each line's word numbers in order, in variable-length bytes:
-    /// `line_words[word_starts[l]..word_starts[l + 1]]`.
-    line_words: Vec<u8>,
-    word_starts: Vec<u32>,
     /// Each line's place among its track's lines as given.
     line_numbers: Vec<u16>,
+    /// Each line's words, counted, up to 255.
+    line_lengths: Vec<u8>,
     /// The tracks, by ID, and where each one's lines start: `track_starts[t]..track_starts[t + 1]`.
     track_ids: Vec<i64>,
     track_starts: Vec<u32>,
@@ -85,22 +80,16 @@ impl LyricIndex {
         }
         folded.sort_unstable_by_key(|(id, _)| *id);
 
-        // Words numbered by how often they occur, ties by the word, so the numbering is the same
-        // wherever the index is built.
-        let mut counts: HashMap<&str, u64> = HashMap::new();
-        for (_, lines) in &folded {
-            for (_, words) in lines {
-                for word in words {
-                    *counts.entry(word.as_str()).or_default() += 1;
-                }
-            }
-        }
-        let mut vocabulary: Vec<(&str, u64)> = counts.into_iter().collect();
-        vocabulary.sort_unstable_by(|(a, x), (b, y)| y.cmp(x).then(a.cmp(b)));
+        // Sorted, so words are found by prefix in one range, as a name's are.
+        let distinct: HashSet<&str> = folded
+            .iter()
+            .flat_map(|(_, lines)| lines.iter().flat_map(|(_, words)| words.iter()))
+            .map(String::as_str)
+            .collect();
+        let mut vocabulary: Vec<&str> = distinct.into_iter().collect();
+        vocabulary.sort_unstable();
         let number: HashMap<&str, u32> =
-            vocabulary.iter().enumerate().map(|(n, (word, _))| (*word, n as u32)).collect();
-        let mut alphabetical: Vec<u32> = (0..vocabulary.len() as u32).collect();
-        alphabetical.sort_unstable_by_key(|&w| vocabulary[w as usize].0);
+            vocabulary.iter().enumerate().map(|(n, word)| (*word, n as u32)).collect();
 
         let mut index = LyricIndex::default();
         let mut lines_of: Vec<Vec<u32>> = vec![Vec::new(); vocabulary.len()];
@@ -110,21 +99,17 @@ impl LyricIndex {
             for (at, words) in lines {
                 let line = index.line_numbers.len() as u32;
                 index.line_numbers.push(*at);
-                index.word_starts.push(index.line_words.len() as u32);
-                let mut last = None;
+                index.line_lengths.push(u8::try_from(words.len()).unwrap_or(u8::MAX));
                 for word in words {
                     let w = number[word.as_str()];
-                    put_varint(&mut index.line_words, w);
                     // A word twice in a line is one posting.
-                    if last != Some(w) && lines_of[w as usize].last() != Some(&line) {
+                    if lines_of[w as usize].last() != Some(&line) {
                         lines_of[w as usize].push(line);
                     }
-                    last = Some(w);
                 }
             }
         }
         index.track_starts.push(index.line_numbers.len() as u32);
-        index.word_starts.push(index.line_words.len() as u32);
         for lines in lines_of {
             index.posting_starts.push(index.postings.len() as u32);
             let mut previous = 0;
@@ -134,8 +119,7 @@ impl LyricIndex {
             }
         }
         index.posting_starts.push(index.postings.len() as u32);
-        index.vocabulary = vocabulary.into_iter().map(|(word, _)| word.to_owned()).collect();
-        index.alphabetical = alphabetical;
+        index.vocabulary = vocabulary.into_iter().map(str::to_owned).collect();
         index.shrink();
         index
     }
@@ -143,12 +127,10 @@ impl LyricIndex {
     /// Lets go of what building left spare.
     fn shrink(&mut self) {
         self.vocabulary.shrink_to_fit();
-        self.alphabetical.shrink_to_fit();
         self.postings.shrink_to_fit();
         self.posting_starts.shrink_to_fit();
-        self.line_words.shrink_to_fit();
-        self.word_starts.shrink_to_fit();
         self.line_numbers.shrink_to_fit();
+        self.line_lengths.shrink_to_fit();
         self.track_ids.shrink_to_fit();
         self.track_starts.shrink_to_fit();
     }
@@ -158,12 +140,10 @@ impl LyricIndex {
         let words: usize = self.vocabulary.iter().map(|word| word.capacity()).sum();
         words
             + self.vocabulary.capacity() * size_of::<String>()
-            + self.alphabetical.capacity() * size_of::<u32>()
             + self.postings.capacity()
             + self.posting_starts.capacity() * size_of::<u32>()
-            + self.line_words.capacity()
-            + self.word_starts.capacity() * size_of::<u32>()
             + self.line_numbers.capacity() * size_of::<u16>()
+            + self.line_lengths.capacity()
             + self.track_ids.capacity() * size_of::<i64>()
             + self.track_starts.capacity() * size_of::<u32>()
     }
@@ -172,19 +152,12 @@ impl LyricIndex {
     #[cfg(test)]
     pub(super) fn parts(&self) -> [(&'static str, usize); 5] {
         let words: usize = self.vocabulary.iter().map(|word| word.capacity()).sum();
-        let vocabulary = words
-            + self.vocabulary.capacity() * size_of::<String>()
-            + self.alphabetical.capacity() * size_of::<u32>();
+        let vocabulary = words + self.vocabulary.capacity() * size_of::<String>();
         [
             ("postings", self.postings.capacity() + self.posting_starts.capacity() * 4),
-            ("line words", self.line_words.capacity()),
-            ("line starts", self.word_starts.capacity() * 4),
-            (
-                "line places and tracks",
-                self.line_numbers.capacity() * 2
-                    + self.track_ids.capacity() * 8
-                    + self.track_starts.capacity() * 4,
-            ),
+            ("line lengths", self.line_lengths.capacity()),
+            ("line places", self.line_numbers.capacity() * 2),
+            ("tracks", self.track_ids.capacity() * 8 + self.track_starts.capacity() * 4),
             ("vocabulary", vocabulary),
         ]
     }
@@ -202,10 +175,7 @@ impl LyricIndex {
     /// The number of `word`, if any line has it.
     #[cfg_attr(not(test), expect(dead_code, reason = "read by lyric matching, built next"))]
     pub(super) fn word(&self, word: &str) -> Option<u32> {
-        let at =
-            self.alphabetical.partition_point(|&w| self.vocabulary[w as usize].as_str() < word);
-        let &w = self.alphabetical.get(at)?;
-        (self.vocabulary[w as usize] == word).then_some(w)
+        self.vocabulary.binary_search_by(|w| w.as_str().cmp(word)).ok().map(|w| w as u32)
     }
 
     /// The lines word `w` is in, ascending.
@@ -220,12 +190,10 @@ impl LyricIndex {
         })
     }
 
-    /// The word numbers of line `l`, in order.
+    /// How many words line `l` has, up to 255.
     #[cfg_attr(not(test), expect(dead_code, reason = "read by lyric matching, built next"))]
-    pub(super) fn words_of(&self, l: u32) -> impl Iterator<Item = u32> + '_ {
-        let range =
-            self.word_starts[l as usize] as usize..self.word_starts[l as usize + 1] as usize;
-        Varints(&self.line_words[range])
+    pub(super) fn length(&self, l: u32) -> u8 {
+        self.line_lengths[l as usize]
     }
 
     /// The track line `l` is of, by its ID, and the line's place among the track's lines.
@@ -272,21 +240,16 @@ impl Iterator for Varints<'_> {
 mod tests {
     use super::*;
 
-    /// The index's words, as text, of each line `word` is in, and where each is.
-    fn found(index: &LyricIndex, word: &str) -> Vec<(i64, u16, Vec<String>)> {
+    /// Each line `word` is in: its track, its place, and how many words it has.
+    fn found(index: &LyricIndex, word: &str) -> Vec<(i64, u16, u8)> {
         let Some(w) = index.word(word) else { return Vec::new() };
         index
             .lines_of(w)
             .map(|l| {
                 let (track, at) = index.place(l);
-                let words = index.words_of(l).map(|w| index.vocabulary[w as usize].clone());
-                (track, at, words.collect())
+                (track, at, index.length(l))
             })
             .collect()
-    }
-
-    fn strings(words: &[&str]) -> Vec<String> {
-        words.iter().map(|&word| word.to_owned()).collect()
     }
 
     #[test]
@@ -298,25 +261,20 @@ mod tests {
         assert_eq!((index.tracks(), index.lines()), (2, 3));
         assert_eq!(
             found(&index, "so"),
-            [(3, 2, strings(&["so", "long"])), (7, 0, strings(&["say", "it", "aint", "so"])),],
+            [(3, 2, 2), (7, 0, 4)],
             "the repeated line once, at its first place; the blank and the label not at all"
         );
-        assert_eq!(found(&index, "go"), [(7, 1, strings(&["i", "will", "not", "go"]))]);
+        assert_eq!(found(&index, "go"), [(7, 1, 4)]);
+        assert_eq!(found(&index, "aint"), [(7, 0, 4)], "folded as a name is");
         assert_eq!(found(&index, "chorus"), []);
         assert_eq!(found(&index, "nowhere"), []);
     }
 
     #[test]
-    fn the_commonest_words_are_the_smallest_numbers() {
-        let index = LyricIndex::build([
-            (1, vec!["love love me do", "you know I love you"]),
-            (2, vec!["love is all", "all you need is love"]),
-        ]);
-        assert_eq!(index.word("love"), Some(0));
-        // You three times, then all and is twice each, ties by the word.
-        assert_eq!(index.vocabulary[1..4], ["you", "all", "is"]);
-        // A word twice in a line is that line once.
-        assert_eq!(found(&index, "love").len(), 4);
+    fn a_word_twice_in_a_line_is_that_line_once_and_counts_twice() {
+        let index = LyricIndex::build([(1, vec!["love love me do"]), (2, vec!["love is all"])]);
+        assert_eq!(found(&index, "love"), [(1, 0, 4), (2, 0, 3)]);
+        assert_eq!(index.vocabulary, ["all", "do", "is", "love", "me"], "sorted");
     }
 
     #[test]

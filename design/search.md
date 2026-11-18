@@ -36,7 +36,11 @@ Built, and described where it is built: matching and ranking in `crates/core/src
 
 ### 2.3 Ranking
 
-- **Within the section, a track by its best line**, lines ranked by, in order: the line holding the query's words **in order and together** (the phrase remembered), fewer typos, fewer words matched only as a prefix, fewer words in the line beyond those matched (a shorter line is the likelier one meant), then the track as the Songs section breaks ties.
+- **Within the section, a track by its best line**, lines ranked in two steps, since the index knows which words a line has but not their order (§2.5):
+  1. **Every line that matches, by what the index knows**: fewer typos, fewer words matched only as a prefix, fewer words in the line beyond those matched (a shorter line is the likelier one meant), then the track's ID and the line's place.
+  2. **The best 200 of those, read back from the stored lyrics, with the lines holding the query's words in order and together first** (the phrase remembered), the order of step 1 kept within each.
+
+  A device does the same over its own stored lyrics, so the two rank alike. A phrase matched only past the first 200 lines is not lifted; in practice the lines that hold a phrase are among the shortest and least mistyped, so step 1 already keeps them near the top.
 - **Among the sections, a lyric section never outranks a name matched exactly** ([`requirements/search.md` §4](../requirements/search.md#4-results)): it sorts as if its best match were never exact, so a section whose best is an exact name comes first, and against inexact names it is compared as they are. So searching a title shows the song's name before its chorus, and searching a line no title holds puts lyrics first.
 - **A lyric can be the top result**, when its section leads: typing a half-remembered line puts that song at the top, ready to play, with the line shown. Otherwise the top result is a name, as now.
 
@@ -48,12 +52,19 @@ Built, and described where it is built: matching and ranking in `crates/core/src
 
 ### 2.5 Memory, on the server
 
-**An index in memory, as names are, with compact postings, under 100 MB for the heavy case below, measured at full scale before it is relied on.** The numbers below are estimates; the benchmark (`benchmark_full_scale`, extended) measures them, and the budget decides.
+**An index in memory, as names are, with compact postings, under 100 MB for the heavy case: 76 MB, measured.** The heavy case is 150,000 tracks with lyrics, each 30 lines of its own and a chorus of five sung three times, so 45 lines and 35 distinct, of 4 to 10 words from a 60,000-word vocabulary that occurs as a language's does (`benchmark_lyrics_full_scale`). Its 5.25 million distinct lines build in 10 s on an M5.
 
-- A heavy case: 150,000 tracks with lyrics, about 45 lines each, about 7 words a line: some 47 million words. Distinct lines only, which choruses make perhaps two thirds of that, about 30 million.
-- Kept as plain 4-byte IDs, the postings (each word's lines) and each line's words (to check order and count extra words) come to some 240 MB: too much beside a Raspberry Pi's other work. Delta- and variable-length-encoded, as sorted postings compress well, about 60–90 MB; plus a vocabulary of a few hundred thousand words, a few MB.
+| What | Measured |
+|---|---|
+| Postings: each word's lines, as variable-length gaps | 57.2 MB |
+| Each line's place among its track's lines | 10.5 MB |
+| Each line's count of words | 5.2 MB |
+| Each track's ID and first line | 1.8 MB |
+| Vocabulary | 1.4 MB |
+
+- **Each line's words, in order, are not kept**: with where each line starts, they measured 79 MB, and would have put the index at 150 MB. Order is needed only to lift the lines that hold the query as a phrase, which reading the best 200 lines back does (§2.3).
 - A typical library has lyrics for far fewer tracks, and the index costs nothing for a track with none.
-- **If it measures over 100 MB**, the same core matching reads its postings from the database instead of memory, keeping only the vocabulary resident, before lyric search ships. Searching lyrics with SQLite's own full-text search is ruled out either way: its words and ranking are not the core's, so the device, which has no such engine, could never find what the server finds.
+- **Over 100 MB**, the same core matching would read its postings from the database instead of memory, keeping only the vocabulary resident. Searching lyrics with SQLite's own full-text search is ruled out either way: its words and ranking are not the core's, so the device, which has no such engine, could never find what the server finds.
 
 ### 2.6 On a device
 
