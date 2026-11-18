@@ -167,6 +167,7 @@ struct NoParams {}
 struct SearchParams {
     q: String,
     types: Option<String>,
+    tag_type: Option<String>,
     tag_all: Option<String>,
     tag_any: Option<String>,
     section_limit: Option<usize>,
@@ -178,6 +179,7 @@ struct SearchParams {
 struct SectionParams {
     section: String,
     q: String,
+    tag_type: Option<String>,
     sort: Option<String>,
     order: Option<Order>,
     cursor: Option<String>,
@@ -311,6 +313,7 @@ pub fn answer(
                 !hid.contains(kind, id)
                     && tagged.as_ref().is_none_or(|sets| sets[kind as usize].contains(&id))
             });
+            let found = search::of_tag_type(found, p.tag_type.as_deref());
             json(search::response(conn, user, library, p.q, found, &hid)?)
         }
         "searchSection" => {
@@ -328,6 +331,13 @@ pub fn answer(
                     return Err(Error("lyrics cannot be searched yet".to_owned()));
                 }
                 None => return Err(Error(format!("no section {}", p.section))),
+            };
+            // Each type of tag is a section of its own, so the tags section is one type.
+            let group = match kind {
+                Kind::Tag => {
+                    Some(p.tag_type.ok_or_else(|| Error("tags need a tagType".to_owned()))?)
+                }
+                _ => None,
             };
             let reading = search::SectionReading::new(
                 &p.section,
@@ -349,7 +359,10 @@ pub fn answer(
                     && tagged.as_ref().is_none_or(|sets| sets[kind as usize].contains(&id))
             };
             let index = built(index)?;
-            json(search::section(conn, user, library, p.q, kind, reading, index, keep, &hid)?)
+            let group = group.as_deref();
+            json(search::section(
+                conn, user, library, p.q, kind, group, reading, index, keep, &hid,
+            )?)
         }
         "listHiddenTracks" => {
             let p: HiddenParams = serde_json::from_str(params)?;

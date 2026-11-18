@@ -525,3 +525,106 @@ async fn a_walk_that_finds_the_matches_bunched_together_gives_way_to_the_lead() 
     let expected: Vec<String> = (1201..1396).chain(1101..1106).map(|id| id.to_string()).collect();
     assert_eq!(pages, [expected[..100].to_vec(), expected[100..].to_vec()]);
 }
+
+/// [`catalog::app`], plus Punk Rock (33) on tracks 1002 and 1003, beside Rock (30) and the mood
+/// Calm (32) on track 1001, once the index holds them.
+async fn app_with_tags() -> (tempfile::TempDir, Arc<Database>, Router) {
+    let (temp, db, app) = app_with_catalog().await;
+    db.write(|tx| {
+        tx.execute_batch(
+            "INSERT INTO tags (id, library_id, type, name, name_key, sort_key) VALUES
+                 (33, 1, 'genre', 'Punk Rock', 'punk rock', CAST('punk rock' AS BLOB));
+             INSERT INTO track_tags (library_id, track_id, tag_id, tag_name) VALUES
+                 (1, 1002, 33, 'Punk Rock'), (1, 1003, 33, 'Punk Rock');",
+        )
+    })
+    .await
+    .unwrap();
+    eventually("the index holds the tags", async || {
+        let (_, body) = json(&app, "/api/v1/libraries/1/search?q=punk").await;
+        (body["sections"] != json!([])).then_some(())
+    })
+    .await;
+    (temp, db, app)
+}
+
+/// The tags sections of a search response, as each one's type and tag IDs.
+fn tag_sections(body: &Value) -> Vec<(String, Vec<String>)> {
+    let sections = body["sections"].as_array().unwrap();
+    let tags = sections.iter().filter(|section| section["type"] == "tags");
+    tags.map(|section| {
+        let ids = section["items"].as_array().unwrap();
+        let ids = ids.iter().map(|item| item["tag"]["id"].as_str().unwrap().to_owned()).collect();
+        (section["tagType"].as_str().unwrap().to_owned(), ids)
+    })
+    .collect()
+}
+
+#[tokio::test]
+async fn tags_are_found_by_name_in_a_section_for_each_type() {
+    let (_temp, _db, app) = app_with_tags().await;
+    let genre = |ids: &[&str]| ("genre".to_owned(), ids.iter().map(|&id| id.to_owned()).collect());
+    let (_, body) = json(&app, "/api/v1/libraries/1/search?q=rock").await;
+    // Rock is exact; Punk Rock, on more tracks, follows it.
+    assert_eq!(tag_sections(&body), [genre(&["30", "33"])]);
+    let section =
+        body["sections"].as_array().unwrap().iter().find(|s| s["type"] == "tags").unwrap();
+    assert_eq!(section["total"], 2);
+    assert_eq!(
+        section["items"][0],
+        json!({ "type": "tag", "tag": listed(&app, "tags", "30").await })
+    );
+
+    let (_, body) = json(&app, "/api/v1/libraries/1/search?q=calm").await;
+    assert_eq!(tag_sections(&body), [("mood".to_owned(), vec!["32".to_owned()])]);
+    // A type of tag narrows the tags sections, and leaves the others be.
+    let (_, body) = json(&app, "/api/v1/libraries/1/search?q=rock&tagType=mood").await;
+    assert_eq!(tag_sections(&body), []);
+    let (_, body) = json(&app, "/api/v1/libraries/1/search?q=rock&types=tags&tagType=genre").await;
+    assert_eq!(sections(&body).len(), 1);
+    assert_eq!(tag_sections(&body), [genre(&["30", "33"])]);
+    // Under a tag filter, which only music carries, no tag is found.
+    let (_, body) = json(&app, "/api/v1/libraries/1/search?q=rock&tagAny=30").await;
+    assert_eq!(tag_sections(&body), []);
+}
+
+#[tokio::test]
+async fn a_tag_is_found_as_the_caller_sees_it() {
+    let (_temp, _db, app) = app_with_tags().await;
+    // Every track of Rock and Calm hidden, and one of Punk Rock's two.
+    for track in [1001, 1002] {
+        let uri = format!("/api/v1/libraries/1/tracks/{track}/hidden");
+        assert_eq!(send(app.clone(), "PUT", &uri).await.0, StatusCode::NO_CONTENT);
+    }
+    let (_, body) = json(&app, "/api/v1/libraries/1/search?q=rock").await;
+    assert_eq!(tag_sections(&body), [("genre".to_owned(), vec!["33".to_owned()])]);
+    let section =
+        body["sections"].as_array().unwrap().iter().find(|s| s["type"] == "tags").unwrap();
+    assert_eq!(
+        (&section["total"], &section["items"][0]["tag"]["trackCount"]),
+        (&json!(1), &json!(1))
+    );
+    let (_, body) = json(&app, "/api/v1/libraries/1/search?q=calm").await;
+    assert_eq!(body["sections"], json!([]));
+}
+
+#[tokio::test]
+async fn the_tags_section_pages_through_one_type() {
+    let (_temp, _db, app) = app_with_tags().await;
+    let base = "/api/v1/libraries/1/search/tags?q=rock";
+    let (status, first) = json(&app, &format!("{base}&tagType=genre&limit=1")).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!((&first["items"][0]["tag"]["id"], &first["total"]), (&json!("30"), &json!(2)));
+    let cursor = first["nextCursor"].as_str().unwrap();
+    let (_, rest) = json(&app, &format!("{base}&tagType=genre&limit=1&cursor={cursor}")).await;
+    assert_eq!((&rest["items"][0]["tag"]["id"], &rest["nextCursor"]), (&json!("33"), &Value::Null));
+    let (_, mood) = json(&app, &format!("{base}&tagType=mood")).await;
+    assert_eq!(mood["total"], 0);
+    let (_, none) = json(&app, &format!("{base}&tagType=decade")).await;
+    assert_eq!(none["total"], 0, "a type the library lacks");
+
+    let (status, _, _) = send(app.clone(), "GET", base).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "the tags of no type");
+    let (status, _, _) = send(app.clone(), "GET", &format!("{base}&tagType=genre&sort=name")).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "tags have no sorts");
+}
