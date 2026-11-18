@@ -2,11 +2,25 @@
 	// All, then a tab for each type of result and each type of tag, each a link to the same search
 	// on it.
 	import { page } from '$app/state';
-	import { sameTab, searchTabs, tabHref, type Tab } from '$lib/search-tabs';
+	import { sameTab, searchTabs, tabHref, type SearchTab, type Tab } from '$lib/search-tabs';
 
-	let { q, current }: { q: string; current: Tab | null } = $props();
+	let {
+		q,
+		current,
+		scope = {},
+		holds
+	}: {
+		q: string;
+		current: Tab | null;
+		/** The parameters of the container offered or kept to, which every tab keeps. */
+		scope?: Record<string, string>;
+		/** The types of result there can be, where a container holds only some. */
+		holds?: SearchTab[];
+	} = $props();
 
-	const tabs = $derived(searchTabs(page.data.tagTypes ?? []));
+	const tabs = $derived(
+		searchTabs(page.data.tagTypes ?? []).filter(({ tab }) => !tab || !holds || holds.includes(tab.type))
+	);
 
 	/** At phone width the tabs scroll sideways, so the one open is brought into view. */
 	const shown = (el: HTMLElement) => el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -17,7 +31,7 @@
 		{@const open = sameTab(tab, current)}
 		<!-- eslint-disable svelte/no-navigation-without-resolve -- resolved in search-tabs.ts -->
 		<a
-			href={tabHref(q, tab)}
+			href={tabHref(q, tab, scope)}
 			class:active={open}
 			aria-current={open ? 'page' : undefined}
 			{@attach open && shown}

@@ -90,6 +90,7 @@ describe('recipes with a tag filter', () => {
 	it('name a search by its words, in its ranking or a sort', () => {
 		expect(searchRecipe('sig')).toEqual({ type: 'search', q: 'sig' });
 		expect(searchRecipe('sig', null)).toEqual({ type: 'search', q: 'sig' });
+		expect(searchRecipe('sig', null, 'album:31')).toEqual({ type: 'search', q: 'sig', within: 'album:31' });
 		expect(searchRecipe('sig', { sort: 'name', order: 'desc' })).toEqual({
 			type: 'search',
 			q: 'sig',
