@@ -3,6 +3,7 @@
 
 mod indexes;
 mod tagged;
+mod within;
 
 use std::sync::Arc;
 
@@ -13,11 +14,12 @@ use jewelcase_catalog::search::{
     self, Hid, MUSIC, SEARCHED, SearchResponse, SectionPage, SectionReading, SectionType, kinds,
     response, section_limit,
 };
-use jewelcase_catalog::within::{self, Held, Within};
+use jewelcase_catalog::within::Within;
 use jewelcase_core::{Index, Kind, Union};
 use serde::Deserialize;
 
 pub use indexes::Indexes;
+use tagged::Sets;
 
 use super::extract::{Path, Query};
 use super::scope::Scope;
@@ -59,16 +61,15 @@ pub async fn search(
     // And the caller's own playlists, which no one else's search finds.
     let tags = filter.clone();
     let wants = kinds.contains(&Kind::Playlist);
-    // Narrowed to a container, only what it holds.
-    let (hid, mine, held) = db
+    // Narrowed to a container, only what it holds, kept as a tag filter's rows are.
+    let held = held(&db, &indexes, user, library, within).await?;
+    let (hid, mine) = db
         .read(move |conn| {
             let mine = if wants { search::mine(conn, user, library)? } else { Index::default() };
-            let hid = Hid::read(conn, user, library, &tags)?;
-            let held = within.map(|within| within::reached(conn, user, library, within, &hid));
-            Ok::<_, rusqlite::Error>((hid, mine, held.transpose()?))
+            Ok::<_, rusqlite::Error>((Hid::read(conn, user, library, &tags)?, mine))
         })
         .await?;
-    let held = reached(held)?;
+    let held = reached(within, held, &hid)?;
     let found = Union(&[&index, &mine]).search_within(&query.q, &kinds, limit, |kind, id| {
         !hid.contains(kind, id)
             && tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
@@ -125,17 +126,12 @@ pub async fn section(
     let filter = TagFilter::new(tag_all.as_deref(), tag_any.as_deref())?;
     let tagged = indexes.tagged.get(&db, library, &filter, &[kind]).await?;
     let index = indexes.index(&db, library).await?;
+    let held = held(&db, &indexes, user, library, within).await?;
     let page = db
         .read(move |conn| {
             let hid = Hid::read(conn, user, library, &filter)?;
             // Narrowed to a container, only what it holds; one out of reach is not found.
-            let held = match within {
-                Some(within) => match within::reached(conn, user, library, within, &hid)? {
-                    Some(held) => Some(held),
-                    None => return Ok(None),
-                },
-                None => None,
-            };
+            let Ok(held) = reached(within, held, &hid) else { return Ok(None) };
             let keep = |kind: Kind, id| {
                 !hid.contains(kind, id)
                     && tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
@@ -161,9 +157,35 @@ fn container(within: Option<&str>) -> Result<Option<Within>, Problem> {
     within.map(|within| Within::parse(within)?.ok_or_else(Problem::not_found)).transpose()
 }
 
-/// What a container holds, if the search is narrowed to one: `404` where it is out of reach.
-fn reached(held: Option<Option<Held>>) -> Result<Option<Held>, Problem> {
-    held.map(|held| held.ok_or_else(Problem::not_found)).transpose()
+/// What the container `within` holds in `library` as `user` reaches it, if a search is narrowed
+/// to one, kept while the library stays as it is ([`Containers`](within::Containers)).
+async fn held(
+    db: &Database,
+    indexes: &Indexes,
+    user: i64,
+    library: i64,
+    within: Option<Within>,
+) -> Result<Option<Option<Sets>>, Problem> {
+    match within {
+        Some(within) => Ok(Some(indexes.containers.get(db, user, library, within).await?)),
+        None => Ok(None),
+    }
+}
+
+/// What a container holds, if the search is narrowed to one: `404` where it is out of reach, as
+/// one not there is, or one the caller hid whole, as `hid` says (`requirements/users.md` §10).
+fn reached(
+    within: Option<Within>,
+    held: Option<Option<Sets>>,
+    hid: &Hid,
+) -> Result<Option<Sets>, Problem> {
+    match (within, held) {
+        (Some(within), Some(Some(held))) if !hid.contains(within.kind(), within.id()) => {
+            Ok(Some(held))
+        }
+        (Some(_), _) => Err(Problem::not_found()),
+        (None, _) => Ok(None),
+    }
 }
 
 /// How many of `library`'s tracks, albums, and artists match `q`, as a search counts them, in
