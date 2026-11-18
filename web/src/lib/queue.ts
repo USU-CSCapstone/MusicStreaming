@@ -57,12 +57,8 @@ export const libraryRecipe = (
 	...sort
 });
 
-/** The songs a search finds, in its ranking, narrowed to `filter`'s tags, as the server resolves them. */
-export const searchRecipe = (q: string, filter: TagFilter): QueueRecipe => ({
-	type: 'search',
-	q,
-	...(isFiltered(filter) && { filters: recipeFilters(filter) })
-});
+/** The songs a search finds, in its ranking, as the server resolves them. */
+export const searchRecipe = (q: string): QueueRecipe => ({ type: 'search', q });
 
 /** Every song an artist is credited on in `sort`, as the server resolves them. */
 export const artistRecipe = (artistId: string, sort = BY_ALBUM): QueueRecipe => ({

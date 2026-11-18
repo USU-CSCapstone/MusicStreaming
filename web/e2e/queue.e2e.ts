@@ -639,28 +639,24 @@ test('a filtered album sends its songs until a tag type is known, then a recipe'
 		});
 });
 
-test('queues every song a filtered search finds', async ({ page, server }) => {
-	const { Ambient } = server.ids.tags;
+test('queues every song a search finds', async ({ page, server }) => {
 	const sent = observe(page);
-	await page.goto(`/search?q=signal&tagAny=${Ambient}`);
-	await expect(shownTitles(page)).toHaveCount(2);
+	await page.goto('/search?q=signal');
+	await expect(shownTitles(page)).toHaveCount(3);
 	// In the order the server found them.
 	const found = (await shownTitles(page).allInnerTexts()).map((t) => t.trim());
-	expect(found.toSorted()).toEqual(['Signal Part 1', 'Signal Part 2']);
+	expect(found.toSorted()).toEqual(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
 	await page.getByRole('button', { name: 'Signal Part 2', exact: true }).click();
 	await expect(player(page).getByText('Signal Part 2')).toBeVisible();
 	await expect.poll(() => sent.starts.length).toBe(1);
-	expect(sent.starts.at(-1)).toMatchObject({
-		source: { recipe: { type: 'search', q: 'signal', filters: { tagAny: [Ambient] } } }
-	});
+	// A search is not filtered by tag (`requirements/search.md` §5), so its recipe has no filters.
+	expect(sent.starts.at(-1)?.source.recipe).toEqual({ type: 'search', q: 'signal' });
 	await main(page).getByRole('button', { name: 'Actions for all songs found' }).click();
 	await page.getByRole('menuitem', { name: 'Queue last' }).click();
 	await expect
 		.poll(() => sent.edits.at(-1))
-		.toMatchObject({
-			type: 'add',
-			source: { recipe: { type: 'search', q: 'signal', filters: { tagAny: [Ambient] } } }
-		});
+		.toMatchObject({ type: 'add', source: { recipe: { type: 'search', q: 'signal' } } });
+	expect(sent.edits.at(-1)).not.toHaveProperty('source.recipe.filters');
 	await expect.poll(async () => (await lists(server)).at(-1)).toEqual(ids(server, ...found));
 });
 
