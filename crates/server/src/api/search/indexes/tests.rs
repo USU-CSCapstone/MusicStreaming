@@ -30,7 +30,7 @@ async fn version(db: &Database) -> i64 {
 #[tokio::test]
 async fn only_what_search_indexes_moves_the_names_version() {
     let (_temp, db, _app) = catalog::app().await;
-    let changes: [(&str, Write, bool); 16] = [
+    let changes: [(&str, Write, bool); 23] = [
         (
             "analysis",
             |tx| tx.execute_batch("UPDATE tracks SET loudness_lufs = -7 WHERE id = 1001"),
@@ -92,6 +92,50 @@ async fn only_what_search_indexes_moves_the_names_version() {
         ("an album deleted", |tx| tx.execute_batch("DELETE FROM albums WHERE id = 105"), true),
         ("an artist added", |tx| Artist::new(14, 1, "New").insert(tx), true),
         ("an artist deleted", |tx| tx.execute_batch("DELETE FROM artists WHERE id = 14"), true),
+        ("a tag's name rewritten", |tx| tx.execute_batch("UPDATE tags SET name = name"), false),
+        (
+            "a tag's album and artist counts",
+            |tx| {
+                tx.execute_batch("UPDATE tags SET album_count = 9, artist_count = 9 WHERE id = 30")
+            },
+            false,
+        ),
+        (
+            "a tag renamed",
+            |tx| tx.execute_batch("UPDATE tags SET name = 'Here' WHERE id = 30"),
+            true,
+        ),
+        (
+            "a tag carried by another track, which weighs it",
+            |tx| {
+                tx.execute_batch(
+                    "INSERT INTO track_tags (library_id, track_id, tag_id, tag_name)
+                     VALUES (1, 1002, 30, 'Rock')",
+                )
+            },
+            true,
+        ),
+        (
+            "a tag added",
+            |tx| {
+                tx.execute_batch(
+                    "INSERT INTO tags (id, library_id, type, name, name_key, sort_key)
+                     VALUES (33, 1, 'genre', 'Jazz', 'jazz', CAST('jazz' AS BLOB))",
+                )
+            },
+            true,
+        ),
+        ("a tag deleted", |tx| tx.execute_batch("DELETE FROM tags WHERE id = 33"), true),
+        (
+            "another library's tag",
+            |tx| {
+                tx.execute_batch(
+                    "INSERT INTO tags (id, library_id, type, name, name_key, sort_key)
+                     VALUES (50, 2, 'genre', 'Jazz', 'jazz', CAST('jazz' AS BLOB))",
+                )
+            },
+            false,
+        ),
     ];
     for (change, write, moves) in changes {
         let before = version(&db).await;
