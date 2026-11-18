@@ -294,6 +294,62 @@ enum SearchResult {
     Artist { artist: ArtistSummary },
     Playlist { playlist: Playlist },
     Tag { tag: Tag },
+    Lyric { lyric: LyricMatch },
+}
+
+/// The spec's `LyricMatch`: a track found by a line of its lyrics, shown with that line and the
+/// line of lyrics on either side. Only the server searches lyrics, so a device's search has none
+/// (`design/search.md` §2.6).
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LyricMatch {
+    track: TrackSummary,
+    line: Line,
+    before: Vec<String>,
+    after: Vec<String>,
+}
+
+/// The spec's `LyricMatch.line`.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Line {
+    text: String,
+    start_ms: Option<u64>,
+}
+
+impl LyricMatch {
+    /// `track`, found by its line `text`, which starts at `start_ms` if its lyrics are timed,
+    /// between the lines `before` and `after` it, each one line or none.
+    pub fn new(
+        track: TrackSummary,
+        text: String,
+        start_ms: Option<u64>,
+        before: Vec<String>,
+        after: Vec<String>,
+    ) -> LyricMatch {
+        LyricMatch { track, line: Line { text, start_ms }, before, after }
+    }
+}
+
+/// The best of a search's lyric matches, and how many there are in all: a section [`response`]
+/// shows with the rest.
+pub struct Lyrics {
+    pub matches: Vec<LyricMatch>,
+    pub total: usize,
+}
+
+impl SectionPage {
+    /// A page of the lyrics section of a search for `q`: `matches`, of `total`, and the cursor to
+    /// the next.
+    pub fn lyrics(
+        q: String,
+        matches: Vec<LyricMatch>,
+        next_cursor: Option<String>,
+        total: usize,
+    ) -> SectionPage {
+        let items = matches.into_iter().map(|lyric| SearchResult::Lyric { lyric }).collect();
+        SectionPage { query: q, items, next_cursor, total }
+    }
 }
 
 /// An index of `user`'s own playlists in `library`, Liked Songs among them, searched with the
@@ -560,8 +616,14 @@ pub fn response(
     hid: &Hid,
     misses: &[(Kind, i64)],
     tag_type: Option<&str>,
+    lyrics: Option<Lyrics>,
 ) -> rusqlite::Result<SearchResponse> {
-    let sections = sections(conn, user, library, found, &hid.losses)?;
+    let mut sections = sections(conn, user, library, found, &hid.losses)?;
+    // Lyrics after the names, as the server finds them.
+    if let Some(Lyrics { matches, total }) = lyrics.filter(|lyrics| !lyrics.matches.is_empty()) {
+        let items = matches.into_iter().map(|lyric| SearchResult::Lyric { lyric }).collect();
+        sections.push(Section { kind: "lyrics", tag_type: None, items, total });
+    }
     let library_empty = library_number(conn, library, "track_count")? == 0;
     // Nothing found in a library with music: what was nearly found (`requirements/search.md` §8).
     let near_misses = if sections.is_empty() && !library_empty {

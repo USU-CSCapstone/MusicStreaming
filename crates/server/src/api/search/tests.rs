@@ -177,9 +177,7 @@ async fn problems() {
         ("/api/v1/libraries/1/search?q=a&sectionLimit=0", StatusCode::UNPROCESSABLE_ENTITY),
         ("/api/v1/libraries/1/search?q=a&sectionLimit=51", StatusCode::UNPROCESSABLE_ENTITY),
         ("/api/v1/libraries/1/search?q=a&types=songs", StatusCode::UNPROCESSABLE_ENTITY),
-        // Filters and sections not built yet are refused rather than ignored.
-        ("/api/v1/libraries/1/search?q=a&types=lyrics", StatusCode::UNPROCESSABLE_ENTITY),
-        ("/api/v1/libraries/1/search?q=a&types=tracks,lyrics", StatusCode::UNPROCESSABLE_ENTITY),
+        // Filters not built yet are refused rather than ignored.
         ("/api/v1/libraries/1/search?q=a&genre=rock", StatusCode::UNPROCESSABLE_ENTITY),
     ] {
         let (actual, content_type, _) = send(app.clone(), "GET", uri).await;
@@ -374,7 +372,9 @@ async fn section_problems() {
     for (uri, status) in [
         ("/api/v1/libraries/9/search/tracks?q=a".to_owned(), StatusCode::NOT_FOUND),
         (format!("{base}/songs?q=a"), StatusCode::NOT_FOUND),
-        (format!("{base}/lyrics?q=a"), StatusCode::UNPROCESSABLE_ENTITY),
+        (format!("{base}/lyrics?q=a&sort=title"), StatusCode::UNPROCESSABLE_ENTITY),
+        (format!("{base}/lyrics?q=a&order=desc"), StatusCode::UNPROCESSABLE_ENTITY),
+        (format!("{base}/lyrics?q=a&cursor={tracks}"), StatusCode::UNPROCESSABLE_ENTITY),
         (format!("{base}/tracks"), StatusCode::UNPROCESSABLE_ENTITY),
         (format!("{base}/tracks?q="), StatusCode::UNPROCESSABLE_ENTITY),
         (format!("{base}/tracks?q=a&limit=0"), StatusCode::UNPROCESSABLE_ENTITY),

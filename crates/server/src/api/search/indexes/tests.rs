@@ -361,14 +361,6 @@ async fn a_lyric_written_rebuilds_only_the_lyric_index_and_a_rename_only_the_nam
     assert!(Arc::ptr_eq(&lyrics_after, &lyrics_renamed), "the lyric index kept");
 }
 
-#[test]
-fn lyrics_are_lines_in_either_form() {
-    let synced = |text: &str| SyncedLine { start_ms: 0, text: text.to_owned() };
-    assert_eq!(lyric_lines(None, Some(vec![synced("one"), synced("")])), ["one", ""]);
-    assert_eq!(lyric_lines(Some("one\n\ntwo".to_owned()), None), ["one", "", "two"]);
-    assert!(lyric_lines(None, None).is_empty());
-}
-
 /// Library 1's tags matching `q` in a newly built index, as each section's type and IDs.
 async fn tags_found(db: &Arc<Database>, q: &str) -> Vec<(Option<String>, Vec<i64>)> {
     let index = Indexes::default().index(db, 1).await.unwrap();

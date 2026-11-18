@@ -21,7 +21,7 @@ Built, and described where it is built: matching and ranking in `crates/core/src
 
 ## 2. Lyrics
 
-**A lyric match is a track, found by one of its lines that holds every word of the query, shown with that line** ([`requirements/search.md` §1](../requirements/search.md#1-what-is-searched), [§4](../requirements/search.md#4-results)). Not built yet; this section answers Stage 8's open question 3, with the decisions §3 records.
+**A lyric match is a track, found by one of its lines that holds every word of the query, shown with that line** ([`requirements/search.md` §1](../requirements/search.md#1-what-is-searched), [§4](../requirements/search.md#4-results)). This section answers Stage 8's open question 3, with the decisions §3 records; the core matches and ranks (`crates/core/src/search/lyric_query.rs`), and the server's `lyrics` section shows the matches (`crates/server/src/api/search/lyrics.rs`).
 
 ### 2.1 What is indexed
 
@@ -32,6 +32,7 @@ Built, and described where it is built: matching and ranking in `crates/core/src
 ### 2.2 Matching
 
 - **Every word of the query matches a word of one line**, in any order, as a name's words must: exactly, as a prefix (the query's last word, as it is being typed), or with the typos a word of its length allows, first letter right. A leading article in a query of more than one word may go unmatched, as for names.
+- **A query of fewer than three characters searches no lyrics**, its words' characters counted: a first letter or two are in about half of a large library's lines, which costs the most to rank (§2.3) and says the least, so the section is left out until a third is typed.
 - **One line, not a span of lines.** A remembered phrase that crosses a line break is the case this misses; matching across two adjacent lines would catch it at the cost of more candidates to check for every query and a larger index. One line, and the second only if it is missed in use.
 
 ### 2.3 Ranking
@@ -39,6 +40,8 @@ Built, and described where it is built: matching and ranking in `crates/core/src
 - **Within the section, a track by its best line**, lines ranked in two steps, since the index knows which words a line has but not their order (§2.5):
   1. **Every line that matches, by what the index knows**: fewer typos, the query's leading article matched, fewer words matched only as a prefix, fewer words in the line beyond those matched (a shorter line is the likelier one meant), then the track's ID and the line's place.
   2. **The best 200 tracks of those, their lyrics read back from where they are stored, with the tracks that have a line holding the query's words in order and together first** (the phrase remembered), each by its best such line, which may not be the one step 1 chose, ranked as step 1 ranks lines; the rest keep their order after them. A leading article that may go unmatched is not part of the phrase. A query of one word, which every matching line holds in order, reads nothing back.
+
+  The server keeps the last few searches' step 1 matches, everything they found, while the index they were matched in stands, and narrows them to what each caller's search keeps: a page after the first, the Lyrics tab, or the same words again match no line again. Step 2 runs for each, on what the caller keeps.
 
   A device does the same over its own stored lyrics, so the two rank alike. A phrase only past the first 200 tracks is not lifted; in practice the lines that hold a phrase are among the shortest and least mistyped, so step 1 already keeps them near the top. At the heavy case, step 1 takes 0.2 ms for a rare word and 30–50 ms on an M5 for the commonest words and first letters, which hold up to half the lines; step 2 takes 6 ms more, given the lyrics read.
 - **Among the sections, a lyric section never outranks a name matched exactly** ([`requirements/search.md` §4](../requirements/search.md#4-results)): it sorts as if its best match were never exact, so a section whose best is an exact name comes first, and against inexact names it is compared as they are. So searching a title shows the song's name before its chorus, and searching a line no title holds puts lyrics first.
