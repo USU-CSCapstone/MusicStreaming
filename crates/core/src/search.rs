@@ -31,6 +31,7 @@ mod build;
 mod distance;
 #[cfg(test)]
 mod full_scale;
+mod lyric_query;
 mod lyrics;
 mod near;
 mod query;
@@ -41,6 +42,7 @@ mod union;
 mod words;
 
 pub use build::{Finishing, IndexBuilder};
+pub use lyric_query::LyricHit;
 pub use lyrics::{LyricIndex, plain_lines};
 pub use rank::Rank;
 pub use union::Union;
