@@ -10,10 +10,11 @@
 //! only as a prefix, then fewer words in the line beyond those matched; a track by its best line,
 //! the earliest of equals; and tracks by their best lines, then by ID. That is the first of the
 //! two steps that rank lyrics: the index knows which words a line has but not their order, so the
-//! lines that hold the query as a phrase are lifted afterwards, from their text.
+//! tracks with a line that holds the query as a phrase are lifted afterwards, from their text
+//! ([`lift_phrases`]).
 
-use super::lyrics::LyricIndex;
-use super::query::{MAX_QUERY_WORDS, Quality, leading_article, matching_words};
+use super::lyrics::{LyricIndex, is_label};
+use super::query::{MAX_QUERY_WORDS, Quality, leading_article, matching_words, word_quality};
 use super::words;
 use crate::fold::ARTICLES;
 
@@ -26,6 +27,22 @@ pub(super) struct LyricScore {
     pub(super) prefixes: u32,
     /// Words in the line beyond those the query matched.
     pub(super) extra_words: u32,
+}
+
+impl LyricScore {
+    /// The score of a line of `length` words, up to 255, that the query's words matched by
+    /// `qualities`, its leading article among them unless `skipped`.
+    fn of(qualities: &[Quality], skipped: bool, length: u8) -> LyricScore {
+        let (typos, prefixes) = qualities.iter().fold((0, 0), |(typos, prefixes), &q| {
+            (typos + u32::from((q - 1) / 2), prefixes + u32::from((q - 1) % 2))
+        });
+        LyricScore {
+            typos,
+            skipped,
+            prefixes,
+            extra_words: u32::from(length).saturating_sub(qualities.len() as u32),
+        }
+    }
 }
 
 /// A track a search of its lyrics found, by its best line. Hits order as the section does.
@@ -91,15 +108,8 @@ impl LyricIndex {
             if !keep(track) {
                 continue;
             }
-            let (typos, prefixes) = qualities.iter().fold((0, 0), |(typos, prefixes), &q| {
-                (typos + u32::from((q - 1) / 2), prefixes + u32::from((q - 1) % 2))
-            });
-            let score = LyricScore {
-                typos,
-                skipped: optional > 0 && article.is_none(),
-                prefixes,
-                extra_words: u32::from(self.length(line)).saturating_sub(qualities.len() as u32),
-            };
+            let skipped = optional > 0 && article.is_none();
+            let score = LyricScore::of(&qualities, skipped, self.length(line));
             let hit = LyricHit { score, track, line: at };
             // Lines come in track order, so a track's lines come together.
             match hits.last_mut() {
@@ -158,6 +168,89 @@ fn quality_from(lines: &[(u32, Quality)], cursor: &mut usize, line: u32) -> Opti
     }
     *cursor += rest[..(step + 1).min(rest.len())].partition_point(|&(l, _)| l < line);
     lines.get(*cursor).filter(|&&(l, _)| l == line).map(|&(_, quality)| quality)
+}
+
+/// How many of the best tracks step two reads back to lift those that hold the query as a phrase.
+pub const PHRASE_TRACKS: usize = 200;
+
+/// Step two of ranking lyrics (`design/search.md` §2.3): of the first [`PHRASE_TRACKS`] of `hits`,
+/// in the order [`LyricIndex::search`] gave them for `query`, the tracks with a line that holds
+/// the query's words in order and together come first, each by its best such line, which may not
+/// be the line step one chose, ranked as step one ranks lines; the rest keep their order after
+/// them. A leading article that may go unmatched is not part of the phrase, though matching it
+/// anywhere in the line still counts.
+///
+/// `lyrics` gives a track's lines as they were given to the index, so places agree. It is asked
+/// only when the query has two words or more to put in order, once for each track considered; a
+/// track it gives none for is not lifted.
+pub fn lift_phrases<S: AsRef<str>>(
+    query: &str,
+    hits: &mut [LyricHit],
+    mut lyrics: impl FnMut(i64) -> Option<Vec<S>>,
+) {
+    let mut query_words = words(query);
+    query_words.truncate(MAX_QUERY_WORDS);
+    let optional = leading_article(&query_words, |word| ARTICLES.contains(&word.as_str()));
+    if query_words.len() - optional < 2 {
+        return;
+    }
+    let last = query_words.len() - 1;
+    // Each query word, its characters, and whether it is the one being typed.
+    let phrase: Vec<(&str, Vec<char>, bool)> = query_words
+        .iter()
+        .enumerate()
+        .map(|(i, word)| (word.as_str(), word.chars().collect(), i == last))
+        .collect();
+
+    let considered = hits.len().min(PHRASE_TRACKS);
+    let mut lifted: Vec<LyricHit> = Vec::new();
+    let mut rest: Vec<LyricHit> = Vec::new();
+    for hit in &hits[..considered] {
+        let found = lyrics(hit.track).and_then(|lines| {
+            let lines = lines.iter().take(usize::from(u16::MAX) + 1).map(AsRef::as_ref);
+            (0..)
+                .zip(lines)
+                .filter(|(_, line)| !is_label(line))
+                .filter_map(|(at, line)| {
+                    let score = phrase_score(&phrase, optional, &words(line))?;
+                    Some(LyricHit { score, track: hit.track, line: at })
+                })
+                .min()
+        });
+        match found {
+            Some(lifted_hit) => lifted.push(lifted_hit),
+            None => rest.push(hit.clone()),
+        }
+    }
+    lifted.sort_unstable();
+    for (slot, hit) in hits.iter_mut().zip(lifted.into_iter().chain(rest)) {
+        *slot = hit;
+    }
+}
+
+/// The score of a line of `line` words if they hold the words of `phrase` after its first
+/// `optional`, an article, in order and together: the best such run, with the article matched if
+/// any of the line's words is it.
+fn phrase_score(
+    phrase: &[(&str, Vec<char>, bool)],
+    optional: usize,
+    line: &[String],
+) -> Option<LyricScore> {
+    let (article, required) = phrase.split_at(optional);
+    let matches = |(query, chars, typing): &(&str, Vec<char>, bool), word: &str| {
+        word_quality(query, chars, word).filter(|&quality| *typing || (quality - 1) % 2 == 0)
+    };
+    let mut qualities: Vec<Quality> = line
+        .windows(required.len())
+        .filter_map(|run| {
+            required.iter().zip(run).map(|(query, word)| matches(query, word)).collect()
+        })
+        .min_by_key(|qualities: &Vec<Quality>| LyricScore::of(qualities, false, 0))?;
+    let article =
+        article.first().and_then(|query| line.iter().filter_map(|word| matches(query, word)).min());
+    qualities.extend(article);
+    let length = u8::try_from(line.len()).unwrap_or(u8::MAX);
+    Some(LyricScore::of(&qualities, optional > 0 && article.is_none(), length))
 }
 
 #[cfg(test)]
@@ -255,5 +348,104 @@ mod tests {
         assert!(index.search("", |_| true).is_empty());
         assert!(index.search("?!", |_| true).is_empty());
         assert!(LyricIndex::default().search("so", |_| true).is_empty());
+    }
+
+    /// The tracks found for `query`, with their lines' places, after step two, `tracks` being
+    /// what the index was built of.
+    fn lifted(tracks: &[(i64, Vec<&str>)], query: &str) -> Vec<(i64, u16)> {
+        let index = LyricIndex::build(tracks.iter().cloned());
+        let mut hits = index.search(query, |_| true);
+        lift_phrases(query, &mut hits, |track| {
+            tracks.iter().find(|(id, _)| *id == track).map(|(_, lines)| lines.clone())
+        });
+        hits.iter().map(|hit| (hit.track, hit.line)).collect()
+    }
+
+    #[test]
+    fn a_line_holding_the_query_in_order_and_together_comes_first() {
+        let tracks = [
+            (1, vec!["side the other"]),
+            (2, vec!["hello from the other side"]),
+            (3, vec!["other people side"]),
+        ];
+        // Step one ranks the shortest lines first; step two lifts the only phrase.
+        assert_eq!(
+            find(&LyricIndex::build(tracks.clone()), "other side"),
+            [(1, 0), (3, 0), (2, 0)]
+        );
+        assert_eq!(lifted(&tracks, "other side"), [(2, 0), (1, 0), (3, 0)]);
+    }
+
+    #[test]
+    fn lifted_tracks_rank_as_lines_do_and_the_rest_keep_their_order() {
+        let tracks = [
+            (1, vec!["side other"]),
+            (2, vec!["say it the other side of the world"]),
+            (3, vec!["the other side"]),
+            (4, vec!["side to other"]),
+        ];
+        assert_eq!(lifted(&tracks, "other side"), [(3, 0), (2, 0), (1, 0), (4, 0)]);
+    }
+
+    #[test]
+    fn a_track_is_lifted_by_its_phrase_line_though_another_ranked_first() {
+        let tracks = [(1, vec!["side other", "[Chorus]", "", "on the other side of town"])];
+        assert_eq!(lifted(&tracks, "other side"), [(1, 3)], "places as the lyrics were given");
+    }
+
+    #[test]
+    fn a_phrase_forgives_typos_and_the_word_being_typed() {
+        let tracks = [(1, vec!["side other"]), (2, vec!["from the other side now"])];
+        assert_eq!(lifted(&tracks, "othr sid"), [(2, 0), (1, 0)]);
+        // An earlier word is whole, in the phrase as in the line.
+        assert_eq!(lifted(&tracks, "oth side"), []);
+    }
+
+    #[test]
+    fn a_leading_article_is_not_part_of_the_phrase() {
+        let tracks = [(1, vec!["side the other"]), (2, vec!["other side now"])];
+        // Track 1 has the article, which step one ranks first; only track 2 has the phrase.
+        assert_eq!(find(&LyricIndex::build(tracks.clone()), "the other side"), [(1, 0), (2, 0)]);
+        assert_eq!(lifted(&tracks, "the other side"), [(2, 0), (1, 0)]);
+    }
+
+    #[test]
+    fn only_the_first_tracks_are_read_back() {
+        let last = i64::try_from(PHRASE_TRACKS).unwrap();
+        let mut tracks: Vec<(i64, Vec<&str>)> =
+            (1..last).map(|id| (id, vec!["side other"])).collect();
+        tracks.push((last, vec!["other side now"]));
+        assert_eq!(lifted(&tracks, "other side")[0], (last, 0));
+        tracks.insert(0, (0, vec!["side other"]));
+        assert_eq!(
+            lifted(&tracks, "other side").last(),
+            Some(&(last, 0)),
+            "past the first {PHRASE_TRACKS}, not lifted"
+        );
+    }
+
+    #[test]
+    fn lyrics_are_read_only_for_a_phrase_and_only_what_they_give_is_lifted() {
+        let index = songs();
+        let mut hits = index.search("ain't", |_| true);
+        let before = hits.clone();
+        lift_phrases("ain't", &mut hits, |_| -> Option<Vec<&str>> { panic!("one word") });
+        lift_phrases("the ain't", &mut hits, |_| -> Option<Vec<&str>> { panic!("an article") });
+        lift_phrases("say ain't", &mut hits, |_| None::<Vec<&str>>);
+        assert_eq!(hits, before);
+    }
+
+    #[test]
+    fn a_word_read_back_matches_as_it_would_be_looked_up() {
+        let vocabulary: Vec<String> =
+            ["other", "others", "otter", "side", "sigh", "thousand"].map(str::to_owned).into();
+        for query in ["other", "othr", "oth", "o", "sid", "side", "thousnad", "thousan", "x"] {
+            let chars: Vec<char> = query.chars().collect();
+            let read: Vec<(u32, Quality)> = (0..)
+                .zip(&vocabulary)
+                .filter_map(|(w, word)| Some((w, word_quality(query, &chars, word)?)))
+                .collect();
+            assert_eq!(read, matching_words(vocabulary.as_slice(), query), "{query}");
+        }
     }
 }
