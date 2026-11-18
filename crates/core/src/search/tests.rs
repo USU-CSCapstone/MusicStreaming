@@ -578,3 +578,79 @@ fn a_union_of_one_is_that_index() {
     );
     assert!(Union(&[]).search_within("rock", &Kind::ALL, 5, |_, _| true).is_empty());
 }
+
+/// What a search for `query` nearly finds, of every kind, as kind and ID.
+fn near(index: &Index, query: &str) -> Vec<(Kind, i64)> {
+    assert!(index.search(query, &Kind::ALL, 10).is_empty(), "{query} found something");
+    index.near_misses(query, &Kind::ALL, 3, |_, _| true)
+}
+
+#[test]
+fn a_near_miss_may_have_a_wrong_first_letter() {
+    let index = library();
+    // Taylor Swift, both words matched, before Swiftly, which leaves `baylor` unmatched.
+    assert_eq!(near(&index, "baylor swift"), [(Kind::Artist, 1), (Kind::Track, 26)]);
+}
+
+#[test]
+fn a_near_miss_may_have_a_typo_more() {
+    let index = library();
+    // Two typos in six letters: a transposed pair and a letter too many.
+    assert_eq!(near(&index, "swfiit")[0], (Kind::Artist, 1));
+}
+
+#[test]
+fn a_near_miss_may_leave_one_word_unmatched() {
+    let index = library();
+    assert_eq!(near(&index, "taylor swift live")[0], (Kind::Artist, 1));
+    assert_eq!(near(&index, "the beatles live")[0], (Kind::Artist, 3));
+    // A query of one word has no word to spare.
+    assert_eq!(near(&index, "qqqqqq"), []);
+}
+
+#[test]
+fn a_short_word_is_never_matched_more_loosely() {
+    let index = library();
+    // One letter, or two, would otherwise nearly find every name.
+    assert_eq!(near(&index, "zz"), []);
+    assert_eq!(near(&index, "x"), []);
+}
+
+#[test]
+fn near_misses_of_the_same_name_are_one() {
+    let index = library();
+    // The track and the album called Blue fold alike, so only the track, the more specific, is
+    // offered, then the album with Blue in its name.
+    assert_eq!(near(&index, "bkuee"), [(Kind::Track, 21), (Kind::Album, 10)]);
+}
+
+#[test]
+fn near_misses_keep_to_what_a_search_keeps_and_to_how_many() {
+    let index = library();
+    let keep = |kind: Kind, id: i64| !(kind == Kind::Artist && id == 1);
+    assert_eq!(index.near_misses("baylor swift", &Kind::ALL, 3, keep), [(Kind::Track, 26)]);
+    assert_eq!(
+        index.near_misses("baylor swift", &[Kind::Track], 3, |_, _| true),
+        [(Kind::Track, 26)]
+    );
+    assert_eq!(index.near_misses("baylor swift", &Kind::ALL, 1, |_, _| true), [(Kind::Artist, 1)]);
+    assert!(index.near_misses("", &Kind::ALL, 3, |_, _| true).is_empty());
+}
+
+#[test]
+fn indexes_searched_as_one_nearly_find_what_one_index_of_them_all_would() {
+    let documents = corpus();
+    let whole = Index::build(documents.clone());
+    let (one, other): (Vec<_>, Vec<_>) = documents.into_iter().partition(|doc| doc.id % 3 == 0);
+    let (one, other) = (Index::build(one), Index::build(other));
+    let union = Union(&[&one, &other]);
+    for query in ["rokc lov", "nigth", "sogn blue zzz", "blux", "tje rockett"] {
+        for n in [1, 3, 10] {
+            assert_eq!(
+                union.near_misses(query, &Kind::ALL, n, |_, _| true),
+                whole.near_misses(query, &Kind::ALL, n, |_, _| true),
+                "{query} {n}"
+            );
+        }
+    }
+}

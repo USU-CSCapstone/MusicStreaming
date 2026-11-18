@@ -9,23 +9,33 @@ use super::{Index, Kind, Rank, Section, SectionPage, words};
 use crate::fold::ARTICLES;
 
 /// Words longer than this are matched exactly or as a prefix only, which bounds the typo check.
-const MAX_FUZZY_CHARS: usize = 32;
+pub(super) const MAX_FUZZY_CHARS: usize = 32;
 
 /// Query words beyond this are ignored.
-const MAX_QUERY_WORDS: usize = 12;
+pub(super) const MAX_QUERY_WORDS: usize = 12;
 
 /// How well one query word matched one document: lower is better, 0 is no match.
-type Quality = u8;
+pub(super) type Quality = u8;
 
 /// The quality of a match with `typos` typos, to a prefix of the word rather than all of it if
 /// `prefix`. `Index::score` reads both back out of it.
-fn quality(typos: u8, prefix: bool) -> Quality {
+pub(super) fn quality(typos: u8, prefix: bool) -> Quality {
     1 + typos * 2 + u8::from(prefix)
+}
+
+/// The typos a query word of `chars` characters may have and still match: none up to 3, one up to
+/// 7, and two from 8.
+pub(super) fn typos_allowed(chars: usize) -> u8 {
+    match chars {
+        0..=3 => 0,
+        4..=7 => 1,
+        _ => 2,
+    }
 }
 
 /// How many of `words` lead as an optional article: 1 when the first is an article and others
 /// follow it, else 0.
-fn leading_article<T>(words: &[T], is_article: impl Fn(&T) -> bool) -> usize {
+pub(super) fn leading_article<T>(words: &[T], is_article: impl Fn(&T) -> bool) -> usize {
     usize::from(words.len() > 1 && is_article(&words[0]))
 }
 
@@ -213,7 +223,7 @@ impl Index {
     }
 
     /// The group with index `group`, if it is one: 0 is none.
-    fn group(&self, group: u32) -> Option<String> {
+    pub(super) fn group(&self, group: u32) -> Option<String> {
         (group > 0).then(|| self.groups[group as usize].clone())
     }
 
@@ -223,7 +233,7 @@ impl Index {
     }
 
     /// The words of document `d`, folded, in name order.
-    fn doc_words(&self, d: u32) -> impl Iterator<Item = &str> {
+    pub(super) fn doc_words(&self, d: u32) -> impl Iterator<Item = &str> {
         self.document_words(d as usize).iter().map(|&w| self.word(w as usize))
     }
 
@@ -342,13 +352,9 @@ impl Index {
     }
 
     /// The vocabulary words that `word` matches, and how well.
-    fn matching_words(&self, word: &str) -> Vec<(u32, Quality)> {
+    pub(super) fn matching_words(&self, word: &str) -> Vec<(u32, Quality)> {
         let chars: Vec<char> = word.chars().collect();
-        let max_typos = match chars.len() {
-            0..=3 => 0,
-            4..=7 => 1,
-            _ => 2,
-        };
+        let max_typos = typos_allowed(chars.len());
         let mut found = Vec::new();
         if max_typos == 0 || chars.len() > MAX_FUZZY_CHARS {
             // Exact and prefix matches are one contiguous run of the sorted vocabulary.
