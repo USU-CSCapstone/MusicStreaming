@@ -890,6 +890,11 @@ export interface paths {
          *     until they are built, so no playlists section comes back. A track the caller hid is not
          *     found, nor counted in its section's `total`, and nor is an album or artist every track of
          *     which they hid (`requirements/conventions.md` §8).
+         *
+         *     Search is not filtered by year or listening data, and the shipped apps do not filter it by
+         *     tag either: they find tags by name, and narrow to one by searching within it
+         *     (`requirements/search.md` §5). `tagAll` and `tagAny` stay for clients that narrow a
+         *     search by tag all the same, and for a search's queue recipe.
          */
         get: operations["search"];
         put?: never;
@@ -5037,18 +5042,6 @@ export interface operations {
                  *     nothing, as `artistId` does.
                  */
                 tagAny?: components["parameters"]["TagAny"];
-                /** @description Planned. */
-                yearFrom?: components["parameters"]["YearFrom"];
-                /** @description Planned. */
-                yearTo?: components["parameters"]["YearTo"];
-                /** @description Filter by whether the caller has ever played the item. Planned. */
-                played?: components["parameters"]["Played"];
-                /** @description Last played before this time — "not played since". Planned. */
-                lastPlayedBefore?: components["parameters"]["LastPlayedBefore"];
-                /** @description Planned. */
-                lastPlayedAfter?: components["parameters"]["LastPlayedAfter"];
-                /** @description Planned. */
-                minPlayCount?: components["parameters"]["MinPlayCount"];
                 /** @description Results shown per section before expanding. */
                 sectionLimit?: number;
             };
