@@ -75,11 +75,10 @@ describe('recipes with a tag filter', () => {
 			filters: { tagAll: ['30', '32'], tagAny: ['61'] },
 			...sort
 		});
-		expect(searchRecipe('sig', filter)).toEqual({
-			type: 'search',
-			q: 'sig',
-			filters: { tagAll: ['30', '32'], tagAny: ['61'] }
-		});
+	});
+
+	it('name a search by its words, in its ranking', () => {
+		expect(searchRecipe('sig')).toEqual({ type: 'search', q: 'sig' });
 	});
 
 	it('name a playlist, with sort and order together and its filter, or its own order', () => {
@@ -96,7 +95,6 @@ describe('recipes with a tag filter', () => {
 
 	it('leave out an empty filter, except a library recipe, which always has its filters', () => {
 		expect(albumRecipe('1', undefined, none)).not.toHaveProperty('filters');
-		expect(searchRecipe('sig', none)).toEqual({ type: 'search', q: 'sig' });
 		expect(libraryRecipe({ sort: 'name', order: 'asc' }, none)).toHaveProperty('filters', {});
 	});
 });
