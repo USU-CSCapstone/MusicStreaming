@@ -372,9 +372,10 @@ END;
 
 -- ───────────────────────────── Library totals ─────────────────────────────
 
--- A library's names_version counts the changes to what search indexes: a track, album or artist
--- added or deleted (tracks_added, tracks_removed, and the album and artist triggers below), or
--- renamed.
+-- A library's names_version counts the changes to what search indexes: a track, album, artist or
+-- tag added or deleted (tracks_added, tracks_removed, and the album, artist and tag triggers
+-- below), or renamed, and a tag's track count, which ranks equally good tags. An album or artist
+-- count of a tag searches nothing.
 CREATE TRIGGER tracks_renamed AFTER UPDATE OF title ON tracks WHEN NEW.title IS NOT OLD.title
 BEGIN
     UPDATE libraries SET names_version = names_version + 1 WHERE id = NEW.library_id;
@@ -412,4 +413,25 @@ CREATE TRIGGER artists_removed AFTER DELETE ON artists
 BEGIN
     UPDATE libraries SET artist_count = artist_count - 1, names_version = names_version + 1
     WHERE id = OLD.library_id;
+END;
+
+CREATE TRIGGER tags_added AFTER INSERT ON tags
+BEGIN
+    UPDATE libraries SET names_version = names_version + 1 WHERE id = NEW.library_id;
+END;
+
+CREATE TRIGGER tags_removed AFTER DELETE ON tags
+BEGIN
+    UPDATE libraries SET names_version = names_version + 1 WHERE id = OLD.library_id;
+END;
+
+CREATE TRIGGER tags_renamed AFTER UPDATE OF name ON tags WHEN NEW.name IS NOT OLD.name
+BEGIN
+    UPDATE libraries SET names_version = names_version + 1 WHERE id = NEW.library_id;
+END;
+
+CREATE TRIGGER tags_recounted AFTER UPDATE OF track_count ON tags
+    WHEN NEW.track_count IS NOT OLD.track_count
+BEGIN
+    UPDATE libraries SET names_version = names_version + 1 WHERE id = NEW.library_id;
 END;
