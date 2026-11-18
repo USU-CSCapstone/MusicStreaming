@@ -22,7 +22,7 @@
 	import { searchRecipe, type PlayFrom } from '$lib/queue';
 	import { SEARCH_TABS, tabHref } from '$lib/search-tabs';
 	import { currentSort, showSorted } from '$lib/sort-url';
-	import { FIELDS } from '$lib/sorting';
+	import { FIELDS, serverSort } from '$lib/sorting';
 	import { sortTracks } from '$lib/track-sort';
 	import ViewToggle from '$lib/components/ViewToggle.svelte';
 
@@ -82,8 +82,7 @@
 	});
 
 	// The songs the search finds, in its ranking, which the server resolves to the end. Unsorted,
-	// the songs shown are the first of them; sorted, they play as shown. The top result, a track,
-	// always plays first of them.
+	// the songs shown are the first of them. The top result, a track, always plays first of them.
 	const ranked = $derived<PlayFrom | undefined>(
 		data.q
 			? {
@@ -92,11 +91,18 @@
 				}
 			: undefined
 	);
-	const from = $derived(sort ? undefined : ranked);
+	// Sorted, the Songs tab shows the first of every song found in the server's sort, which a
+	// sorted recipe resolves to the end; All sorts only the few it shows, which play as shown.
+	const from = $derived.by((): PlayFrom | undefined => {
+		const server = serverSort(sort);
+		if (!ranked || !sort) return ranked;
+		if (!paged || !server) return undefined;
+		return { recipe: searchRecipe(data.q, server), total: ranked.total };
+	});
 	const context = $derived<PlayContext>({ type: 'search', query: data.q ?? '', section: 'tracks' });
 
-	// All the songs the search finds, in its ranking, which only queues. Sorted, there is no
-	// recipe for the order shown, and the rows queue one by one.
+	// All the songs the search finds, in the order shown, which only queues. Sorted on All, there
+	// is no recipe for the order shown, and the rows queue one by one.
 	const everySong = $derived(from ? view('all songs found', from.total, from.recipe) : null);
 
 	// A search is kept once it settles (`$lib/recent`): the user opens or plays one of its

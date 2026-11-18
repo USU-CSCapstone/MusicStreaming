@@ -77,8 +77,15 @@ describe('recipes with a tag filter', () => {
 		});
 	});
 
-	it('name a search by its words, in its ranking', () => {
+	it('name a search by its words, in its ranking or a sort', () => {
 		expect(searchRecipe('sig')).toEqual({ type: 'search', q: 'sig' });
+		expect(searchRecipe('sig', null)).toEqual({ type: 'search', q: 'sig' });
+		expect(searchRecipe('sig', { sort: 'name', order: 'desc' })).toEqual({
+			type: 'search',
+			q: 'sig',
+			sort: 'name',
+			order: 'desc'
+		});
 	});
 
 	it('name a playlist, with sort and order together and its filter, or its own order', () => {
