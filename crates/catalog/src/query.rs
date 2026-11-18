@@ -167,6 +167,7 @@ struct NoParams {}
 struct SearchParams {
     q: String,
     types: Option<String>,
+    tag_type: Option<String>,
     tag_all: Option<String>,
     tag_any: Option<String>,
     section_limit: Option<usize>,
@@ -178,6 +179,7 @@ struct SearchParams {
 struct SectionParams {
     section: String,
     q: String,
+    tag_type: Option<String>,
     sort: Option<String>,
     order: Option<Order>,
     cursor: Option<String>,
@@ -310,6 +312,7 @@ pub fn answer(
             let keep = search::Keep::new(&hid, tagged.as_ref());
             let found =
                 built(index)?.search_within(&p.q, &kinds, limit, |kind, id| keep.keeps(kind, id));
+            let found = search::of_tag_type(found, p.tag_type.as_deref());
             json(search::response(conn, user, library, p.q, found, &hid)?)
         }
         "searchSection" => {
@@ -328,6 +331,13 @@ pub fn answer(
                 }
                 None => return Err(Error(format!("no section {}", p.section))),
             };
+            // Each type of tag is a section of its own, so the tags section is one type.
+            let group = match kind {
+                Kind::Tag => {
+                    Some(p.tag_type.ok_or_else(|| Error("tags need a tagType".to_owned()))?)
+                }
+                _ => None,
+            };
             let reading =
                 search::SectionReading::new(kind, p.sort.as_deref(), p.order, p.cursor, p.limit)?;
             let filter = TagFilter::new(p.tag_all.as_deref(), p.tag_any.as_deref())?;
@@ -339,7 +349,8 @@ pub fn answer(
             let hid = search::Hid::read(conn, user, library, &filter)?;
             let keep = search::Keep::new(&hid, tagged.as_ref());
             let search = search::Search { user, library, q: p.q, keep };
-            json(search::section(conn, search, kind, reading, built(index)?)?)
+            let group = group.as_deref();
+            json(search::section(conn, search, kind, group, reading, built(index)?)?)
         }
         "listHiddenTracks" => {
             let p: HiddenParams = serde_json::from_str(params)?;

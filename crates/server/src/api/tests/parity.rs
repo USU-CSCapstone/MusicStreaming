@@ -238,8 +238,14 @@ fn searches() -> Vec<Value> {
         "untitled",
         "zzz",
         "idioteque",
+        "rock",
+        "calm",
     ] {
         searches.push(json!({ "q": q, "sectionLimit": 5 }));
+    }
+    // A type of tag alone, of the tags sections.
+    for tag_type in ["genre", "mood", "era"] {
+        searches.push(json!({ "q": "rock", "tagType": tag_type, "sectionLimit": 5 }));
     }
     for q in ["a", "e"] {
         for types in ["tracks", "albums,artists", "playlists", "artists,tracks"] {
@@ -654,6 +660,9 @@ async fn every_list_sort_and_filter_and_every_get_give_identical_json_on_the_ser
     let cursor = albums["nextCursor"].as_str().unwrap().to_owned();
     for params in [
         json!({ "section": "albums", "q": "a", "tagAll": "30" }),
+        json!({ "section": "tags", "q": "rock", "tagType": "genre" }),
+        json!({ "section": "tags", "q": "calm", "tagType": "genre" }),
+        json!({ "section": "tags", "q": "rock" }),
         json!({ "section": "playlists", "q": "a" }),
         json!({ "section": "lyrics", "q": "a" }),
         json!({ "section": "songs", "q": "a" }),

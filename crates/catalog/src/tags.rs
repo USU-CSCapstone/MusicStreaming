@@ -21,7 +21,7 @@ pub struct TagType {
 }
 
 /// The spec's `Tag`.
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Tag {
     id: Id,
@@ -33,13 +33,13 @@ pub struct Tag {
 }
 
 /// The columns [`tag`] reads, in order.
-const SELECT: &[&str] =
+pub(crate) const SELECT: &[&str] =
     &["g.id", "g.type", "g.name", "g.track_count", "g.album_count", "g.artist_count"];
 
 impl Tag {
     /// The tag as the user who hid what `losses` counts sees it: its counts of what is left
     /// (`requirements/conventions.md` §8).
-    fn lose(&mut self, losses: &Losses) {
+    pub(crate) fn lose(&mut self, losses: &Losses) {
         let Some(loss) = losses.tags.get(&self.id.0) else { return };
         self.track_count -= loss.tracks;
         self.album_count -= loss.albums;
@@ -48,7 +48,7 @@ impl Tag {
 }
 
 /// A tag from a row of [`SELECT`].
-fn tag(row: &Row) -> rusqlite::Result<Tag> {
+pub(crate) fn tag(row: &Row) -> rusqlite::Result<Tag> {
     Ok(Tag {
         id: Id(row.get(0)?),
         r#type: row.get(1)?,
