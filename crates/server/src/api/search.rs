@@ -1,7 +1,10 @@
-//! Search: `search` and `searchSection` (`api/openapi.yaml`), over the core's index
-//! (`jewelcase_core::Index`), which each library keeps in memory (`indexes`).
+//! Search: `search` and `searchSection` (`api/openapi.yaml`), over the core's indexes of names
+//! (`jewelcase_core::Index`) and lyrics (`jewelcase_core::LyricIndex`, the section `lyrics`
+//! shows), which each library keeps in memory (`indexes`). Names are the catalog's to search, as a
+//! device does; lyrics are the server's alone (`design/search.md` §2.6).
 
 mod indexes;
+mod lyrics;
 mod tagged;
 mod within;
 
@@ -9,13 +12,16 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
-use jewelcase_catalog::page::Order;
+use jewelcase_catalog::cursor;
+use jewelcase_catalog::page::{self, Order};
 use jewelcase_catalog::search::{
-    self, Hid, Keep, MUSIC, SEARCHED, Search, SearchResponse, SectionPage, SectionReading,
+    self, Hid, Keep, Lyrics, MUSIC, SEARCHED, Search, SearchResponse, SectionPage, SectionReading,
     SectionType, kinds, response, section_limit,
 };
 use jewelcase_catalog::within::Within;
-use jewelcase_core::{Index, Kind, Union};
+use jewelcase_core::{Index, Kind, LyricHit, Union};
+use lyrics::Ranked;
+use rusqlite::types::Value;
 use serde::Deserialize;
 
 pub use indexes::Indexes;
@@ -51,11 +57,19 @@ pub async fn search(
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<SearchResponse>, Problem> {
     let limit = section_limit(&query.q, query.section_limit)?;
-    let kinds = query.types.as_deref().map_or_else(|| Ok(SEARCHED.to_vec()), kinds)?;
+    let (kinds, with_lyrics) = match query.types.as_deref() {
+        None => (SEARCHED.to_vec(), true),
+        Some(types) => names_and_lyrics(types)?,
+    };
     let within = container(query.within.as_deref())?;
 
     let filter = TagFilter::new(query.tag_all.as_deref(), query.tag_any.as_deref())?;
-    let tagged = indexes.tagged.get(&db, library, &filter, &kinds).await?;
+    // Lyrics are tracks', so their matches are kept as tracks are.
+    let mut kept = kinds.clone();
+    if with_lyrics && !kept.contains(&Kind::Track) {
+        kept.push(Kind::Track);
+    }
+    let tagged = indexes.tagged.get(&db, library, &filter, &kept).await?;
     let index = indexes.index(&db, library).await?;
     // What the caller hid is gone from their library, so a search finds it nowhere.
     // And the caller's own playlists, which no one else's search finds.
@@ -70,6 +84,14 @@ pub async fn search(
         })
         .await?;
     let held = reached(within, held, &hid)?;
+    let lyrics = if with_lyrics {
+        let keep = Keep::new(&hid, tagged.as_deref(), held.as_deref());
+        let keep = |id| keep.keeps(Kind::Track, id);
+        Some(lyrics::ranked(&db, &indexes, library, &query.q, keep).await?)
+    } else {
+        None
+    };
+    let found_lyrics = lyrics.as_ref().is_some_and(|ranked| !ranked.hits.is_empty());
     // Found nothing, what was nearly found, of what the search could have found, and so as
     // narrowed and without what the caller hid (`requirements/search.md` §8). Matching the whole
     // vocabulary again takes a while, so it runs off the async threads, with the search.
@@ -79,7 +101,10 @@ pub async fn search(
         let keep = Keep::new(&hid, tagged.as_deref(), held.as_deref());
         let found = both.search_within(&q, &kinds, limit, |kind, id| keep.keeps(kind, id));
         let found = search::of_tag_type(found, tag_type.as_deref());
-        let misses = search::misses(&both, &q, &kinds, &found, &keep);
+        let misses = match found_lyrics {
+            true => Vec::new(),
+            false => search::misses(&both, &q, &kinds, &found, &keep),
+        };
         (found, misses, (hid, tagged, held))
     })
     .await
@@ -87,9 +112,17 @@ pub async fn search(
     let tag_type = query.tag_type;
     let response = db
         .read(move |conn| {
+            let lyrics = match lyrics {
+                Some(Ranked { mut hits, .. }) => {
+                    let total = hits.len();
+                    hits.truncate(limit);
+                    Some(Lyrics { matches: lyrics::matches(conn, user, library, &hits)?, total })
+                }
+                None => None,
+            };
             let keep = Keep::new(&hid, tagged.as_deref(), held.as_deref());
             let search = Search { user, library, q: query.q, keep };
-            response(conn, search, found, &misses, tag_type.as_deref())
+            response(conn, search, found, &misses, tag_type.as_deref(), lyrics)
         })
         .await?;
     Ok(Json(response))
@@ -127,7 +160,9 @@ pub async fn section(
     }
     let kind = match SectionType::named(&section).ok_or_else(Problem::not_found)? {
         SectionType::Kind(kind) => kind,
-        SectionType::Lyrics => return Err(Problem::invalid("lyrics cannot be searched yet")),
+        SectionType::Lyrics => {
+            return lyric_section(db, indexes, user, library, query).await.map(Json);
+        }
     };
     let SectionQuery { q, tag_type, within, sort, order, cursor, limit, tag_all, tag_any } = query;
     let within = container(within.as_deref())?;
@@ -160,6 +195,65 @@ pub async fn section(
         })
         .await?;
     page.map(Json).ok_or_else(Problem::not_found)
+}
+
+/// The spec's `searchSection` of `lyrics`: in the section's ranking only, a page continuing after
+/// the last match of the one before. Only the server searches lyrics.
+async fn lyric_section(
+    db: Arc<Database>,
+    indexes: Arc<Indexes>,
+    user: i64,
+    library: i64,
+    query: SectionQuery,
+) -> Result<SectionPage, Problem> {
+    if query.sort.is_some() || query.order.is_some() {
+        return Err(Problem::invalid("this section has no sorts"));
+    }
+    let limit = page::limit(query.limit)?;
+    let label = format!("search.{LYRICS}");
+    let after = query.cursor.as_deref().map(|cursor| lyric_place(cursor, &label)).transpose()?;
+    let within = container(query.within.as_deref())?;
+    let filter = TagFilter::new(query.tag_all.as_deref(), query.tag_any.as_deref())?;
+    let tagged = indexes.tagged.get(&db, library, &filter, &[Kind::Track]).await?;
+    let held = held(&db, &indexes, user, library, within).await?;
+    let hid = db.read(move |conn| Hid::read(conn, user, library, &filter)).await?;
+    let held = reached(within, held, &hid)?;
+    let keep = Keep::new(&hid, tagged.as_deref(), held.as_deref());
+    let keep = |id| keep.keeps(Kind::Track, id);
+    let ranked = lyrics::ranked(&db, &indexes, library, &query.q, keep).await?;
+    let start = after.map_or(0, |place| ranked.after(&place));
+    let end = ranked.hits.len().min(start + limit as usize);
+    let next_cursor = (end < ranked.hits.len()).then(|| {
+        let (rest, hit) = ranked.place(end - 1);
+        cursor::encode(&label, &[Value::Integer(i64::from(rest)), Value::Blob(hit.to_bytes())])
+    });
+    let page = ranked.hits[start..end].to_vec();
+    let matches = db.read(move |conn| lyrics::matches(conn, user, library, &page)).await?;
+    Ok(SectionPage::lyrics(query.q, matches, next_cursor, ranked.hits.len()))
+}
+
+/// The place in the lyrics section a `cursor` continues after. A cursor of another section, or
+/// none of ours, is `422 validation_failed`.
+fn lyric_place(cursor: &str, label: &str) -> Result<lyrics::Place, Problem> {
+    match cursor::decode(cursor, label, 2)?.as_slice() {
+        [Value::Integer(rest @ (0 | 1)), Value::Blob(bytes)] => {
+            LyricHit::from_bytes(bytes).map(|hit| (*rest == 1, hit))
+        }
+        _ => None,
+    }
+    .ok_or_else(|| Problem::invalid("cursor is not valid for this list"))
+}
+
+/// The spec's name for the lyrics section.
+const LYRICS: &str = "lyrics";
+
+/// The kinds of names to search for the comma-separated section `types`, and whether to search
+/// lyrics, which the catalog's [`kinds`] does not, since only the server searches them.
+fn names_and_lyrics(types: &str) -> Result<(Vec<Kind>, bool), Problem> {
+    let names: Vec<&str> = types.split(',').filter(|section| *section != LYRICS).collect();
+    let with_lyrics = names.len() < types.split(',').count();
+    let kinds = if names.is_empty() { Vec::new() } else { kinds(&names.join(","))? };
+    Ok((kinds, with_lyrics))
 }
 
 /// The container `within` names, if any: one that names nothing there could be is `404`, as one

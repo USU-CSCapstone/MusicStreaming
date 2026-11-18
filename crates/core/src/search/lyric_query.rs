@@ -29,6 +29,46 @@ pub(super) struct LyricScore {
     pub(super) extra_words: u32,
 }
 
+impl LyricHit {
+    /// The hit as bytes, for a client to hand back as a cursor.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let LyricScore { typos, skipped, prefixes, extra_words } = self.score;
+        let mut bytes = vec![u8::from(skipped)];
+        for n in [typos, prefixes, extra_words] {
+            bytes.extend(n.to_be_bytes());
+        }
+        bytes.extend(self.track.to_be_bytes());
+        bytes.extend(self.line.to_be_bytes());
+        bytes
+    }
+
+    /// The hit [`LyricHit::to_bytes`] wrote, or `None` for anything else. A hit made up rather
+    /// than read back only chooses where a page starts.
+    pub fn from_bytes(bytes: &[u8]) -> Option<LyricHit> {
+        let (&[skipped], rest) = bytes.split_first_chunk::<1>()?;
+        let skipped = match skipped {
+            0 => false,
+            1 => true,
+            _ => return None,
+        };
+        let (typos, rest) = rest.split_first_chunk::<4>()?;
+        let (prefixes, rest) = rest.split_first_chunk::<4>()?;
+        let (extra_words, rest) = rest.split_first_chunk::<4>()?;
+        let (track, rest) = rest.split_first_chunk::<8>()?;
+        let line: [u8; 2] = rest.try_into().ok()?;
+        Some(LyricHit {
+            score: LyricScore {
+                typos: u32::from_be_bytes(*typos),
+                skipped,
+                prefixes: u32::from_be_bytes(*prefixes),
+                extra_words: u32::from_be_bytes(*extra_words),
+            },
+            track: i64::from_be_bytes(*track),
+            line: u16::from_be_bytes(line),
+        })
+    }
+}
+
 impl LyricScore {
     /// The score of a line of `length` words, up to 255, that the query's words matched by
     /// `qualities`, its leading article among them unless `skipped`.
@@ -60,12 +100,10 @@ impl LyricIndex {
     /// keeps, by its best line, best first. A leading article in a query of more than one word
     /// need not match.
     pub fn search(&self, query: &str, keep: impl Fn(i64) -> bool) -> Vec<LyricHit> {
-        let mut query_words = words(query);
-        query_words.truncate(MAX_QUERY_WORDS);
+        let (query_words, optional) = query_words(query);
         let Some(last) = query_words.len().checked_sub(1) else {
             return Vec::new();
         };
-        let optional = leading_article(&query_words, |word| ARTICLES.contains(&word.as_str()));
 
         // For each query word, the lines it matches, ascending, each with how well.
         let matched: Vec<Vec<(u32, Quality)>> = query_words
@@ -181,18 +219,16 @@ pub const PHRASE_TRACKS: usize = 200;
 /// anywhere in the line still counts.
 ///
 /// `lyrics` gives a track's lines as they were given to the index, so places agree. It is asked
-/// only when the query has two words or more to put in order, once for each track considered; a
-/// track it gives none for is not lifted.
+/// only when the query [`wants_phrases`], once for each track considered; a track it gives none
+/// for is not lifted. Returns how many were lifted, now the first of `hits`.
 pub fn lift_phrases<S: AsRef<str>>(
     query: &str,
     hits: &mut [LyricHit],
     mut lyrics: impl FnMut(i64) -> Option<Vec<S>>,
-) {
-    let mut query_words = words(query);
-    query_words.truncate(MAX_QUERY_WORDS);
-    let optional = leading_article(&query_words, |word| ARTICLES.contains(&word.as_str()));
+) -> usize {
+    let (query_words, optional) = query_words(query);
     if query_words.len() - optional < 2 {
-        return;
+        return 0;
     }
     let last = query_words.len() - 1;
     // Each query word, its characters, and whether it is the one being typed.
@@ -223,9 +259,27 @@ pub fn lift_phrases<S: AsRef<str>>(
         }
     }
     lifted.sort_unstable();
+    let count = lifted.len();
     for (slot, hit) in hits.iter_mut().zip(lifted.into_iter().chain(rest)) {
         *slot = hit;
     }
+    count
+}
+
+/// Whether [`lift_phrases`] reads lyrics back for `query`: when it has two words or more to put
+/// in order, a leading article that may go unmatched aside. A caller that reads the lyrics first
+/// reads them only then.
+pub fn wants_phrases(query: &str) -> bool {
+    let (query_words, optional) = query_words(query);
+    query_words.len() - optional >= 2
+}
+
+/// The words of `query` that are searched, and how many lead as an article that may go unmatched.
+fn query_words(query: &str) -> (Vec<String>, usize) {
+    let mut query_words = words(query);
+    query_words.truncate(MAX_QUERY_WORDS);
+    let optional = leading_article(&query_words, |word| ARTICLES.contains(&word.as_str()));
+    (query_words, optional)
 }
 
 /// The score of a line of `line` words if they hold the words of `phrase` after its first
@@ -439,6 +493,33 @@ mod tests {
         lift_phrases("the ain't", &mut hits, |_| -> Option<Vec<&str>> { panic!("an article") });
         lift_phrases("say ain't", &mut hits, |_| None::<Vec<&str>>);
         assert_eq!(hits, before);
+    }
+
+    #[test]
+    fn a_hit_reads_back_from_its_bytes() {
+        let index = songs();
+        for hit in
+            index.search("the times", |_| true).into_iter().chain(index.search("so", |_| true))
+        {
+            assert_eq!(LyricHit::from_bytes(&hit.to_bytes()), Some(hit));
+        }
+        let bytes = index.search("so", |_| true)[0].to_bytes();
+        assert_eq!(LyricHit::from_bytes(&bytes[..bytes.len() - 1]), None);
+        assert_eq!(LyricHit::from_bytes(&[bytes.as_slice(), &[0]].concat()), None);
+        assert_eq!(LyricHit::from_bytes(&[[2].as_slice(), &bytes[1..]].concat()), None);
+    }
+
+    #[test]
+    fn lifting_says_how_many_it_lifted_and_when_it_reads() {
+        let tracks =
+            [(1, vec!["side other"]), (2, vec!["other side"]), (3, vec!["the other side"])];
+        let index = LyricIndex::build(tracks.clone());
+        let mut hits = index.search("other side", |_| true);
+        let lyrics = |track| tracks.iter().find(|(id, _)| *id == track).map(|(_, l)| l.clone());
+        assert_eq!(lift_phrases("other side", &mut hits, lyrics), 2);
+        assert_eq!(lift_phrases("side", &mut hits, lyrics), 0);
+        assert!(wants_phrases("other side"));
+        assert!(!wants_phrases("side") && !wants_phrases("the side") && !wants_phrases(""));
     }
 
     #[test]

@@ -25,6 +25,7 @@ use jewelcase_core::{Index, IndexBuilder, LyricIndex, LyricIndexBuilder, Recover
 use jewelcase_scanner::SyncedLine;
 use rusqlite::Connection;
 
+use super::lyrics::{Matches, Stored};
 use super::tagged::TaggedSets;
 use super::within::Containers;
 use crate::api::page::library_number;
@@ -43,6 +44,8 @@ const LYRICS_BATCH: usize = if cfg!(test) { 2 } else { 1_000 };
 pub struct Indexes {
     names: Libraries<Index>,
     lyrics: Libraries<LyricIndex>,
+    /// The last few lyric searches' matches.
+    pub(super) lyric_matches: Matches,
     pub tagged: TaggedSets,
     pub containers: Containers,
 }
@@ -288,19 +291,9 @@ fn lyrics_after(
     .query_map(rusqlite::params![library, after, LYRICS_BATCH], |row| {
         let plain: Option<String> = row.get(1)?;
         let synced: Option<db::Json<Vec<SyncedLine>>> = row.get(2)?;
-        Ok((row.get(0)?, lyric_lines(plain, synced.map(|db::Json(lines)| lines))))
+        Ok((row.get(0)?, Stored::new(plain, synced.map(|db::Json(lines)| lines)).lines))
     })?
     .collect()
-}
-
-/// A track's lyrics as lines, as the lyric index and what shows a match number them: each timed
-/// line, or plain lyrics split at their line breaks.
-pub(super) fn lyric_lines(plain: Option<String>, synced: Option<Vec<SyncedLine>>) -> Vec<String> {
-    match (synced, plain) {
-        (Some(lines), _) => lines.into_iter().map(|line| line.text).collect(),
-        (None, Some(plain)) => jewelcase_core::plain_lines(&plain).map(str::to_owned).collect(),
-        (None, None) => Vec::new(),
-    }
 }
 
 #[cfg(test)]
