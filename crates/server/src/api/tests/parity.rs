@@ -291,6 +291,12 @@ fn recipes() -> Vec<Value> {
         }
         for q in ["a", "e", "come", "zzz"] {
             recipes.push(json!({ "type": "search", "q": q, "filters": filters }));
+            // And as its Songs tab sorts them.
+            for (sort, order) in [("name", "asc"), ("album", "desc"), ("duration", "asc")] {
+                recipes.push(json!({
+                    "type": "search", "q": q, "filters": filters, "sort": sort, "order": order,
+                }));
+            }
         }
         for playlist in ["501", "502", "503", "504", "999", "x"] {
             recipes.push(json!({ "type": "playlist", "playlistId": playlist, "filters": filters }));

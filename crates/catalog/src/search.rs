@@ -259,12 +259,17 @@ fn read_matches(
             return Ok(page);
         }
     }
-    let lead = Lead {
+    request.read(conn, &source(Some(matches_lead(ids)))?, id_of)
+}
+
+/// The rows `ids` names, to lead a list as one JSON array, however many there are: a search's
+/// matches, which the list then sorts, so it costs what they are.
+pub fn matches_lead(ids: &[i64]) -> Lead {
+    Lead {
         ids: "SELECT value AS id FROM json_each(?)".to_owned(),
         params: vec![Value::Text(serde_json::to_string(ids).expect("IDs are JSON"))],
-        size: total,
-    };
-    request.read(conn, &source(Some(lead))?, id_of)
+        size: i64::try_from(ids.len()).unwrap_or(i64::MAX),
+    }
 }
 
 /// The spec's `SearchResult`: `{"type": "track", "track": {…}}` and so on.

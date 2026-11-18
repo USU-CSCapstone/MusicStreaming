@@ -285,6 +285,38 @@ async fn search_resolve_equals_the_search_section() {
 }
 
 #[tokio::test]
+async fn a_sorted_search_resolve_equals_the_sorted_section_read_to_its_end() {
+    let (_temp, state, app) = fixture().await;
+    let sorts = ["name", "artist", "album", "dateAdded", "releaseDate", "duration"];
+    // Its tracks tie, and lack values, in every sort; and under a tag, Calm.
+    for (q, filters) in
+        [("song", None), ("hymn", None), ("o", None), ("aria tune", None), ("o", Some("32"))]
+    {
+        for sort in sorts {
+            for order in ["asc", "desc"] {
+                let mut recipe = json!({ "type": "search", "q": q, "sort": sort, "order": order });
+                let mut uri = format!(
+                    "/api/v1/libraries/1/search/tracks?q={}&sort={sort}&order={order}",
+                    q.replace(' ', "%20")
+                );
+                if let Some(tag) = filters {
+                    recipe["filters"] = json!({ "tagAny": [tag] });
+                    uri += &format!("&tagAny={tag}");
+                }
+                let shown: Vec<String> = page_through(&app, &uri, 2, "track")
+                    .await
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|track| track["id"].as_str().unwrap().to_owned())
+                    .collect();
+                assert_eq!(resolved(&state, &recipe).await, shown, "{recipe}");
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn tag_filters_narrow_each_recipe() {
     let (_temp, state, app) = fixture().await;
     let library =
@@ -368,6 +400,11 @@ async fn a_recipe_keeps_its_tag_filter() {
         assert_eq!(snapshot(&app).await["state"]["sources"][0]["recipe"], recipe);
     }
     let search = json!({ "type": "search", "q": "song", "filters": filters });
+    let (status, answer) = start_new(search.clone(), "12").await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(snapshot(&app).await["state"]["sources"][0]["recipe"], search);
+    // And its sort, where it has one.
+    let search = with_sort(search);
     let (status, answer) = start_new(search.clone(), "12").await;
     assert_eq!(status, StatusCode::OK, "{answer}");
     assert_eq!(snapshot(&app).await["state"]["sources"][0]["recipe"], search);
@@ -488,6 +525,12 @@ async fn recipes_the_server_cannot_resolve_are_refused() {
         ("a scope not built", artist("topTracks", "any")),
         ("an unknown credit", artist("all", "some")),
         ("an empty search", json!({ "type": "search", "q": "" })),
+        ("a search sort with no direction", json!({ "type": "search", "q": "a", "sort": "name" })),
+        ("a search direction with no sort", json!({ "type": "search", "q": "a", "order": "asc" })),
+        (
+            "a search sort not built",
+            json!({ "type": "search", "q": "a", "sort": "playCount", "order": "asc" }),
+        ),
         ("a field it does not know", json!({ "type": "search", "q": "a", "limit": 5 })),
         ("explicit tracks", json!({ "type": "tracks" })),
     ] {
