@@ -28,7 +28,7 @@ pub fn plain_lines(plain: &str) -> impl Iterator<Item = &str> {
 }
 
 /// Whether `line` is a section label alone on its line, such as `[Chorus]` or `[Verse 2]`.
-fn is_label(line: &str) -> bool {
+pub(super) fn is_label(line: &str) -> bool {
     let line = line.trim();
     line.len() >= 2 && line.starts_with('[') && line.ends_with(']')
 }

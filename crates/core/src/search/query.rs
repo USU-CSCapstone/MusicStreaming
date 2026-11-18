@@ -441,6 +441,20 @@ pub(super) fn matching_words(
     found
 }
 
+/// How well query word `query`, its characters `chars`, matches `word`, as [`matching_words`] would
+/// find it, if at all: for one word read back from text rather than looked up.
+pub(super) fn word_quality(query: &str, chars: &[char], word: &str) -> Option<Quality> {
+    let max_typos = typos_allowed(chars.len());
+    if max_typos == 0 || chars.len() > MAX_FUZZY_CHARS {
+        return word.starts_with(query).then(|| quality(0, word.len() != query.len()));
+    }
+    if !word.starts_with(&query[..chars[0].len_utf8()]) {
+        return None;
+    }
+    let candidate: Vec<char> = word.chars().take(MAX_FUZZY_CHARS + max_typos as usize).collect();
+    distance(chars, &candidate, max_typos).map(|(typos, prefix)| quality(typos, prefix))
+}
+
 /// The places in the sorted `vocabulary` of the words that start with `prefix`.
 pub(super) fn prefixed(vocabulary: &(impl Vocabulary + ?Sized), prefix: &str) -> Range<usize> {
     let start = partition(vocabulary, 0..vocabulary.size(), |w| w < prefix);
