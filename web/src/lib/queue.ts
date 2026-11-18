@@ -57,8 +57,15 @@ export const libraryRecipe = (
 	...sort
 });
 
-/** The songs a search finds, in its ranking, as the server resolves them. */
-export const searchRecipe = (q: string): QueueRecipe => ({ type: 'search', q });
+/**
+ * The songs a search finds, as the server resolves them: in its ranking, or in `sort`, as its
+ * Songs tab sorts them.
+ */
+export const searchRecipe = (q: string, sort: ServerSort | null = null): QueueRecipe => ({
+	type: 'search',
+	q,
+	...sort
+});
 
 /** Every song an artist is credited on in `sort`, as the server resolves them. */
 export const artistRecipe = (artistId: string, sort = BY_ALBUM): QueueRecipe => ({
