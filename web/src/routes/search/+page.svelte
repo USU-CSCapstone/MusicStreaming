@@ -7,7 +7,7 @@
 	import { view } from '$lib/adding.svelte';
 	import { searchSection } from '$lib/api/client';
 	import type { PlayContext, SearchResult } from '$lib/api/types';
-	import { albumCard, artistCard, playlistCard, type Card } from '$lib/cards';
+	import { albumCard, artistCard, playlistCard, tagCard, type Card } from '$lib/cards';
 	import AddToPlaylistButton from '$lib/components/AddToPlaylistButton.svelte';
 	import CollectionView from '$lib/components/CollectionView.svelte';
 	import Icon from '$lib/components/Icon.svelte';
@@ -37,10 +37,17 @@
 		lyrics: 'Lyrics'
 	};
 
+	/** A section's title: a tags section's is its type of tag's, such as Genres. */
+	const title = (section: { type: keyof typeof titles; tagType?: string }) =>
+		section.type === 'tags' && section.tagType
+			? tagTypePlural(section.tagType, tagTypes)
+			: titles[section.type];
+
 	function card(r: SearchResult): Card[] {
 		if (r.album) return [albumCard(r.album)];
 		if (r.artist) return [artistCard(r.artist)];
 		if (r.playlist) return [playlistCard(r.playlist)];
+		if (r.tag) return [tagCard(r.tag)];
 		return [];
 	}
 
@@ -64,14 +71,9 @@
 			? paged.total
 				? [{ type: data.tab, items: paged.items, total: paged.total }]
 				: []
-			: // A section of a type this page does not show yet, such as tags, is left out.
-				(data.results?.sections ?? []).filter((section) => section.type in titles)
+			: (data.results?.sections ?? [])
 	);
-	// The top result is a song, an album or an artist; one of another type is not shown yet.
-	const top = $derived.by(() => {
-		const top = data.results?.top;
-		return top && (top.track || top.album || top.artist) ? top : null;
-	});
+	const top = $derived(data.results?.top ?? null);
 	const libraryEmpty = $derived(data.results?.libraryEmpty ?? data.library?.trackCount === 0);
 	const nearMisses = $derived(data.results?.nearMisses ?? []);
 	// What nothing found on a tab is called, as the tab is.
@@ -116,21 +118,32 @@
 	// results, submits it in the box, or leaves it after it has stood a moment.
 	$effect(() => settler.shown(data.library?.id ?? '', data.q ?? ''));
 
-	/** The album or artist among these results that `to` opens, if it is one. */
-	function opened(to: NavigationTarget | null): Selected | undefined {
+	/** The routes of the results a search can open, by the type of result each opens. */
+	const OPENS = {
+		'/albums/[id]': 'album',
+		'/artists/[id]': 'artist',
+		'/playlists/[id]': 'playlist',
+		'/tags/[id]': 'tag'
+	} as const;
+
+	/**
+	 * Whether `to` opens one of these results, and which, where it is an album or an artist,
+	 * which a recent search can name.
+	 */
+	function opened(to: NavigationTarget | null): { selected?: Selected } | undefined {
 		const id = to?.params?.id;
-		const route = to?.route.id;
-		const type = route === '/albums/[id]' ? 'album' : route === '/artists/[id]' ? 'artist' : null;
-		if (!id || !type) return undefined;
-		const found = sections.some((s) => s.items.some((r) => r[type]?.id === id));
-		return found ? { type, id } : undefined;
+		const type = OPENS[to?.route.id as keyof typeof OPENS];
+		if (!id || !type || !sections.some((s) => s.items.some((r) => r[type]?.id === id))) {
+			return undefined;
+		}
+		return type === 'album' || type === 'artist' ? { selected: { type, id } } : {};
 	}
 
 	beforeNavigate(({ to, willUnload }) => {
 		// Another query is still the same search.
 		if (to?.route.id === '/search') return;
-		const selected = opened(to);
-		if (selected) settler.settle(selected);
+		const result = opened(to);
+		if (result) settler.settle(result.selected);
 		settler.leave(willUnload);
 	});
 
@@ -194,16 +207,16 @@
 			onact={(selected) => settler.settle(selected)}
 		/>
 	{/if}
-	{#each sections as section (section.type)}
+	{#each sections as section (`${section.type}:${section.tagType ?? ''}`)}
 		{@const tab = data.tab ? undefined : SEARCH_TABS.find((t) => t.type === section.type)}
 		<section>
 			<header>
 				<!-- On All, a section leads to its tab, which holds every match (`requirements/search.md` §4). -->
 				{#if tab}
 					<!-- eslint-disable svelte/no-navigation-without-resolve -- resolved in search-tabs.ts -->
-					<h2><a href={tabHref(data.q, tab.type)}>{titles[section.type]}</a></h2>
+					<h2><a href={tabHref(data.q, tab.type)}>{title(section)}</a></h2>
 				{:else}
-					<h2>{titles[section.type]}</h2>
+					<h2>{title(section)}</h2>
 				{/if}
 				<div class="actions">
 					{#if tab && section.total > section.items.length}

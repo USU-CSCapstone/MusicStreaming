@@ -5,14 +5,15 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { cardAdding, songs, type Adding } from '$lib/adding.svelte';
-	import { listTracks } from '$lib/api/client';
+	import { listPlaylistItems, listTracks } from '$lib/api/client';
 	import type { PlayContext, SearchResult, TrackSummary } from '$lib/api/types';
-	import { albumCard, artistCard, type Card } from '$lib/cards';
+	import { albumCard, artistCard, playlistCard, tagCard, type Card } from '$lib/cards';
 	import { albumTitle } from '$lib/format';
 	import { fullText } from '$lib/full-text';
 	import { player } from '$lib/player.svelte';
-	import { albumRecipe, artistRecipe, type PlayFrom } from '$lib/queue';
+	import { albumRecipe, artistRecipe, playlistRecipe, tagRecipe, type PlayFrom } from '$lib/queue';
 	import type { Selected } from '$lib/recent';
+	import { tagTypeName } from '$lib/tags';
 	import { toast } from '$lib/toast.svelte';
 	import AddToPlaylistButton from './AddToPlaylistButton.svelte';
 	import ArtistLinks from './ArtistLinks.svelte';
@@ -30,27 +31,62 @@
 		context: PlayContext;
 		/** The search's songs in its ranking, which a track plays as the first of. */
 		from?: PlayFrom;
-		/** Playing it is acting on the search's result, which keeps the search. */
-		onact: (selected: Selected) => void;
+		/**
+		 * Playing it is acting on the search's result, which keeps the search: with the result,
+		 * where it is a song, an album or an artist, which a recent search can name.
+		 */
+		onact: (selected?: Selected) => void;
 	} = $props();
 
 	const libraryId = $derived(page.data.library?.id ?? '');
-	// An album or an artist is what its card is; a track is the song alone.
-	const card = $derived<Card | null>(
-		result.album ? albumCard(result.album) : result.artist ? artistCard(result.artist) : null
-	);
+	// An album, artist, playlist or tag is what its card is; a track is the song alone.
+	const card = $derived.by((): Card | null => {
+		if (result.album) return albumCard(result.album);
+		if (result.artist) return artistCard(result.artist);
+		if (result.playlist) return playlistCard(result.playlist);
+		if (result.tag) return tagCard(result.tag);
+		return null;
+	});
 	const track = $derived<TrackSummary | null>(result.track ?? null);
 	const adding = $derived<Adding | null>(
 		card ? cardAdding(fetch, libraryId, card) : track ? songs([track]) : null
 	);
-	const kind = $derived(result.album ? 'Album' : result.artist ? 'Artist' : 'Song');
+	const kind = $derived.by(() => {
+		if (result.tag) return tagTypeName(result.tag.type, page.data.tagTypes ?? []);
+		const kinds = { album: 'Album', artist: 'Artist', playlist: 'Playlist', tag: 'Tag' };
+		return card ? kinds[card.type] : 'Song';
+	});
 
 	let starting = $state(false);
 
 	/**
-	 * A track plays first of the search's songs, as it would from its section. An album or an
-	 * artist plays from its first song, as its page's Play does, once the first page of its songs
-	 * has loaded; the server resolves the rest.
+	 * The first page of `card`'s songs, as its page plays them, what they are played in, and how
+	 * the server resolves the rest. The rows lead what the server resolves: a playlist's leave out
+	 * the songs the caller hid, as the server does, and keep missing ones in place.
+	 */
+	async function firstSongs(card: Card): Promise<[TrackSummary[], PlayContext, PlayFrom]> {
+		const id = card.id;
+		if (card.type === 'playlist') {
+			const first = await listPlaylistItems(fetch, libraryId, id);
+			const tracks = first.items.flatMap((item) =>
+				item.track && !item.track.hidden ? [item.track] : []
+			);
+			return [tracks, { type: 'playlist', id }, { recipe: playlistRecipe(id), total: card.count }];
+		}
+		const [query, played, recipe] =
+			card.type === 'album'
+				? [{ albumId: id }, { type: 'album', id } as const, albumRecipe(id)]
+				: card.type === 'artist'
+					? [{ artistId: id }, { type: 'artist', id, scope: 'all' } as const, artistRecipe(id)]
+					: [{ tagAll: id }, { type: 'tag', id } as const, tagRecipe(id)];
+		const first = await listTracks(fetch, libraryId, { ...query, sort: 'album' });
+		return [first.items, played, { recipe, total: first.total }];
+	}
+
+	/**
+	 * A track plays first of the search's songs, as it would from its section. Anything else plays
+	 * from its first song, as its page's Play does, once the first page of its songs has loaded;
+	 * the server resolves the rest.
 	 */
 	async function play() {
 		if (track) {
@@ -61,15 +97,11 @@
 		if (!card || starting) return;
 		starting = true;
 		try {
-			const id = card.id;
-			const [query, played, recipe] =
-				card.type === 'album'
-					? [{ albumId: id }, { type: 'album', id } as const, albumRecipe(id)]
-					: [{ artistId: id }, { type: 'artist', id, scope: 'all' } as const, artistRecipe(id)];
-			const first = await listTracks(fetch, libraryId, { ...query, sort: 'album' });
-			if (!first.items.length) return;
-			player.play(first.items, 0, played, { recipe, total: first.total });
-			onact({ type: card.type as 'album' | 'artist', id });
+			const [tracks, played, by] = await firstSongs(card);
+			if (!tracks.length) return;
+			player.play(tracks, 0, played, by);
+			const { type, id } = card;
+			onact(type === 'album' || type === 'artist' ? { type, id } : undefined);
 		} catch {
 			toast(`Couldn't play ${card.title}.`);
 		} finally {
