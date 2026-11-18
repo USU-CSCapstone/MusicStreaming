@@ -28,6 +28,15 @@ fn leading_article<T>(words: &[T], is_article: impl Fn(&T) -> bool) -> usize {
     usize::from(words.len() > 1 && is_article(&words[0]))
 }
 
+/// Where the matches of `kind`, and of the group with index `group`, go among `matches`' slots:
+/// one for each kind, and one for each group of tags after them.
+fn slot(kind: Kind, group: u32) -> usize {
+    match kind {
+        Kind::Tag => Kind::Tag as usize + group as usize,
+        kind => kind as usize,
+    }
+}
+
 /// Keeps the best `n` of `hits`, best first. Document order is the tie-break order, so the
 /// order is total, and the same `hits` always rank the same.
 fn best(hits: &mut Vec<(Score, u32)>, n: usize) {
@@ -54,9 +63,10 @@ pub(super) struct Score {
 }
 
 impl Index {
-    /// The best `limit` matches for `query` of each kind in `kinds` that has any, with the
-    /// sections ordered by their best match, ties to the more specific kind. A leading article in
-    /// a query of more than one word need not match.
+    /// The best `limit` matches for `query` of each kind in `kinds` that has any, a section for
+    /// each group of a kind that has groups, with the sections ordered by their best match, ties
+    /// to the more specific kind, then by group. A leading article in a query of more than one
+    /// word need not match.
     pub fn search(&self, query: &str, kinds: &[Kind], limit: usize) -> Vec<Section> {
         self.search_within(query, kinds, limit, |_, _| true)
     }
@@ -74,33 +84,46 @@ impl Index {
         if limit == 0 {
             return Vec::new();
         }
-        let mut sections: Vec<(Score, Section)> = Vec::new();
-        for (k, mut hits) in self.matches(query, kinds, keep).into_iter().enumerate() {
-            if hits.is_empty() {
+        let mut sections: Vec<(Score, u32, Section)> = Vec::new();
+        for mut hits in self.matches(query, kinds, keep) {
+            let Some(&(_, d)) = hits.first() else {
                 continue;
-            }
+            };
+            let (kind, group) = (self.kinds[d as usize], self.groups_of[d as usize]);
             let total = hits.len();
             best(&mut hits, limit);
-            let section = Section { kind: Kind::ALL[k], ids: self.hit_ids(&hits), total };
-            sections.push((hits[0].0, section));
+            let ids = self.hit_ids(&hits);
+            let section = Section { kind, group: self.group(group), ids, total };
+            sections.push((hits[0].0, group, section));
         }
-        sections.sort_by(|(a, x), (b, y)| a.cmp(b).then(x.kind.cmp(&y.kind)));
-        sections.into_iter().map(|(_, section)| section).collect()
+        // Groups compare as their indexes do, since they are sorted.
+        sections.sort_by(|(a, g, x), (b, h, y)| a.cmp(b).then(x.kind.cmp(&y.kind)).then(g.cmp(h)));
+        sections.into_iter().map(|(_, _, section)| section).collect()
     }
 
-    /// The best `limit` matches for `query` of `kind` that `keep` keeps and that rank after
-    /// `after`, ranked as [`Index::search_within`] ranks them, so a section can be read a page
-    /// at a time. `total` counts every match, and `next` is the last one's rank while more follow
-    /// it. A rank from an index since rebuilt continues where it left off.
+    /// The best `limit` matches for `query` of `kind`, and of `group` for a kind that has groups,
+    /// that `keep` keeps and that rank after `after`, ranked as [`Index::search_within`] ranks
+    /// them, so a section can be read a page at a time. `total` counts every match, and `next` is
+    /// the last one's rank while more follow it. A rank from an index since rebuilt continues
+    /// where it left off. A group the index lacks has no matches.
     pub fn page(
         &self,
         query: &str,
         kind: Kind,
+        group: Option<&str>,
         after: Option<&Rank>,
         limit: usize,
         keep: impl Fn(Kind, i64) -> bool,
     ) -> SectionPage {
-        let mut hits = std::mem::take(&mut self.matches(query, &[kind], keep)[kind as usize]);
+        let group = match group {
+            None => 0,
+            Some(group) => match self.groups.binary_search_by(|g| g.as_str().cmp(group)) {
+                Ok(found) if found > 0 => found as u32,
+                _ => return SectionPage { ids: Vec::new(), total: 0, next: None },
+            },
+        };
+        let mut matches = self.matches(query, &[kind], keep);
+        let mut hits = std::mem::take(&mut matches[slot(kind, group)]);
         let total = hits.len();
         if let Some(after) = after {
             hits.retain(|&(score, d)| self.ranks_after(score, d, after));
@@ -115,7 +138,12 @@ impl Index {
     /// that orders them itself, such as by a list's sort. Leaving out the ranking saves sorting
     /// them all.
     pub fn matching(&self, query: &str, kind: Kind, keep: impl Fn(Kind, i64) -> bool) -> Vec<i64> {
-        self.hit_ids(&self.matches(query, &[kind], keep)[kind as usize])
+        self.matches(query, &[kind], keep).iter().flat_map(|hits| self.hit_ids(hits)).collect()
+    }
+
+    /// The group with index `group`, if it is one: 0 is none.
+    fn group(&self, group: u32) -> Option<String> {
+        (group > 0).then(|| self.groups[group as usize].clone())
     }
 
     /// The IDs of the documents of `hits`, in their order.
@@ -145,15 +173,17 @@ impl Index {
     }
 
     /// Every document of each of `kinds` that matches `query` and that `keep` keeps, with its
-    /// score, by kind in the order of `Kind::ALL`. A leading article in a query of more than
+    /// score, in a slot for each section ([`slot`]). A leading article in a query of more than
     /// one word need not match.
     fn matches(
         &self,
         query: &str,
         kinds: &[Kind],
         keep: impl Fn(Kind, i64) -> bool,
-    ) -> [Vec<(Score, u32)>; 3] {
-        let mut scored: [Vec<(Score, u32)>; 3] = Default::default();
+    ) -> Vec<Vec<(Score, u32)>> {
+        // An empty index has no groups at all, not even the empty one.
+        let mut scored: Vec<Vec<(Score, u32)>> =
+            vec![Vec::new(); slot(Kind::Tag, 0) + self.groups.len().max(1)];
         let mut query_words = words(query);
         query_words.truncate(MAX_QUERY_WORDS);
         if query_words.is_empty() {
@@ -199,7 +229,7 @@ impl Index {
             let Some(score) = self.score(d, &best, optional, exact.as_deref()) else {
                 continue;
             };
-            scored[kind as usize].push((score, d));
+            scored[slot(kind, self.groups_of[d as usize])].push((score, d));
         }
         scored
     }

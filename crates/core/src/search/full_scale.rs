@@ -76,11 +76,11 @@ fn benchmark_full_scale() {
     // A page of tracks deep in the commonest word's, continuing after a rank, which compares
     // names wherever scores tie.
     for query in ["a", common.as_str()] {
-        let first = index.page(query, Kind::Track, None, 1000, |_, _| true);
+        let first = index.page(query, Kind::Track, None, None, 1000, |_, _| true);
         let started = std::time::Instant::now();
         let rounds = 20;
         for _ in 0..rounds {
-            index.page(query, Kind::Track, first.next.as_ref(), 100, |_, _| true);
+            index.page(query, Kind::Track, None, first.next.as_ref(), 100, |_, _| true);
         }
         println!(
             "{query:>22}: {:>8.2?} per page after 1,000 of {}",
