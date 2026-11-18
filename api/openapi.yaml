@@ -1269,6 +1269,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Query'
         - $ref: '#/components/parameters/SearchTagType'
+        - $ref: '#/components/parameters/Within'
         - name: sort
           in: query
           description: |
@@ -2546,8 +2547,14 @@ components:
     Within:
       name: within
       in: query
-      description: 'Narrow to a container, as `artist:ID`, `album:ID`, or `playlist:ID` (`requirements/search.md` §5). Planned.'
-      schema: { type: string, pattern: '^(artist|album|playlist):.+$' }
+      description: |
+        Narrow to a container, as `album:ID`, `artist:ID`, `playlist:ID` or `tag:ID`
+        (`requirements/search.md` §5): to the tracks of an album; the tracks and albums credited
+        to an artist, owned or featured; the tracks of the caller's own playlist; or the tracks,
+        albums and artists that carry a tag, as `tagAny` reads them. A container holds nothing
+        of any other kind. One the caller does not reach, such as another account's playlist or
+        an album every track of which they hid, is `404`, as one that is not there is.
+      schema: { type: string, pattern: '^(album|artist|playlist|tag):.+$' }
     ImageSize:
       name: size
       in: query

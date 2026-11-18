@@ -28,6 +28,7 @@ pub mod tag_filter;
 pub mod tags;
 pub mod time;
 pub mod tracks;
+pub mod within;
 
 pub use id::{AnyId, Id};
 pub use json::Json;
