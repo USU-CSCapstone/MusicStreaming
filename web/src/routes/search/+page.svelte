@@ -42,18 +42,19 @@
 		return [];
 	}
 
-	// The Songs tab's songs, a page at a time as the list scrolls.
-	const paged = $derived(
-		data.songs &&
-			new Paged(data.songs.first, (cursor) =>
-				searchSection(fetch, data.lib, 'tracks', data.q, { ...data.songs?.query, cursor })
-			)
-	);
-	const searched = $derived(Boolean(data.results || data.songs));
+	// A tab's matches, a page at a time as the list scrolls.
+	const paged = $derived.by(() => {
+		const { tab, section } = data;
+		if (!tab || !section) return null;
+		return new Paged(section.first, (cursor) =>
+			searchSection(fetch, data.lib, tab, data.q, { ...section.query, cursor })
+		);
+	});
+	const searched = $derived(Boolean(data.results || data.section));
 	const sections = $derived(
-		paged
+		paged && data.tab
 			? paged.total
-				? [{ type: 'tracks' as const, items: paged.items, total: paged.total }]
+				? [{ type: data.tab, items: paged.items, total: paged.total }]
 				: []
 			: (data.results?.sections ?? [])
 	);
@@ -204,7 +205,7 @@
 					onplay={(track) => settler.settle({ type: 'track', id: track.id })}
 				/>
 			{:else}
-				<CollectionView cards={section.items.flatMap(card)} />
+				<CollectionView cards={section.items.flatMap(card)} sentinel={paged?.sentinel} />
 			{/if}
 		</section>
 	{/each}
