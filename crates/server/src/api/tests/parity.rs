@@ -245,6 +245,15 @@ fn searches() -> Vec<Value> {
     ] {
         searches.push(json!({ "q": q, "sectionLimit": 5 }));
     }
+    // Narrowed to each kind of container, one out of reach (another account's playlist), one
+    // that is not there, and one that is no container.
+    for within in
+        ["album:101", "artist:10", "playlist:501", "tag:30", "playlist:503", "album:999", "song:1"]
+    {
+        for q in ["come", "a"] {
+            searches.push(json!({ "q": q, "within": within, "sectionLimit": 5 }));
+        }
+    }
     // A type of tag alone, of the tags sections.
     for tag_type in ["genre", "mood", "era"] {
         searches.push(json!({ "q": "rock", "tagType": tag_type, "sectionLimit": 5 }));
@@ -668,6 +677,10 @@ async fn every_list_sort_and_filter_and_every_get_give_identical_json_on_the_ser
     let cursor = albums["nextCursor"].as_str().unwrap().to_owned();
     for params in [
         json!({ "section": "albums", "q": "a", "tagAll": "30" }),
+        json!({ "section": "tracks", "q": "come", "within": "album:101" }),
+        json!({ "section": "tracks", "q": "come", "within": "album:102" }),
+        json!({ "section": "albums", "q": "a", "within": "artist:10" }),
+        json!({ "section": "tracks", "q": "e", "within": "playlist:503" }),
         json!({ "section": "tags", "q": "rock", "tagType": "genre" }),
         json!({ "section": "tags", "q": "calm", "tagType": "genre" }),
         json!({ "section": "tags", "q": "rock" }),

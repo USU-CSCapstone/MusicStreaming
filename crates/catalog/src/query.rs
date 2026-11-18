@@ -19,6 +19,7 @@ use crate::recipes::{self, Recipe};
 use crate::tag_filter::{TagFilter, Tags};
 use crate::tags::{self, TagSort};
 use crate::tracks::{self, TrackOrder, TrackSort};
+use crate::within::{self, Held, Within};
 use crate::{AnyId, Id, Invalid, hidden, recent_searches, search};
 
 /// Why a query could not be answered; the message says why, safe to show a client.
@@ -168,6 +169,7 @@ struct SearchParams {
     q: String,
     types: Option<String>,
     tag_type: Option<String>,
+    within: Option<String>,
     tag_all: Option<String>,
     tag_any: Option<String>,
     section_limit: Option<usize>,
@@ -180,6 +182,7 @@ struct SectionParams {
     section: String,
     q: String,
     tag_type: Option<String>,
+    within: Option<String>,
     sort: Option<String>,
     order: Option<Order>,
     cursor: Option<String>,
@@ -222,6 +225,21 @@ pub fn number(id: &str, what: &str) -> Result<i64, Error> {
 /// `value` as the JSON text of a query's answer, written once.
 fn json<T: Serialize>(value: T) -> Result<String, Error> {
     Ok(serde_json::to_string(&value)?)
+}
+
+/// What the container `within` names holds for `user`, if a search is narrowed to one: an error
+/// where it names nothing there could be, or one out of the user's reach, as the server's `404`.
+fn held(
+    conn: &Connection,
+    user: i64,
+    library: i64,
+    within: Option<&str>,
+    hid: &search::Hid,
+) -> Result<Option<Held>, Error> {
+    let Some(within) = within else { return Ok(None) };
+    let not_found = || Error("within names nothing in reach".to_owned());
+    let within = Within::parse(within)?.ok_or_else(not_found)?;
+    Ok(Some(within::reached(conn, user, library, within, hid)?.ok_or_else(not_found)?))
 }
 
 /// The search index, or the error a search gives without one.
@@ -309,6 +327,7 @@ pub fn answer(
                 Some(search::tagged(conn, library, &filter, &kinds)?)
             };
             let hid = search::Hid::read(conn, user, library, &filter)?;
+            let held = held(conn, user, library, p.within.as_deref(), &hid)?;
             // And the caller's own playlists, which no one else's search finds.
             let mine = if kinds.contains(&Kind::Playlist) {
                 search::mine(conn, user, library)?
@@ -316,7 +335,7 @@ pub fn answer(
                 Index::default()
             };
             let both = Union(&[built(index)?, &mine]);
-            let keep = search::Keep::new(&hid, tagged.as_ref());
+            let keep = search::Keep::new(&hid, tagged.as_ref(), held.as_ref());
             let found = both.search_within(&p.q, &kinds, limit, |kind, id| keep.keeps(kind, id));
             let found = search::of_tag_type(found, p.tag_type.as_deref());
             json(search::response(conn, user, library, p.q, found, &hid)?)
@@ -349,7 +368,8 @@ pub fn answer(
                 Some(search::tagged(conn, library, &filter, &[kind])?)
             };
             let hid = search::Hid::read(conn, user, library, &filter)?;
-            let keep = search::Keep::new(&hid, tagged.as_ref());
+            let held = held(conn, user, library, p.within.as_deref(), &hid)?;
+            let keep = search::Keep::new(&hid, tagged.as_ref(), held.as_ref());
             let mine = if kind == Kind::Playlist {
                 search::mine(conn, user, library)?
             } else {
