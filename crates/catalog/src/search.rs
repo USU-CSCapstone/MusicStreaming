@@ -313,14 +313,19 @@ fn led(
     id: &'static [&'static str],
     ids: &[i64],
 ) -> rusqlite::Result<Source> {
-    let total = i64::try_from(ids.len()).unwrap_or(i64::MAX);
-    let lead = Lead {
+    let source = table.source(conn, library, Some(matches_lead(ids)), None)?;
+    let total = Total::Stored(i64::try_from(ids.len()).unwrap_or(i64::MAX));
+    Ok(Source { select: id, joins: "", total, ..source })
+}
+
+/// The rows `ids` names, to lead a list as one JSON array, however many there are: a search's
+/// matches, which the list then sorts, so it costs what they are.
+pub fn matches_lead(ids: &[i64]) -> Lead {
+    Lead {
         ids: "SELECT value AS id FROM json_each(?)".to_owned(),
         params: vec![Value::Text(serde_json::to_string(ids).expect("IDs are JSON"))],
-        size: total,
-    };
-    let source = table.source(conn, library, Some(lead), None)?;
-    Ok(Source { select: id, joins: "", total: Total::Stored(total), ..source })
+        size: i64::try_from(ids.len()).unwrap_or(i64::MAX),
+    }
 }
 
 /// The spec's `SearchResult`: `{"type": "track", "track": {…}}` and so on.

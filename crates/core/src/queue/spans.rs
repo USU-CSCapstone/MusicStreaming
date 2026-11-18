@@ -33,11 +33,16 @@ pub enum Recipe {
     },
     /// A library's tracks under filters, in a sort.
     Library { filters: Map<String, Value>, sort: String, order: String },
-    /// A search query, narrowed by filters. `filters` is left out when empty.
+    /// A search query, narrowed by filters, in its ranking or in a sort. `filters` is left out
+    /// when empty, and `sort` and `order` for the ranking.
     Search {
         q: String,
         #[serde(default, skip_serializing_if = "Map::is_empty")]
         filters: Map<String, Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sort: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        order: Option<String>,
     },
     /// A playlist's items, tag-filtered and sorted as its page shows them. `version` is the
     /// playlist's version the server resolved, left out until it has; `sort` and `order` are
