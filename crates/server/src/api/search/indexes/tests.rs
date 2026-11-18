@@ -204,3 +204,44 @@ async fn every_library_is_indexed_at_startup() {
     })
     .await;
 }
+
+/// Library 1's tags matching `q` in a newly built index, as each section's type and IDs.
+async fn tags_found(db: &Arc<Database>, q: &str) -> Vec<(Option<String>, Vec<i64>)> {
+    let index = Indexes::default().index(db, 1).await.unwrap();
+    let found = index.search(q, &[jewelcase_core::Kind::Tag], 10);
+    found.into_iter().map(|section| (section.group, section.ids)).collect()
+}
+
+#[tokio::test]
+async fn tags_are_indexed_by_type_and_weighed_by_their_tracks() {
+    let (_temp, db, _app) = catalog::app().await;
+    // Rock (30) and the mood Calm (32) are on track 1001; Pop (31) is on none. Punk Rock goes on
+    // two tracks and Alt Rock on one.
+    db.write(|tx| {
+        tx.execute_batch(
+            "INSERT INTO tags (id, library_id, type, name, name_key, sort_key) VALUES
+                 (33, 1, 'genre', 'Punk Rock', 'punk rock', CAST('punk rock' AS BLOB)),
+                 (34, 1, 'genre', 'Alt Rock', 'alt rock', CAST('alt rock' AS BLOB));
+             INSERT INTO track_tags (library_id, track_id, tag_id, tag_name) VALUES
+                 (1, 1002, 33, 'Punk Rock'), (1, 1003, 33, 'Punk Rock'), (1, 1004, 34, 'Alt Rock');",
+        )
+    })
+    .await
+    .unwrap();
+    let genre = |ids: Vec<i64>| (Some("genre".to_owned()), ids);
+    // Rock is exact; of the rest, the one on more tracks first.
+    assert_eq!(tags_found(&db, "rock").await, [genre(vec![30, 33, 34])]);
+    assert_eq!(tags_found(&db, "calm").await, [(Some("mood".to_owned()), vec![32])]);
+    assert_eq!(tags_found(&db, "pop").await, [], "no track carries it");
+
+    // Alt Rock goes on two more tracks, and passes Punk Rock.
+    db.write(|tx| {
+        tx.execute_batch(
+            "INSERT INTO track_tags (library_id, track_id, tag_id, tag_name) VALUES
+                 (1, 1005, 34, 'Alt Rock'), (1, 1006, 34, 'Alt Rock');",
+        )
+    })
+    .await
+    .unwrap();
+    assert_eq!(tags_found(&db, "rock").await, [genre(vec![30, 34, 33])]);
+}
