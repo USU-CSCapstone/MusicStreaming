@@ -155,6 +155,77 @@ test('the caller’s playlists are found by their titles, and play from where th
 	await expect(page.getByRole('heading', { level: 1, name: 'Road Trip' })).toBeVisible();
 });
 
+/** The tracks of the active queue's last list, as the server resolved it. */
+async function lastList(server: Server): Promise<string[]> {
+	const { state } = await server.api('/me/queue');
+	const { list } = state.sources.at(-1);
+	return (await server.api(`/me/queue/lists/${list}`)).tracks;
+}
+
+test('a search started from a tag’s page keeps to it when asked, and plays within it', async ({
+	page,
+	server
+}) => {
+	const { tags, tracks } = server.ids;
+	const ambient = `tag%3A${tags.Ambient}`;
+	await page.goto(`/tags/${tags.Ambient}`);
+	await searchBox(page).pressSequentially('signal');
+	await expect(page).toHaveURL(new RegExp(`/search\\?q=signal&from=${ambient}$`));
+	const scope = page.getByRole('navigation', { name: 'Where to search' });
+	await expect(scope.getByRole('link')).toHaveText(['Everywhere', 'In Ambient']);
+	await expect(scope.getByRole('link', { name: 'Everywhere' })).toHaveAttribute('aria-current', 'page');
+	// Everywhere first, so the Remix, which is Electronic, is found too.
+	await expect(songTitles(page)).toHaveCount(3);
+
+	await scope.getByRole('link', { name: 'In Ambient' }).click();
+	await expect(page).toHaveURL(new RegExp(`from=${ambient}&within=${ambient}$`));
+	await expect(songTitles(page)).toHaveText(['Signal Part 1', 'Signal Part 2']);
+	// A tag holds songs, albums and artists, so there are no tabs for playlists or tags.
+	await expect(tabs(page).getByRole('link')).toHaveText(['All', 'Albums', 'Artists', 'Songs']);
+	// Kept through a reload, and through typing.
+	await page.reload();
+	await expect(songTitles(page)).toHaveText(['Signal Part 1', 'Signal Part 2']);
+	await searchBox(page).fill('signal part');
+	await expect(page).toHaveURL(new RegExp(`q=signal\\+part&from=${ambient}&within=${ambient}$`));
+
+	// Played, it is the search within the tag, as the server resolves it.
+	const starts: { source: { recipe: unknown } }[] = [];
+	page.on('request', (request) => {
+		const path = new URL(request.url()).pathname;
+		if (request.method() === 'POST' && path.endsWith('/me/queue')) starts.push(request.postDataJSON());
+	});
+	await main(page).getByRole('button', { name: 'Signal Part 2', exact: true }).click();
+	await expect(player(page).getByText('Signal Part 2')).toBeVisible();
+	await expect.poll(() => starts.length).toBe(1);
+	expect(starts[0].source.recipe).toEqual({
+		type: 'search',
+		q: 'signal part',
+		within: `tag:${tags.Ambient}`
+	});
+	await expect
+		.poll(() => lastList(server))
+		.toEqual([tracks['Signal Part 1'], tracks['Signal Part 2']]);
+
+	await scope.getByRole('link', { name: 'Everywhere' }).click();
+	await expect(page).toHaveURL(new RegExp(`q=signal\\+part&from=${ambient}$`));
+	await expect(tabs(page).getByRole('link', { name: 'Playlists' })).toBeVisible();
+});
+
+test('a search started from a playlist keeps to its songs', async ({ page, server }) => {
+	const playlist = await createPlaylist(server, 'Road Trip', ['Kindling', 'Signal Remix']);
+	await page.goto(`/playlists/${playlist}`);
+	await searchBox(page).pressSequentially('signal');
+	const scope = page.getByRole('navigation', { name: 'Where to search' });
+	await scope.getByRole('link', { name: 'In Road Trip' }).click();
+	await expect(songTitles(page)).toHaveText(['Signal Remix']);
+	await expect(tabs(page).getByRole('link')).toHaveText(['All', 'Songs']);
+	// A search started anywhere else offers nothing to keep to.
+	await page.goto('/albums');
+	await searchBox(page).pressSequentially('signal');
+	await expect(songTitles(page)).toHaveCount(3);
+	await expect(scope).toHaveCount(0);
+});
+
 test.describe('on a server of its own, with many songs', () => {
 	test.use({ loggedIn: false });
 
