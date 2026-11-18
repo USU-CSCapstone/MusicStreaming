@@ -168,6 +168,27 @@ impl LyricIndex {
             + self.track_starts.capacity() * size_of::<u32>()
     }
 
+    /// What each part of the index holds, in bytes, for the benchmark to say where they go.
+    #[cfg(test)]
+    pub(super) fn parts(&self) -> [(&'static str, usize); 5] {
+        let words: usize = self.vocabulary.iter().map(|word| word.capacity()).sum();
+        let vocabulary = words
+            + self.vocabulary.capacity() * size_of::<String>()
+            + self.alphabetical.capacity() * size_of::<u32>();
+        [
+            ("postings", self.postings.capacity() + self.posting_starts.capacity() * 4),
+            ("line words", self.line_words.capacity()),
+            ("line starts", self.word_starts.capacity() * 4),
+            (
+                "line places and tracks",
+                self.line_numbers.capacity() * 2
+                    + self.track_ids.capacity() * 8
+                    + self.track_starts.capacity() * 4,
+            ),
+            ("vocabulary", vocabulary),
+        ]
+    }
+
     /// How many tracks have lines indexed.
     pub fn tracks(&self) -> usize {
         self.track_ids.len()
