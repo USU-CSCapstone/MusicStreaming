@@ -178,4 +178,30 @@ fn benchmark_lyrics_full_scale() {
     for (part, bytes) in index.parts() {
         println!("{part:>24}: {:>6.1} MB", bytes as f64 / 1_000_000.0);
     }
+
+    // Searches: a first letter, as typing starts; the commonest word, which most lines hold; two
+    // common words together; a rare word; a common word and a rare one with a typo; and a phrase
+    // of four.
+    let common = &vocabulary[0];
+    let second = &vocabulary[1];
+    let rare = vocabulary.iter().rev().find(|w| w.len() >= 6).unwrap();
+    let mut typo = rare.clone();
+    typo.replace_range(3..4, "z");
+    let queries = [
+        common[..1].to_owned(),
+        common.clone(),
+        format!("{common} {second}"),
+        rare.clone(),
+        format!("{common} {typo}"),
+        format!("{common} {second} {} {}", vocabulary[2], vocabulary[3]),
+    ];
+    for query in &queries {
+        let started = std::time::Instant::now();
+        let rounds = 10;
+        let mut found = 0;
+        for _ in 0..rounds {
+            found = index.search(query, |_| true).len();
+        }
+        println!("{query:>28}: {:>8.2?} per search, {found} tracks", started.elapsed() / rounds);
+    }
 }
