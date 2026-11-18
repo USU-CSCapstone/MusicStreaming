@@ -22,7 +22,7 @@ pub use queue::{
     positions_holding,
 };
 pub use search::{
-    Document, Finishing, Index, IndexBuilder, Kind, Rank, Section, SectionPage, words,
+    Document, Finishing, Index, IndexBuilder, Kind, Rank, Section, SectionPage, Union, words,
 };
 pub use sort::{SortField, SortRow, sort_key, sort_rows, tag_sort_key};
 pub use waveform::{shape_waveform, waveform_level};
