@@ -127,7 +127,7 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 **Open questions:**
 1. ~~How playlist undo works.~~ Decided: undo is the client's. An edit is undone by a further edit that reverses it, and a deletion by holding the `DELETE` back until its Undo toast is gone (`web/src/lib/deletions.svelte.ts`). The server keeps no trash.
 2. The format of the complete playlist export ([`playlists.md` §9](requirements/playlists.md#9-export)).
-3. How lyric matching and ranking fit into the core search index, without breaking parity with client search.
+3. ~~How lyric matching and ranking fit into the core search index, without breaking parity with client search.~~ Decided: a lyric index of its own in the core, each distinct line of a track folded as names are, matched a line at a time and ranked by the phrase remembered; in memory on the server under 100 MB for 150,000 tracks with lyrics, and the same core on a device over its downloads ([`design/search.md` §2](design/search.md#2-lyrics)).
 4. ~~How long recent searches are kept ([`search.md` §6](requirements/search.md#6-recent-searches)).~~ Decided: 30 days ([`design/database.md` §9](design/database.md#9-retention)).
 5. How "near misses" are chosen when a search finds nothing.
 6. What a playlist keeps of an external entry: probably a display snapshot the playlist owns (`design/exports.md` §5, Stage 12).
