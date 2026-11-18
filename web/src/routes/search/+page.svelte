@@ -17,7 +17,7 @@
 	import { tagTypePlural } from '$lib/tags';
 	import type { Selected } from '$lib/recent';
 	import { searchRecipe, type PlayFrom } from '$lib/queue';
-	import { SEARCH_TABS } from '$lib/search-tabs';
+	import { SEARCH_TABS, tabHref } from '$lib/search-tabs';
 	import { currentSort, showSorted } from '$lib/sort-url';
 	import { FIELDS } from '$lib/sorting';
 	import { sortTracks } from '$lib/track-sort';
@@ -159,11 +159,24 @@
 		/>
 	{/if}
 	{#each sections as section (section.type)}
+		{@const tab = data.tab ? undefined : SEARCH_TABS.find((t) => t.type === section.type)}
 		<section>
 			<header>
-				<h2>{titles[section.type]}</h2>
-				{#if section.type === 'tracks' && everySong}<AddToPlaylistButton what={everySong} />{/if}
-				{#if section.type !== 'tracks' && section.type !== 'lyrics'}<ViewToggle />{/if}
+				<!-- On All, a section leads to its tab, which holds every match (`requirements/search.md` §4). -->
+				{#if tab}
+					<!-- eslint-disable svelte/no-navigation-without-resolve -- resolved in search-tabs.ts -->
+					<h2><a href={tabHref(data.q, tab.type)}>{titles[section.type]}</a></h2>
+				{:else}
+					<h2>{titles[section.type]}</h2>
+				{/if}
+				<div class="actions">
+					{#if tab && section.total > section.items.length}
+						<a class="all" href={tabHref(data.q, tab.type)}>Show all {section.total}</a>
+						<!-- eslint-enable svelte/no-navigation-without-resolve -->
+					{/if}
+					{#if section.type === 'tracks' && everySong}<AddToPlaylistButton what={everySong} />{/if}
+					{#if section.type !== 'tracks' && section.type !== 'lyrics'}<ViewToggle />{/if}
+				</div>
 			</header>
 			{#if section.type === 'tracks'}
 				<TrackList
@@ -220,7 +233,31 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
+		gap: var(--space-3);
 		margin-bottom: var(--space-4);
+	}
+
+	h2 a {
+		color: inherit;
+		text-decoration: none;
+	}
+
+	h2 a:hover,
+	.all:hover {
+		text-decoration: underline;
+	}
+
+	.actions {
+		display: flex;
+		align-items: center;
+		gap: var(--space-3);
+	}
+
+	.all {
+		color: var(--text-muted);
+		font-weight: 600;
+		text-decoration: none;
+		white-space: nowrap;
 	}
 
 	h2 {
