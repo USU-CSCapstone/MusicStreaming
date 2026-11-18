@@ -31,6 +31,7 @@ mod build;
 mod distance;
 #[cfg(test)]
 mod full_scale;
+mod lyrics;
 mod near;
 mod query;
 mod rank;
@@ -40,6 +41,7 @@ mod union;
 mod words;
 
 pub use build::{Finishing, IndexBuilder};
+pub use lyrics::{LyricIndex, plain_lines};
 pub use query::Score;
 pub use rank::Rank;
 pub use union::Union;
