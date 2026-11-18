@@ -1214,11 +1214,11 @@ paths:
       summary: Search a library
       description: |
         Names, with typo tolerance, diacritic and case folding, word-order independence, and
-        exact-match precedence (`requirements/search.md` §3): of tracks, albums, artists, and
-        tags of every type, by their names (`requirements/search.md` §1). Results are identical
-        to on-device search over the same corpus (`requirements/search.md` §2.1). Playlists are
-        not searched until they are built, so no playlists section comes back. A track the caller
-        hid is not found, nor counted in its section's `total`, and nor is an album, artist or
+        exact-match precedence (`requirements/search.md` §3): of tracks, albums, artists, the
+        caller's own playlists, and tags of every type, by their names (`requirements/search.md`
+        §1). Results are identical to on-device search over the same corpus
+        (`requirements/search.md` §2.1). No one else's playlist is found, whatever their role. A
+        playlist is as `listPlaylists` shows it. A track the caller hid is not found, nor counted in its section's `total`, and nor is an album, artist or
         tag every track of which they hid (`requirements/conventions.md` §8); a tag's counts are
         of what they see, as `listTags` gives them.
 
@@ -1262,9 +1262,9 @@ paths:
         list sorts it. A ranked page continues after the last match of the one before, so a
         library that changes between pages neither repeats a match nor passes over one still
         there. What the caller hid is left out as `search` leaves it out. The `tags` section is
-        one type of tag, which `tagType` names; without it, `422`. The `playlists` section is
-        empty until playlists are searched, and `lyrics` answers `422` until they are indexed. A
-        section that is none of these is `404`.
+        one type of tag, which `tagType` names; without it, `422`. The `playlists` section is the
+        caller's own playlists. `lyrics` answers `422` until lyrics are indexed. A section that is
+        none of these is `404`.
       operationId: searchSection
       parameters:
         - $ref: '#/components/parameters/Query'

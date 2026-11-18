@@ -1,5 +1,7 @@
 //! A playlist as the API shows it.
 
+use std::collections::HashMap;
+
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
@@ -9,7 +11,7 @@ use crate::{Id, hidden};
 
 /// The spec's `Playlist`. `image` is the generated artwork (`artwork`), `customImage` is false
 /// as custom images are not served yet, and `personal` is left out.
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Playlist {
     pub id: Id,
@@ -33,9 +35,17 @@ pub struct Playlist {
 impl Playlist {
     /// The playlist as its user sees it, less its items of tracks they hid, `(count, duration)`
     /// (`requirements/conventions.md` §8).
-    pub(super) fn lose(&mut self, (count, duration): (i64, i64)) {
+    pub fn lose(&mut self, (count, duration): (i64, i64)) {
         self.track_count -= count;
         self.duration_us -= duration;
+    }
+
+    /// The playlist less its items of hidden tracks, if `lost`, by playlist as
+    /// [`hidden::playlists`] reads it, has any.
+    pub fn lose_from(&mut self, lost: &HashMap<i64, (i64, i64)>) {
+        if let Some(&lost) = lost.get(&self.id.0) {
+            self.lose(lost);
+        }
     }
 }
 

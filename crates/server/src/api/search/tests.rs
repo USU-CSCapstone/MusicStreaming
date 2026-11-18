@@ -2,9 +2,11 @@ use axum::Router;
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
-use super::super::testing::{catalog, eventually, json, send};
+use super::super::testing::{
+    TOKEN, add_device, add_user, call, catalog, conn, eventually, json, send,
+};
 use super::*;
-use crate::db::testing::{Album, Artist, Track, library};
+use crate::db::testing::{Album, Artist, Track, access, library};
 
 /// [`catalog::app`], plus an empty library 3.
 async fn app_with_catalog() -> (tempfile::TempDir, Arc<Database>, Router) {
@@ -627,4 +629,96 @@ async fn the_tags_section_pages_through_one_type() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "the tags of no type");
     let (status, _, _) = send(app.clone(), "GET", &format!("{base}&tagType=genre&sort=name")).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "tags have no sorts");
+}
+
+/// [`catalog::app`], plus user 2, who reaches library 1 with `user-token`; each has a playlist
+/// called Road Trip of tracks 1001 and 1002, and the owner Liked Songs, of track 1003. Gives
+/// the owner's Road Trip and Liked Songs IDs.
+async fn app_with_playlists() -> (tempfile::TempDir, Router, String, String) {
+    let (temp, _db, app) = app_with_catalog().await;
+    {
+        let conn = conn(&temp);
+        add_user(&conn, 2, "user");
+        add_device(&conn, 2, 2, "user-token");
+        access(&conn, 2, 1).unwrap();
+    }
+    let uri = "/api/v1/libraries/1/playlists";
+    let items = json!([{ "type": "track", "id": "1001" }, { "type": "track", "id": "1002" }]);
+    let mut ids = Vec::new();
+    for token in [TOKEN, "user-token"] {
+        let body = json!({ "title": "Road Trip", "items": items });
+        let (status, made) = call(&app, token, "POST", uri, Some(body)).await;
+        assert_eq!(status, StatusCode::CREATED, "{made}");
+        ids.push(made["id"].as_str().unwrap().to_owned());
+    }
+    let like = "/api/v1/libraries/1/tracks/1003/like";
+    assert_eq!(send(app.clone(), "PUT", like).await.0, StatusCode::NO_CONTENT);
+    let (_, all) = json(&app, &format!("{uri}?limit=100")).await;
+    let liked = all["items"].as_array().unwrap().iter().find(|p| p["kind"] == "liked").unwrap();
+    (temp, app, ids[0].clone(), liked["id"].as_str().unwrap().to_owned())
+}
+
+/// The playlists section's playlist IDs, of a search for `q` by the holder of `token`.
+async fn playlists_found(app: &Router, token: &str, q: &str) -> Vec<String> {
+    let uri = format!("/api/v1/libraries/1/search?q={q}&types=playlists");
+    let (status, body) = call(app, token, "GET", &uri, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let sections = body["sections"].as_array().unwrap();
+    let items = sections.iter().flat_map(|section| section["items"].as_array().unwrap());
+    items.map(|item| item["playlist"]["id"].as_str().unwrap().to_owned()).collect()
+}
+
+#[tokio::test]
+async fn a_search_finds_the_callers_own_playlists_and_no_one_elses() {
+    let (_temp, app, road, liked) = app_with_playlists().await;
+    assert_eq!(playlists_found(&app, TOKEN, "road").await, std::slice::from_ref(&road));
+    let (_, body) = json(&app, "/api/v1/libraries/1/search?q=road%20trip").await;
+    assert_eq!(
+        body["top"],
+        json!({ "type": "playlist", "playlist": listed(&app, "playlists", &road).await })
+    );
+    assert_eq!(playlists_found(&app, TOKEN, "liked").await, [liked]);
+
+    // User 2 finds theirs alone, though it is named the same, and has no Liked Songs to find.
+    let theirs = playlists_found(&app, "user-token", "road").await;
+    assert_eq!(theirs.len(), 1);
+    assert_ne!(theirs, [road]);
+    assert!(playlists_found(&app, "user-token", "liked").await.is_empty());
+}
+
+#[tokio::test]
+async fn a_playlist_is_found_as_its_list_shows_it() {
+    let (_temp, app, road, _) = app_with_playlists().await;
+    let hide = "/api/v1/libraries/1/tracks/1001/hidden";
+    assert_eq!(send(app.clone(), "PUT", hide).await.0, StatusCode::NO_CONTENT);
+    let (_, body) = json(&app, "/api/v1/libraries/1/search?q=road&types=playlists").await;
+    let listed = listed(&app, "playlists", &road).await;
+    assert_eq!(body["sections"][0]["items"][0], json!({ "type": "playlist", "playlist": listed }));
+    assert_eq!(listed["trackCount"], 1, "less the track hidden");
+}
+
+#[tokio::test]
+async fn the_playlists_section_pages_through_the_callers_playlists() {
+    let (_temp, app, road, liked) = app_with_playlists().await;
+    let uri = "/api/v1/libraries/1/playlists";
+    let body = json!({ "title": "Road Songs" });
+    let (status, _) = call(&app, TOKEN, "POST", uri, Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let base = "/api/v1/libraries/1/search/playlists?q=road";
+    // As good a match each, so by name: Road Songs, then Road Trip.
+    let (_, first) = json(&app, &format!("{base}&limit=1")).await;
+    assert_eq!(
+        (&first["items"][0]["playlist"]["title"], &first["total"]),
+        (&json!("Road Songs"), &json!(2))
+    );
+    let cursor = first["nextCursor"].as_str().unwrap();
+    let (_, rest) = json(&app, &format!("{base}&limit=1&cursor={cursor}")).await;
+    assert_eq!(
+        (&rest["items"][0]["playlist"]["id"], &rest["nextCursor"]),
+        (&json!(road), &Value::Null)
+    );
+    let (_, found) = json(&app, "/api/v1/libraries/1/search/playlists?q=liked").await;
+    assert_eq!(found["items"][0]["playlist"]["id"], json!(liked));
+    let (status, _, _) = send(app.clone(), "GET", &format!("{base}&sort=name")).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "playlists have no sorts here");
 }

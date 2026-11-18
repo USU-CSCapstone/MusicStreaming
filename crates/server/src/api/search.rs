@@ -13,7 +13,7 @@ use jewelcase_catalog::search::{
     self, Hid, MUSIC, SEARCHED, SearchResponse, SectionPage, SectionReading, SectionType, kinds,
     response, section_limit,
 };
-use jewelcase_core::Kind;
+use jewelcase_core::{Index, Kind, Union};
 use serde::Deserialize;
 
 pub use indexes::Indexes;
@@ -21,7 +21,7 @@ pub use indexes::Indexes;
 use super::extract::{Path, Query};
 use super::scope::Scope;
 use super::tag_filter::TagFilter;
-use super::{Id, Problem, page};
+use super::{Id, Problem};
 use crate::db::Database;
 
 /// The spec's `search` parameters.
@@ -53,9 +53,16 @@ pub async fn search(
     let tagged = indexes.tagged.get(&db, library, &filter, &kinds).await?;
     let index = indexes.index(&db, library).await?;
     // What the caller hid is gone from their library, so a search finds it nowhere.
+    // And the caller's own playlists, which no one else's search finds.
     let tags = filter.clone();
-    let hid = db.read(move |conn| Hid::read(conn, user, library, &tags)).await?;
-    let found = index.search_within(&query.q, &kinds, limit, |kind, id| {
+    let wants = kinds.contains(&Kind::Playlist);
+    let (hid, mine) = db
+        .read(move |conn| {
+            let mine = if wants { search::mine(conn, user, library)? } else { Index::default() };
+            Ok::<_, rusqlite::Error>((Hid::read(conn, user, library, &tags)?, mine))
+        })
+        .await?;
+    let found = Union(&[&index, &mine]).search_within(&query.q, &kinds, limit, |kind, id| {
         !hid.contains(kind, id)
             && tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
     });
@@ -95,10 +102,6 @@ pub async fn section(
     }
     let kind = match SectionType::named(&section).ok_or_else(Problem::not_found)? {
         SectionType::Kind(kind) => kind,
-        SectionType::Playlists => {
-            page::limit(query.limit)?;
-            return Ok(Json(SectionPage::empty(query.q)));
-        }
         SectionType::Lyrics => return Err(Problem::invalid("lyrics cannot be searched yet")),
     };
     let SectionQuery { q, tag_type, sort, order, cursor, limit, tag_all, tag_any } = query;
@@ -119,8 +122,14 @@ pub async fn section(
                 !hid.contains(kind, id)
                     && tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
             };
+            let mine = if kind == Kind::Playlist {
+                search::mine(conn, user, library)?
+            } else {
+                Index::default()
+            };
+            let both = Union(&[&index, &mine]);
             let group = group.as_deref();
-            search::section(conn, user, library, q, kind, group, reading, &index, keep, &hid)
+            search::section(conn, user, library, q, kind, group, reading, &both, keep, &hid)
         })
         .await?;
     Ok(Json(page))
