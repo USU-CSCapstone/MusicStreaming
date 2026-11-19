@@ -4,6 +4,7 @@ mod account_changes;
 mod albums;
 mod artists;
 mod audio;
+mod audit;
 mod authenticate;
 mod catalog_snapshot;
 mod changes;
@@ -133,6 +134,8 @@ pub fn router(state: AppState) -> Router {
     // Until setup is done, these answer `503 setup_required`.
     let after_setup = Router::new()
         .route("/auth/login", signed_out(post(login::login)))
+        .route("/auth/invites/check", signed_out(post(invites::redeem::check)))
+        .route("/auth/invites/redeem", signed_out(post(invites::redeem::redeem)))
         .merge(signed_in)
         .merge(admin)
         .route_layer(middleware::from_fn_with_state(state.clone(), setup::require));
@@ -195,7 +198,13 @@ mod tests {
         let (_temp, _db, app) = app("");
         let (_temp, _db, new_server) = app_before_setup("");
         let body = json!({ "username": "a".repeat(SIGNED_OUT_BODY_LIMIT), "password": "p" });
-        for (app, uri) in [(app, "/api/v1/auth/login"), (new_server, "/api/v1/setup")] {
+        let cases = [
+            (app.clone(), "/api/v1/auth/login"),
+            (app.clone(), "/api/v1/auth/invites/check"),
+            (app, "/api/v1/auth/invites/redeem"),
+            (new_server, "/api/v1/setup"),
+        ];
+        for (app, uri) in cases {
             let (status, _, problem) = send_json(app, "POST", uri, &body).await;
             assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{uri}");
             assert!(problem["detail"].as_str().unwrap().contains("length limit"), "{problem}");
