@@ -1607,6 +1607,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/users/{userId}/libraries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set an account's libraries
+         * @description Replaces the account's library grants with exactly `libraryIds` (a library named twice
+         *     counts once), and answers the account. An admin sets a user's grants; the owner sets an
+         *     admin's or a user's, and an admin's are kept for if it becomes a user again. No one sets
+         *     the owner's or their own: `403`. A library that does not exist is `422` and nothing
+         *     changes; an account that does not exist or is being deleted is `404`. Once committed,
+         *     what changed is recorded in the audit log and the account's devices are sent
+         *     `accessChanged`; a request that changes nothing does neither.
+         */
+        put: operations["adminSetUserLibraries"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/invites": {
         parameters: {
             query?: never;
@@ -2111,6 +2139,10 @@ export interface components {
             libraryIds: components["schemas"]["Id"][];
             /** @description Whether a reset link has been made for the account and has not expired. */
             resetPending: boolean;
+        };
+        UserLibraries: {
+            /** @description Every library the account is to be granted. */
+            libraryIds: components["schemas"]["Id"][];
         };
         AdminUserPage: components["schemas"]["PageInfo"] & {
             items: components["schemas"]["AdminUser"][];
@@ -3756,6 +3788,9 @@ export interface components {
             /** Format: uuid */
             editId: string;
             edit: components["schemas"]["QueueEdit"];
+        } | {
+            /** @constant */
+            type: "accessChanged";
         } | {
             /** @constant */
             type: "sessionRevoked";
@@ -6178,6 +6213,33 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminUserPage"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    adminSetUserLibraries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserLibraries"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUser"];
                 };
             };
             default: components["responses"]["Problem"];
