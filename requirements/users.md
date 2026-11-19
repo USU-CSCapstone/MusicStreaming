@@ -11,9 +11,11 @@ The account model is deliberately small. There are no per-library roles, no perm
 
 Every account holds exactly one:
 
-- **Owner** — a single account, created at first setup. Has every admin capability, plus promoting and demoting admins and transferring ownership. Cannot be demoted, suspended, or deleted by anyone, including itself. This guarantees a server can never be left with nobody able to administer it.
-- **Admin** — operates the server. Manages libraries, storage, and scanning; installs and toggles plugins and grants their permissions; manages accounts; grants and revokes library access. Cannot promote or demote other admins, or alter the owner.
+- **Owner** — a single account, created at first setup. Has every admin capability, plus promoting and demoting admins, transferring ownership, and reading the record of admin actions ([§8](#8-admin-capabilities--visibility)). Cannot be demoted, suspended, or deleted by anyone, including itself. This guarantees a server can never be left with nobody able to administer it.
+- **Admin** — operates the server. Manages libraries, storage, and scanning; installs and toggles plugins and grants their permissions; manages users; grants and revokes library access. Cannot promote or demote anyone, or act on the owner or on another admin.
 - **User** — listens. Browses, searches, and plays granted libraries, and maintains their own playlists, queues, downloads, history, and statistics. No visibility into server configuration or other accounts.
+
+**Rank decides who may act on whom.** An admin manages users only; the owner manages admins and users; no one acts on the owner; and no one suspends, deletes, demotes, or resets themselves. To *manage* an account is to grant or revoke its library access, suspend and restore it, sign out its devices, delete it, or issue it a reset link. Role changes, ownership transfer, and reading the record of admin actions are the owner's alone; creating, listing, and revoking invites is any admin's. The reason is that a reset link is a way into the account it is issued for, so an admin able to issue one for a fellow admin could take that admin's place, and by the same step the owner's. The trade is that only the owner can administer admins, which is a small load on one person in return for no admin being able to take over another.
 
 Ownership may be transferred to another admin. Transfer is explicit and confirmed, and the previous owner becomes a regular admin — the role is never held by two accounts at once and never by none.
 
@@ -29,10 +31,13 @@ Accounts are created through **invite links**. An admin generates one, the recip
 
 An invite supports:
 
-- **Single-use by default**, so one link creates one user.
-- **An expiry**, with a sensible default.
+- **Single-use only**, so one link creates one user. A link that created several would stay live after its purpose was served, and nothing about a household needs it.
+- **An expiry**, 7 days by default, which the admin may set from 1 to 30 days when creating the invite. A link that lingers is a standing way in, so it is short by default; the limit keeps even a generous choice from becoming one.
+- **Creating a user, never an admin.** Someone invited becomes a user; the owner promotes them afterwards, so role changes stay the owner's alone ([§1](#1-roles)).
 - **Pre-scoped library access**, so an invited person lands ready to listen with no follow-up from the admin.
 - **Revocation** at any time before redemption.
+
+An invite stops being pending when its creator is suspended, demoted, or deleted: a link made under authority that no longer exists is not left live, and the list shows that it ended rather than leaving it looking live.
 
 Admins see all pending invites — who created each, when it expires, whether it has been used. Redeemed, revoked, and expired invites are visibly distinguishable from live ones.
 
@@ -46,7 +51,9 @@ There is no public signup. A person without an invite cannot create an account, 
 - **Username and password.** No additional factors and no external identity in v1.
 - **No account enumeration.** Failure messaging is identical for an unknown account, a wrong password, and a suspended account.
 - **Credentials are never recoverable.** Stored passwords cannot be read back by anyone, including the owner. A forgotten password is resolved by a reset, never by retrieval.
-- **Password resets** are performed by the user when signed in, or initiated by an admin through a single-use expiring link. An admin never sets a password on someone's behalf.
+- **Password resets** are performed by the user when signed in, or initiated by an admin through a single-use expiring link, subject to the rank rule ([§1](#1-roles)). An admin never sets a password on someone's behalf.
+- **A reset link lasts 24 hours, and an account has one live link at a time.** Issuing another replaces it, so a link sent to the wrong place can be made useless. Redeeming one signs out every device on the account and **does not sign the person in**: they choose a new password and then sign in with it, so a link alone never opens a session. A link may be issued for a suspended account, so an admin can prepare one while the matter is settled, but it cannot be redeemed until the account is restored.
+- **Actions that cannot be undone, or that hand out authority, ask for the actor's current password:** transferring ownership, deleting an account, changing one's own password, promoting or demoting, and issuing a reset link. Sessions are long-lived ([§4](#4-sessions--devices)), so a device left unlocked would otherwise be enough. The cost is one extra prompt on rare actions.
 - **Changing a password** signs out all other devices, leaving the device that made the change signed in. Those devices are wiped of the catalog, art and lists they kept, but keep their downloaded audio ([`offline.md` §9](offline.md#9-download-lifecycle)).
 
 ### 3.1 Protection
@@ -67,7 +74,7 @@ A device carries a **name** (defaulted to something recognizable, user-editable)
 
 - **Sessions are long-lived.** A music app that demands frequent re-authentication is a broken music app. A device that has been offline a long time does not lose its session for having been idle.
 - **Users manage their own devices**, signing out any of them remotely, individually or all at once.
-- **Admins can sign out any device on the server**, for any account.
+- **Admins can sign out any device on the server**, for any account they manage ([§1](#1-roles)).
 
 ---
 
@@ -112,7 +119,7 @@ Admins have **full visibility into user data and no ability to act as a user.** 
 **Admins can:**
 - View any account's playlists, queues, downloads, history, and statistics.
 - See who is signed in, on what devices, and what is streaming now.
-- Manage accounts — invite, suspend, delete, reset passwords, sign out devices, grant and revoke access.
+- Manage accounts, under the rank rule ([§1](#1-roles)) — invite, suspend, delete, reset passwords, sign out devices, grant and revoke access.
 - Export any user's data on their behalf.
 
 **Admins cannot:**
@@ -123,14 +130,14 @@ Admins have **full visibility into user data and no ability to act as a user.** 
 
 Every user is told plainly, in the interface and not only in documentation, that admins can see their listening data. A privacy boundary people do not know the shape of is not a privacy boundary.
 
-Administrative actions affecting an account are recorded, so the history of who changed what is available to the owner.
+Administrative actions affecting an account are recorded, so the history of who changed what is available to the owner, and **only the owner reads it**: an admin able to read the record could see what the owner and other admins did, and the record would stop being a check on admins. It is kept for one year, long enough to answer a question about a change that went unnoticed, and no longer than that, since it names people.
 
 ---
 
 ## 9. Account Lifecycle
 
 - **Suspension.** Cannot sign in, all devices signed out, active playback stops. Everything owned is preserved untouched, and restoring returns the account exactly as it was. The owner cannot be suspended.
-- **Deletion.** Explicitly confirmed, permanent, removing all personal data — playlists, queues, downloads, devices, history, statistics. It **never touches audio files, metadata, or artwork.** No account operation can damage a collection. The owner cannot be deleted; removing them requires transferring ownership first.
+- **Deletion.** Explicitly confirmed, permanent, removing all personal data — playlists, queues, downloads, devices, history, statistics. It **never touches audio files, metadata, or artwork.** No account operation can damage a collection. **Deletion does not recall what plugins already received from the account** ([§7](#7-privacy--personal-data)): it does not ask them to forget, so that it never depends on a plugin being reachable, and the confirmation says so. The owner cannot be deleted; removing them requires transferring ownership first.
 - **Export.** A user can export their own data in a portable, documented format useful outside Jewelcase. Admins can export on a user's behalf, including for a suspended account, so someone leaving can be given their data without their account first being restored.
 
 ---

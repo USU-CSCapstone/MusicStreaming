@@ -54,8 +54,8 @@ Built: an OpenAPI spec written before the server. Endpoints for libraries, track
 Built: first-run owner setup, and login and logout with argon2 and zxcvbn. Sessions are tied to devices. Sign-in limits apply per account and per origin, trusting `X-Forwarded-For` from private-network proxies. The owner, admin, and user roles exist. Library scoping returns `404` for anything out of reach.
 
 **Still open from this stage:**
-1. `session_revoked` can't be sent over HTTP, because revocation clears the token hash. Decide this alongside password changes (Stage 7).
-2. Nothing reclaims a `deviceId` after `credentials_changed` yet.
+1. ~~`session_revoked` can't be sent over HTTP.~~ **Decided, built:** a signed-out device keeps its token hash and answers `401 session_revoked`.
+2. ~~Nothing reclaims a `deviceId` after `credentials_changed`.~~ **Decided:** login honours `deviceId` for a `credentials_changed` device of the same account (Stage 7).
 3. `login_attempts` is never pruned.
 
 **End goal (reached):** Only the owner can exist, and every request is scoped to what the caller may reach. [`users.md` §2.1, §3, §10](requirements/users.md) and [`libraries.md` §4](requirements/libraries.md#4-isolation) are met.
@@ -110,8 +110,8 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 
 **Open questions:**
 1. The format for exporting a user's data ([`users.md` §9](requirements/users.md#9-account-lifecycle)).
-2. The default invite expiry, and the reset link's lifetime.
-3. How `session_revoked` reaches a device (carried over from Stage 3).
+2. ~~The default invite expiry, and the reset link's lifetime.~~ **Decided:** invites expire in 7 days by default (the admin may choose 1–30); reset links last 24 hours ([`users.md` §2.2, §3](requirements/users.md#22-invites)).
+3. ~~How `session_revoked` reaches a device.~~ **Decided:** as Stage 3 #1.
 4. How duplicates are stored and detected: matching tags, matching content, or the same album under two paths ([`scanning.md` §9](requirements/scanning.md#9-duplicates)).
 5. The default interval for scheduled scans.
 6. What the admin UI tells users about admin visibility, and where it says it ([`users.md` §8](requirements/users.md#8-admin-capabilities--visibility)).
@@ -224,6 +224,7 @@ Stage 10 is two plans. The first makes the catalog, search and queue building wo
 6. Permissions for user-action hooks: one per kind of personal data, or one per kind of action.
 7. Whether plugins can call each other, and under whose grants.
 8. **Plugins setting likes and hides**, such as importing a user's Last.fm loves into Liked Songs. Plugins hear likes and hides ([`plugins.md` §8](requirements/plugins.md#8-events)) but cannot set them. Setting them would be a new path into personal data, which needs requirements of its own: whose consent, and whether the user sees what a plugin liked for them.
+9. **Deleting an account does not ask plugins to forget what it shared.** Clearing personal data does ([`users.md` §7](requirements/users.md#7-privacy--personal-data)), but deletion deliberately does not, so it never waits on a plugin ([`users.md` §9](requirements/users.md#9-account-lifecycle)). Decide whether it should, and how a plugin that is unreachable is handled.
 
 **End goal:** A plugin can add a new kind of feature, including its own pages and music the user doesn't own, without a core release. [`plugins.md`](requirements/plugins.md) is fully met.
 
