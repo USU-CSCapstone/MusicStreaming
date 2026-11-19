@@ -44,6 +44,10 @@ pub enum Action {
     AccountCreated { invite_id: i64, library_ids: Vec<i64> },
     /// An account was granted these libraries and lost these, each list ascending.
     AccessChanged { granted: Vec<i64>, revoked: Vec<i64> },
+    /// An account was suspended.
+    Suspended,
+    /// A suspended account was restored.
+    Restored,
 }
 
 impl Action {
@@ -52,6 +56,8 @@ impl Action {
         match self {
             Self::AccountCreated { .. } => "account_created",
             Self::AccessChanged { .. } => "access_changed",
+            Self::Suspended => "suspended",
+            Self::Restored => "restored",
         }
     }
 
@@ -67,6 +73,7 @@ impl Action {
                 "granted": ids(granted),
                 "revoked": ids(revoked),
             }),
+            Self::Suspended | Self::Restored => json!({}),
         }
     }
 }

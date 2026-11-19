@@ -29,6 +29,9 @@ const DEFAULT_DAYS: i64 = 7;
 /// The most days an invite may last.
 const MAX_DAYS: i64 = 30;
 
+/// Whether an invite is pending at `?2`: neither redeemed nor revoked, and not yet expired.
+const PENDING: &str = "redeemed_at IS NULL AND revoked_at IS NULL AND expires_at > ?2";
+
 const DAY_MS: i64 = 86_400_000;
 
 /// The invites' order: newest first, through `invites_by_created`.
@@ -226,13 +229,23 @@ pub async fn revoke(
     let invite = db
         .write(move |tx| {
             let now = now_ms();
-            tx.prepare_cached(
-                "UPDATE invites SET revoked_at = ?2 WHERE id = ?1 AND redeemed_at IS NULL \
-                 AND revoked_at IS NULL AND expires_at > ?2",
-            )?
+            tx.prepare_cached(&format!(
+                "UPDATE invites SET revoked_at = ?2 WHERE id = ?1 AND {PENDING}"
+            ))?
             .execute([id, now])?;
             find(tx, id, now)
         })
         .await?;
     invite.map(Json).ok_or_else(Problem::not_found)
+}
+
+/// Revokes every invite `user` made that is pending at `now`, for when their authority to
+/// invite ends: a link made under authority that no longer exists is not left live
+/// (`requirements/users.md` §2.2).
+pub fn revoke_pending_of(conn: &Connection, user: i64, now: i64) -> rusqlite::Result<()> {
+    conn.prepare_cached(&format!(
+        "UPDATE invites SET revoked_at = ?2 WHERE created_by = ?1 AND {PENDING}"
+    ))?
+    .execute([user, now])
+    .map(drop)
 }

@@ -33,6 +33,7 @@ pub fn router() -> Router<AppState> {
         .route("/admin/users", get(accounts::list))
         .route("/admin/users/library-access", post(accounts::access::change))
         .route("/admin/users/{user_id}/libraries", put(accounts::access::set))
+        .route("/admin/users/{user_id}/status", put(accounts::status::set))
         .route("/admin/audit-log", get(audit::list))
         .route("/admin/invites", get(invites::list))
         .route("/admin/invites/{invite_id}", delete(invites::revoke))

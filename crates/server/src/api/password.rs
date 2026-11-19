@@ -97,6 +97,15 @@ async fn off_thread<T: Send + 'static>(
     .map_err(|_| Problem::new(Code::Internal))?
 }
 
+/// Takes every [`HASHING`] permit, waiting for checks already running, so a check started
+/// while the guard is held waits until it drops.
+#[cfg(test)]
+pub async fn hold_checks() -> tokio::sync::SemaphorePermit<'static> {
+    let all = thread::available_parallelism().map_or(1, |cores| permits(cores.get()));
+    let all = u32::try_from(all).expect("fewer permits than u32 holds");
+    HASHING.acquire_many(all).await.expect("the semaphore is never closed")
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
