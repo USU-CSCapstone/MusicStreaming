@@ -66,7 +66,8 @@ CREATE TABLE invite_libraries (
 
 -- What was done to each account, and by whom (requirements/users.md §8). No foreign keys: a row
 -- outlives both accounts, so it keeps their names as they were when it was written. The actor
--- is NULL for what no one signed in did, such as the host's owner reset.
+-- is NULL for what no one signed in did, such as the host's owner reset; its name alone is NULL
+-- where that account was already being deleted, and so had none.
 CREATE TABLE admin_actions (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     at           INTEGER NOT NULL,
@@ -78,7 +79,7 @@ CREATE TABLE admin_actions (
     target_id    INTEGER NOT NULL,
     target_name  TEXT    NOT NULL,
     detail       TEXT    NOT NULL CHECK (json_valid(detail) AND json_type(detail) = 'object'),
-    CHECK ((actor_id IS NULL) = (actor_name IS NULL))
+    CHECK (actor_name IS NULL OR actor_id IS NOT NULL)
 ) STRICT;
 
 -- So deleting an account finds its rows here without scanning these tables, whose other indexes
