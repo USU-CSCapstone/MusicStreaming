@@ -78,6 +78,8 @@ fn version(conn: &Connection) -> rusqlite::Result<usize> {
 
 #[cfg(test)]
 mod tests {
+    use rusqlite::types::Value;
+
     use super::*;
 
     /// Whether the database has a table named `name`.
@@ -416,6 +418,190 @@ mod tests {
             .query_row("SELECT content_type FROM idempotency_keys", [], |row| row.get(0))
             .unwrap();
         assert_eq!(content_type, "application/json");
+    }
+
+    /// The rows of each of `tables` in order, reading only the columns listed for it, so a table
+    /// reads the same before and after a migration adds columns to it.
+    fn every_row(conn: &Connection, tables: &[(String, String)]) -> Vec<(String, Vec<Vec<Value>>)> {
+        tables
+            .iter()
+            .map(|(table, columns)| {
+                let mut statement = conn
+                    .prepare(&format!("SELECT {columns} FROM {table} ORDER BY {columns}"))
+                    .unwrap();
+                let width = statement.column_count();
+                let rows = statement
+                    .query_map([], |row| (0..width).map(|i| row.get(i)).collect())
+                    .unwrap()
+                    .collect::<rusqlite::Result<_>>()
+                    .unwrap();
+                (table.clone(), rows)
+            })
+            .collect()
+    }
+
+    /// Every table but SQLite's own, with its columns as a comma-separated list.
+    fn tables(conn: &Connection) -> Vec<(String, String)> {
+        conn.prepare(
+            "SELECT t.name, group_concat(c.name, ', ') FROM sqlite_schema AS t, \
+             pragma_table_info(t.name) AS c \
+             WHERE t.type = 'table' AND t.name NOT LIKE 'sqlite_%' GROUP BY t.name ORDER BY t.name",
+        )
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+    }
+
+    /// Every foreign key as `(child table, column, parent table)`.
+    fn references(conn: &Connection) -> Vec<(String, String, String)> {
+        conn.prepare(
+            "SELECT t.name, f.\"from\", f.\"table\" \
+             FROM sqlite_schema AS t, pragma_foreign_key_list(t.name) AS f \
+             WHERE t.type = 'table' ORDER BY 1, 2, 3",
+        )
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+    }
+
+    #[test]
+    fn rebuilding_users_keeps_every_account_and_everything_that_refers_to_one() {
+        use crate::db::testing::{Album, Device, Track, User};
+
+        let mut conn = configured();
+        let before = MIGRATIONS.iter().position(|m| m.name.starts_with("0015")).unwrap();
+        migrate(&mut conn, &MIGRATIONS[..before]).unwrap();
+        User::new(1, "owner").insert(&conn).unwrap();
+        User { status: "suspended", password: "$argon2id$x".into(), ..User::new(2, "user") }
+            .insert(&conn)
+            .unwrap();
+        conn.execute_batch("UPDATE users SET avatar_hash = x'0102', feed_head = 4 WHERE id = 1;")
+            .unwrap();
+        older_library(&conn, 1);
+        Album::new(1, 1).insert(&conn).unwrap();
+        Track::new(1, 1, 1).insert(&conn).unwrap();
+        for (user, token_hash) in [(1, [1; 32]), (2, [2; 32])] {
+            Device::new(user, user, token_hash).insert(&conn).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO library_access (user_id, library_id, granted_at) VALUES (2, 1, 0);
+             INSERT INTO plays (id, user_id, device_id, library_id, track_id, title, artists, \
+                                artist_keys, album_title_key, album_artists_key, genre_keys, \
+                                duration_us, started_at, listen_time_ms, ended, context, origin, \
+                                updated_at)
+             VALUES ('p', 2, 2, 1, 1, 'T', '[]', '[]', '', '', '[]', 1000, 0, 0, 'finished', '{}', \
+                     'manual', 0);
+             INSERT INTO playlists (id, library_id, user_id, title, folded, sort_key, created_at, \
+                                    modified_at)
+             VALUES (7, 1, 2, 'Mine', 'mine', x'', 0, 0);
+             INSERT INTO playlist_items (playlist_id, key, library_id, track_id, added_at)
+             VALUES (7, 1048576, 1, 1, 0);
+             INSERT INTO queues (user_id, queue_id, version, context, state, active)
+             VALUES (2, 'q', 0, '{}', '{}', 1);
+             INSERT INTO queue_lists (user_id, hash, library_id, tracks, length)
+             VALUES (2, 'h', 1, x'0100000000000000', 1);
+             INSERT INTO queue_list_uses (user_id, queue_id, hash) VALUES (2, 'q', 'h');
+             INSERT INTO login_attempts (attempted_at, username_attempted, user_id, origin, \
+                                         succeeded)
+             VALUES (0, 'user2', 2, 'here', 1);",
+        )
+        .unwrap();
+        let old_tables = tables(&conn);
+        let rows = every_row(&conn, &old_tables);
+        let referring = references(&conn);
+        assert!(referring.iter().filter(|(_, _, parent)| parent == "users").count() > 10);
+
+        migrate(&mut conn, MIGRATIONS).unwrap();
+
+        assert_eq!(every_row(&conn, &old_tables), rows, "every row is kept");
+        let added = ["admin_actions", "invite_libraries", "invites"].map(String::from);
+        let after: Vec<_> =
+            references(&conn).into_iter().filter(|(child, ..)| !added.contains(child)).collect();
+        assert_eq!(after, referring, "every reference to users still names it");
+        assert_eq!(missing_parents(&conn), Vec::<String>::new());
+        assert!(!conn.prepare("PRAGMA foreign_key_check").unwrap().exists([]).unwrap());
+        let owners: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE name = 'users_one_owner'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(owners, 1, "the one-owner index is made again");
+    }
+
+    /// A database at the latest schema, with the owner, account 2 and account 3.
+    fn accounts() -> Connection {
+        use crate::db::testing::User;
+
+        let mut conn = configured();
+        migrate(&mut conn, MIGRATIONS).unwrap();
+        for (id, role) in [(1, "owner"), (2, "user"), (3, "user")] {
+            User::new(id, role).insert(&conn).unwrap();
+        }
+        conn
+    }
+
+    /// Whether `sql` is refused by a constraint.
+    fn refused(conn: &Connection, sql: &str) -> bool {
+        match conn.execute_batch(sql) {
+            Err(rusqlite::Error::SqliteFailure(error, _)) => {
+                error.code == rusqlite::ErrorCode::ConstraintViolation
+            }
+            other => panic!("{sql}: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_name_is_taken_until_its_account_is_being_deleted() {
+        use crate::db::testing::{User, mark_deleting};
+
+        let conn = accounts();
+        let taker = |name: &str| User { username: name.into(), ..User::new(4, "user") };
+        assert!(taker("USER2").insert(&conn).is_err(), "names are unique whatever their case");
+        mark_deleting(&conn, 2).unwrap();
+        mark_deleting(&conn, 3).unwrap();
+        taker("User2").insert(&conn).unwrap();
+    }
+
+    #[test]
+    fn the_owner_is_neither_suspended_nor_deleted() {
+        let conn = accounts();
+        assert!(refused(&conn, "UPDATE users SET status = 'suspended' WHERE id = 1"));
+        assert!(refused(
+            &conn,
+            "UPDATE users SET status = 'deleting', username = NULL WHERE id = 1"
+        ));
+    }
+
+    #[test]
+    fn an_account_has_no_name_exactly_while_it_is_being_deleted() {
+        let conn = accounts();
+        assert!(refused(&conn, "UPDATE users SET username = NULL WHERE id = 2"));
+        assert!(refused(&conn, "UPDATE users SET status = 'deleting' WHERE id = 2"));
+        conn.execute_batch("UPDATE users SET status = 'deleting', username = NULL WHERE id = 2")
+            .unwrap();
+        assert!(refused(&conn, "UPDATE users SET username = 'back' WHERE id = 2"));
+        assert!(refused(&conn, "UPDATE users SET username = 'a b' WHERE id = 3"));
+    }
+
+    #[test]
+    fn a_reset_link_has_both_its_hash_and_its_expiry() {
+        let conn = accounts();
+        assert!(refused(&conn, "UPDATE users SET reset_hash = x'01' WHERE id = 2"));
+        assert!(refused(&conn, "UPDATE users SET reset_expires_at = 1 WHERE id = 2"));
+        conn.execute_batch(
+            "UPDATE users SET reset_hash = x'01', reset_expires_at = 1 WHERE id = 2",
+        )
+        .unwrap();
+        assert!(refused(
+            &conn,
+            "UPDATE users SET reset_hash = x'01', reset_expires_at = 1 WHERE id = 3"
+        ));
     }
 
     #[test]

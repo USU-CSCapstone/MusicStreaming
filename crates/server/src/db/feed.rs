@@ -140,7 +140,8 @@ pub fn head(conn: &Connection, feed: Feed) -> Result<i64> {
 }
 
 /// Starts a new run of the server: draws its epoch, keeps where every feed is, which is where the
-/// run before ended, and returns the epoch. Call it once each time the database is opened.
+/// run before ended, and returns the epoch. Call it once each time the database is opened. An
+/// account being deleted is left out, since its feed is going.
 pub fn start_epoch(conn: &Connection) -> Result<i64> {
     let epoch = new_id()?;
     conn.execute("INSERT INTO feed_epochs (epoch) VALUES (?1)", [epoch])?;
@@ -152,7 +153,7 @@ pub fn start_epoch(conn: &Connection) -> Result<i64> {
     )?;
     conn.execute(
         "INSERT INTO account_feed_starts (started, user_id, head) \
-         SELECT ?1, id, feed_head FROM users",
+         SELECT ?1, id, feed_head FROM users WHERE status <> 'deleting'",
         [started],
     )?;
     Ok(epoch)
@@ -182,4 +183,32 @@ pub fn continues(conn: &Connection, feed: Feed, epoch: Option<i64>, after: i64) 
         .optional()?
         .flatten();
     Ok(reached.is_some_and(|reached| after <= reached))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::testing::{User, mark_deleting, open};
+
+    #[tokio::test]
+    async fn a_start_keeps_no_feed_of_an_account_being_deleted() {
+        let (_temp, db) = open();
+        let started = db
+            .write(|tx| {
+                for (id, role) in [(1, "owner"), (2, "user")] {
+                    User::new(id, role).insert(tx)?;
+                }
+                mark_deleting(tx, 2)?;
+                start_epoch(tx)?;
+                tx.prepare(
+                    "SELECT user_id FROM account_feed_starts \
+                     WHERE started = (SELECT max(started) FROM feed_epochs)",
+                )?
+                .query_map([], |row| row.get(0))?
+                .collect::<Result<Vec<i64>>>()
+            })
+            .await
+            .unwrap();
+        assert_eq!(started, [1]);
+    }
 }

@@ -5,9 +5,11 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
-use rusqlite::Connection;
+use axum::response::{IntoResponse, Response};
+use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
+use super::authenticate::unauthenticated;
 use super::scope::Caller;
 use super::{Id, Problem};
 use crate::db::Database;
@@ -23,10 +25,12 @@ pub struct User {
     has_avatar: bool,
 }
 
-/// The account `id`, as the spec's `User`.
+/// The account `id`, as the spec's `User`. An account being deleted is not found, as it has no
+/// name.
 pub fn user(conn: &Connection, id: i64) -> rusqlite::Result<User> {
     conn.prepare_cached(
-        "SELECT id, username, display_name, role, avatar_hash IS NOT NULL FROM users WHERE id = ?1",
+        "SELECT id, username, display_name, role, avatar_hash IS NOT NULL FROM users \
+         WHERE id = ?1 AND status <> 'deleting'",
     )?
     .query_row([id], |row| {
         Ok(User {
@@ -39,9 +43,14 @@ pub fn user(conn: &Connection, id: i64) -> rusqlite::Result<User> {
     })
 }
 
-/// `getMe`: the caller's own account.
-pub async fn get(State(db): State<Arc<Database>>, caller: Caller) -> Result<Json<User>, Problem> {
-    Ok(Json(db.read(move |conn| user(conn, caller.user)).await?))
+/// `getMe`: the caller's own account. One deleted since the gate let the request through answers
+/// as the gate now would, `401 unauthenticated`.
+pub async fn get(State(db): State<Arc<Database>>, caller: Caller) -> Response {
+    match db.read(move |conn| user(conn, caller.user).optional()).await {
+        Ok(Some(me)) => Json(me).into_response(),
+        Ok(None) => unauthenticated(),
+        Err(error) => Problem::from(error).into_response(),
+    }
 }
 
 /// Longer names are refused, so no one stores megabytes in an account or device row.
@@ -64,3 +73,6 @@ pub fn check_username(username: &str) -> Result<(), Problem> {
         Err(Problem::invalid("username must be 1 to 32 letters, digits, '_', or '-'"))
     }
 }
+
+#[cfg(test)]
+mod tests;
