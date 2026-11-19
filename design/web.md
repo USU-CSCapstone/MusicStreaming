@@ -57,6 +57,9 @@ and commit the result.
 | `src/lib/track-sort.ts`    | Sorting a list the page holds by the core's comparator through `core-wasm`, the order the server reproduces for a recipe (`design/general.md` §3). Only the pages that sort locally import it, so no other page waits for the core; they and the queue worker download the one WebAssembly file between them (`design/general.md` §7.1) |
 | `src/lib/components/`      | Shell (sidebar, tab bar, player), collection and track views, waveform                                                                                  |
 | `src/routes/`              | One route per view: `/albums`, `/albums/[id]`, `/artists/…`, `/playlists/…`, `/songs`, `/search`, `/account`; `/setup` and `/login` without the shell   |
+| `src/routes/admin/invites/` | The Invites page: make an invite with its libraries and expiry, copy its link once (built in the browser as `{origin}{base}/invite#{code}`, held only in component state, with a note that it works only where that address does), and list, page and revoke invites |
+| `src/lib/admin-list.svelte.ts` | `AdminList`: a cursor-paged list for admin pages, with no library: the rows, `hasMore`, `loadMore()`, `reload()` and `replace()` for a row the server answered for. The Invites page uses it, and the accounts and audit pages will |
+| `src/lib/components/CopyLink.svelte` | A link shown whole and selectable with a Copy button; where the clipboard is out of reach it selects the text instead |
 | `static/`                  | The web manifest and the app's icons                                                                                                                    |
 
 ## Not built yet

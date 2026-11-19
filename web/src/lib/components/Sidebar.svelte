@@ -11,6 +11,7 @@
 
 	const library = $derived(page.data.library);
 	const onLibraries = $derived(page.route.id?.startsWith('/admin/libraries') ?? false);
+	const onInvites = $derived(page.route.id?.startsWith('/admin/invites') ?? false);
 	const onPlugins = $derived(page.route.id?.startsWith('/admin/plugins') ?? false);
 	// Libraries and plugins are administered, so only admins and the owner see them
 	// (`requirements/users.md` §1).
@@ -60,6 +61,16 @@
 				>
 					<Icon name="folder" size={18} />
 					Libraries
+				</a>
+			</li>
+			<li>
+				<a
+					href={resolve('/admin/invites')}
+					class:active={onInvites}
+					aria-current={onInvites ? 'page' : undefined}
+				>
+					<Icon name="plus" size={18} />
+					Invites
 				</a>
 			</li>
 			<li>

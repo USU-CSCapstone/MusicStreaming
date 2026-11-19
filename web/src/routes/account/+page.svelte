@@ -228,6 +228,10 @@
 				<span class="muted">Scan your music, and see how the last scan went.</span>
 			</li>
 			<li>
+				<a href={resolve('/admin/invites')}>Invites</a>
+				<span class="muted">Let people join, with the libraries they can reach.</span>
+			</li>
+			<li>
 				<a href={resolve('/admin/plugins')}>Plugins</a>
 				<span class="muted">Add features, and approve what each one reaches.</span>
 			</li>
