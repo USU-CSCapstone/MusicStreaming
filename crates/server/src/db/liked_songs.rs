@@ -12,11 +12,13 @@ use jewelcase_catalog::liked::TITLE;
 
 /// Makes a Liked Songs, empty and pinned, for every user in every library they reach that has
 /// none and that they did not delete theirs in, so every user has one from the start. Called
-/// wherever a user may come to reach a library: as one is created, and as the owner is.
+/// wherever a user may come to reach a library: as one is created, and as the owner is. An
+/// account being deleted gets none.
 pub fn ensure(conn: &Connection) -> Result<()> {
     let missing: Vec<(i64, i64)> = conn
         .prepare_cached(concat!(
-            "SELECT u.id, l.id FROM users u CROSS JOIN libraries l WHERE ",
+            "SELECT u.id, l.id FROM users u CROSS JOIN libraries l \
+             WHERE u.status <> 'deleting' AND ",
             reaches!(admin: "u.role <> 'user'", user: "u.id", library: "l.id"),
             " AND NOT EXISTS (SELECT 1 FROM playlists p \
                WHERE p.user_id = u.id AND p.library_id = l.id AND p.kind = 'liked') \

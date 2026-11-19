@@ -4,7 +4,7 @@ use rusqlite::{Connection, OptionalExtension};
 
 use super::*;
 use crate::db::catalog;
-use crate::db::testing::{Album, Image, Track, User, access, library, open};
+use crate::db::testing::{Album, Image, Track, User, access, library, mark_deleting, open};
 
 /// Each Liked Songs as (user, library, title, pinned, track count, artwork), by user and library.
 type Row = (i64, i64, String, bool, i64, Option<String>);
@@ -101,4 +101,25 @@ async fn it_keeps_no_artwork_of_its_tracks() {
         .await
         .unwrap();
     assert_eq!(keys, [None, Some("5".to_owned())]);
+}
+
+#[tokio::test]
+async fn an_account_being_deleted_gets_none() {
+    let (_temp, db) = open();
+    let rows = db
+        .write(|tx| {
+            for (id, role) in [(1, "owner"), (2, "admin"), (3, "user")] {
+                User::new(id, role).insert(tx)?;
+            }
+            library(tx, 10, "Music", "/music")?;
+            access(tx, 3, 10)?;
+            tx.execute("DELETE FROM playlists WHERE kind = 'liked'", [])?;
+            mark_deleting(tx, 2)?;
+            mark_deleting(tx, 3)?;
+            ensure(tx)?;
+            liked(tx)
+        })
+        .await
+        .unwrap();
+    assert_eq!(rows, [new(1, 10)]);
 }
