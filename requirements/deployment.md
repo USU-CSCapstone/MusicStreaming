@@ -29,6 +29,7 @@ Everything else has a working default. **A user who sets only these three runs a
 - **The server is reachable as soon as it starts**, presenting the guided owner setup ([`users.md` §2.1](users.md#21-first-run)). It does not wait on a scan.
 - **Setup is completed right after first start.** Until it is, anyone who reaches the server can claim it as owner, including a web page open in a browser on the same network, through DNS rebinding, so the documentation tells the user to finish setup before doing anything else.
 - **The first scan starts on its own** once a library is configured, and the library is usable while it runs ([`scanning.md` §5](scanning.md#5-behavior)).
+- **A lost owner password is recovered from the host.** Starting the server with `JEWELCASE_OWNER_RESET=1` logs a single-use reset link for the owner, once; the variable is removed afterwards. The server has no commands to run, only environment settings, so this is the recovery path. It adds no exposure, because anyone with a shell on the host can already read the data directory and do the same.
 - **A restart is never a fresh start.** Everything in the data directory survives the container being recreated, which is the normal way containers are updated.
 
 ---
