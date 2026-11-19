@@ -29,7 +29,9 @@
 			const me: User | null = response.ok ? await response.json() : null;
 			return `You're signed in${me ? ` as ${me.displayName}` : ''}. Sign out first to use this invite.`;
 		}
-		if (!code) return INVALID;
+		// The code left the address bar as the page opened, so a reload, or a tab the browser
+		// reopened, has none; the link the person was sent still has it.
+		if (!code) return 'Open the invite link you were sent again to continue.';
 		// Opening the link is the choice to reach the server, and this page has no switch for it.
 		if (connectivity.workOffline) connectivity.setWorkOffline(false);
 		try {
