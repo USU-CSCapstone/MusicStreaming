@@ -2238,6 +2238,42 @@ paths:
               schema: { $ref: '#/components/schemas/AdminUser' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /admin/users/{userId}/status:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      tags: [Admin]
+      summary: Suspend or restore an account
+      description: |
+        Suspends (`suspended`) or restores (`active`) the account, and answers it. A suspended
+        account cannot sign in, and its token and password answer exactly as an unknown
+        account's would. Suspending signs out every device of the account (each later request
+        with its token is `401 session_revoked` with `logged_out` once it is restored), clears
+        its password reset link and revokes the invites it made that are still pending, all at
+        once; then its realtime connections are sent `sessionRevoked` and closed, which stops
+        its playback. Its playlists, plays and everything else it owns are kept. Restoring lets
+        it sign in again and changes nothing else, so no device signed out by the suspension
+        returns. An admin suspends or restores a user; the owner an admin or a user. No one
+        suspends the owner or themselves: `403`. An account that does not exist or is being
+        deleted is `404`. Each change is recorded in the audit log; setting the status the
+        account already has changes nothing and records nothing.
+      operationId: adminSetUserStatus
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserStatus' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUser' }
+        default: { $ref: '#/components/responses/Problem' }
+
   # ───────────────────────────── Admin: audit log ─────────────────────────────
   /admin/audit-log:
     get:
@@ -3225,6 +3261,15 @@ components:
           type: array
           description: Every library the account is to be granted.
           items: { $ref: '#/components/schemas/Id' }
+
+    UserStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [active, suspended]
+          description: Whether the account can sign in.
 
     LibraryAccessChange:
       type: object

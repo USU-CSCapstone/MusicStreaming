@@ -9,7 +9,10 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::api::{Code, Problem};
 
 /// The account an action may go ahead on.
-pub struct Target;
+pub struct Target {
+    /// Whether it is suspended.
+    pub suspended: bool,
+}
 
 /// How far a role reaches: an account manages only those whose role ranks strictly below.
 fn rank(role: &str) -> u8 {
@@ -38,8 +41,8 @@ pub fn authorize(conn: &Connection, actor: i64, target: i64) -> Result<Target, P
         Some((role, status)) if status == "active" && rank(&role) > 0 => rank(&role),
         _ => return Err(forbidden("Only an active admin or the owner can manage accounts.")),
     };
-    let target_role = match read(target)? {
-        Some((role, status)) if status != "deleting" => role,
+    let (target_role, target_status) = match read(target)? {
+        Some((role, status)) if status != "deleting" => (role, status),
         _ => return Err(Problem::not_found()),
     };
     if actor == target {
@@ -49,6 +52,6 @@ pub fn authorize(conn: &Connection, actor: i64, target: i64) -> Result<Target, P
     } else if actor_rank <= rank(&target_role) {
         Err(forbidden("Only the owner can do this to an admin's account."))
     } else {
-        Ok(Target)
+        Ok(Target { suspended: target_status == "suspended" })
     }
 }
