@@ -1,16 +1,21 @@
-//! Accounts, for admins: `adminListUsers` (`api/openapi.yaml`, Admin). An admin sees every
-//! account, whatever its role (`requirements/users.md` §8). Admins and the owner only, as
-//! everything under `/admin` is (`authenticate`).
+//! Accounts, for admins: `adminListUsers` and `adminSetUserLibraries` (`api/openapi.yaml`,
+//! Admin). An admin sees every account, whatever its role (`requirements/users.md` §8), and acts
+//! on those the rank rule allows ([`authorize`]). Admins and the owner only, as everything under
+//! `/admin` is (`authenticate`).
 
+pub(super) mod access;
+mod authorize;
 #[cfg(test)]
 mod tests;
+
+pub(super) use authorize::authorize;
 
 use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
-use rusqlite::Row;
 use rusqlite::types::Value;
+use rusqlite::{Connection, Row};
 use serde::{Deserialize, Serialize};
 
 use super::extract::Query;
@@ -80,6 +85,14 @@ fn from_row(row: &Row, now: i64) -> rusqlite::Result<AdminUser> {
         library_ids: row.get::<_, Column<Vec<i64>>>(7)?.0.into_iter().map(Id).collect(),
         reset_pending: reset_expires_at.is_some_and(|expires| expires > now),
     })
+}
+
+/// Account `id` as the list shows it, as it stands now. One being deleted has no name, so the
+/// caller has made sure it is not.
+pub fn admin_user(conn: &Connection, id: i64) -> rusqlite::Result<AdminUser> {
+    let now = now_ms();
+    conn.prepare_cached(&format!("SELECT {} FROM users u WHERE u.id = ?1", SELECT.join(", ")))?
+        .query_row([id], |row| from_row(row, now))
 }
 
 /// The accounts being listed: those not being deleted, and if `q` is given, those whose

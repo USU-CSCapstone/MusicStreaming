@@ -86,6 +86,7 @@ The core stays small enough for the page thread, so it holds no SQL. The SQL tha
 - **The server owns playback state** per account and decides which device is playing ([`requirements/realtime.md` §2](../requirements/realtime.md#2-one-player-at-a-time)).
 - **Heartbeats** detect lost connections. Reconnection resumes from cursors and receives current state, not a replay.
 - **Feed notifications are hints.** The server tells each connected account that a library it reaches (`libraryChanged`), or the account's own data (`accountChanged`), has moved, with that feed's own new position. A library's hints are throttled to one a second, the last of a burst always sent, so an import of ten thousand tracks is a handful of messages. A device pulls its feed on every hint and on every `hello`, so live updates and catching up after a disconnect are one path, and a lost hint costs nothing.
+- **Access changes are hints too.** When an account's role or libraries change, its devices are sent `accessChanged`, and each fetches the account and its libraries again.
 
 ---
 

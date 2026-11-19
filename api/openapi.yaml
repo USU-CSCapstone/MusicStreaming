@@ -2183,6 +2183,37 @@ paths:
               schema: { $ref: '#/components/schemas/AdminUserPage' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /admin/users/{userId}/libraries:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      tags: [Admin]
+      summary: Set an account's libraries
+      description: |
+        Replaces the account's library grants with exactly `libraryIds` (a library named twice
+        counts once), and answers the account. An admin sets a user's grants; the owner sets an
+        admin's or a user's, and an admin's are kept for if it becomes a user again. No one sets
+        the owner's or their own: `403`. A library that does not exist is `422` and nothing
+        changes; an account that does not exist or is being deleted is `404`. Once committed,
+        what changed is recorded in the audit log and the account's devices are sent
+        `accessChanged`; a request that changes nothing does neither.
+      operationId: adminSetUserLibraries
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserLibraries' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUser' }
+        default: { $ref: '#/components/responses/Problem' }
+
   # ───────────────────────────── Admin: invites ─────────────────────────────
   /admin/invites:
     get:
@@ -3138,6 +3169,15 @@ components:
             resetPending:
               type: boolean
               description: Whether a reset link has been made for the account and has not expired.
+
+    UserLibraries:
+      type: object
+      required: [libraryIds]
+      properties:
+        libraryIds:
+          type: array
+          description: Every library the account is to be granted.
+          items: { $ref: '#/components/schemas/Id' }
 
     AdminUserPage:
       allOf:
@@ -5526,6 +5566,14 @@ components:
             version: { type: integer, minimum: 1 }
             editId: { type: string, format: uuid }
             edit: { $ref: '#/components/schemas/QueueEdit' }
+        - type: object
+          required: [type]
+          description: |
+            The account's role or libraries changed, so a device fetches the account (`getMe`)
+            and its libraries (`listLibraries`) again. Sent to every connection of that account
+            only, once the change is committed.
+          properties:
+            type: { const: accessChanged }
         - type: object
           required: [type, reason]
           properties:
