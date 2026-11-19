@@ -1537,6 +1537,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List invites
+         * @description Every invite, newest first, a page at a time. Any admin lists every admin's invites. An
+         *     invite is `redeemed` once its code made an account, else `revoked` if it was revoked,
+         *     else `expired` once its time has passed, else `pending`; the status is worked out when
+         *     the list is read. `createdBy` and `redeemedBy` are `null` when that account is gone.
+         */
+        get: operations["adminListInvites"];
+        put?: never;
+        /**
+         * Create an invite
+         * @description Makes a single-use invite that creates an account with access to `libraryIds`, which
+         *     may be empty. The answer carries the invite's `code`, shown this once: only a hash of it
+         *     is kept, and no later answer repeats it. A library that does not exist, or an
+         *     `expiresInDays` outside 1 to 30, is `422` and nothing is stored. This operation ignores
+         *     `Idempotency-Key`, since replaying its answer would keep the code.
+         */
+        post: operations["adminCreateInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/invites/{inviteId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                inviteId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke an invite
+         * @description Revokes a pending invite, so its code no longer works, and answers it as it now is. An
+         *     invite that was not pending is not changed and not an error: the answer shows it
+         *     `redeemed`, `expired` or already `revoked`. An unknown invite is `404`.
+         */
+        delete: operations["adminRevokeInvite"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/plugins": {
         parameters: {
             query?: never;
@@ -1990,6 +2045,33 @@ export interface components {
             durationUs: components["schemas"]["DurationUs"];
             /** @description Content is still appearing. The library is fully usable either way. */
             scanning: boolean;
+        };
+        /** @description A single-use link that creates an account (`requirements/users.md` §2.2). */
+        Invite: {
+            id: components["schemas"]["Id"];
+            /** @enum {string} */
+            status: "pending" | "redeemed" | "revoked" | "expired";
+            /** @description The admin who made it, or `null` if that account is gone. */
+            createdBy: components["schemas"]["InviteAccount"] | null;
+            /** @description The account it made, or `null` if not redeemed or that account is gone. */
+            redeemedBy: components["schemas"]["InviteAccount"] | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            expiresAt: string;
+            /**
+             * Format: date-time
+             * @description Present only when redeemed.
+             */
+            redeemedAt?: string;
+            libraryIds: components["schemas"]["Id"][];
+        };
+        InvitePage: components["schemas"]["PageInfo"] & {
+            items: components["schemas"]["Invite"][];
+        };
+        InviteAccount: {
+            id: components["schemas"]["Id"];
+            username: string;
         };
         /**
          * @description One scan of a library and its progress (`requirements/scanning.md` §5). Counts are as
@@ -5877,6 +5959,85 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Scan"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    adminListInvites: {
+        parameters: {
+            query?: {
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitePage"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    adminCreateInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    libraryIds: components["schemas"]["Id"][];
+                    /** @default 7 */
+                    expiresInDays?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invite"] & {
+                        /** @description The invite's code, shown once. */
+                        code: string;
+                    };
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    adminRevokeInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                inviteId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invite"];
                 };
             };
             default: components["responses"]["Problem"];

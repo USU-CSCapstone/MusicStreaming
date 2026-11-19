@@ -3,9 +3,9 @@
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 
-use crate::api::{AppState, plugins, scans};
+use crate::api::{AppState, invites, plugins, scans};
 
 /// Every route under `/admin`.
 pub fn router() -> Router<AppState> {
@@ -30,4 +30,11 @@ pub fn router() -> Router<AppState> {
             get(plugins::get_settings).put(plugins::set_settings),
         )
         .route("/admin/libraries/{library_id}/scans", get(scans::list).post(scans::start))
+        .route("/admin/invites", get(invites::list))
+        .route("/admin/invites/{invite_id}", delete(invites::revoke))
+}
+
+/// The routes under `/admin` that ignore `Idempotency-Key`, because they answer a code once.
+pub fn unkeyed() -> Router<AppState> {
+    Router::new().route("/admin/invites", post(invites::create))
 }
