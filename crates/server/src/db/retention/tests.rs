@@ -88,6 +88,53 @@ fn login_attempts_age_out() {
     assert_eq!(column(&db, "SELECT id FROM login_attempts"), [2]);
 }
 
+/// An invite that was redeemed, revoked or expired past the window goes with its library links,
+/// whichever of the three ended it; one that ended inside the window stays, and so does a
+/// pending one, however old. More than a chunk of them all go in one sweep.
+#[test]
+fn dead_invites_age_out_with_their_library_links() {
+    let extra = i64::try_from(CHUNK).unwrap() + 20;
+    let (_temp, db) = open(move |conn| {
+        // (id, created, expires, redeemed, revoked)
+        let invites = [
+            (1i64, OLD - DAY, OLD + DAY, Some(OLD), None),
+            (2, OLD - DAY, OLD + DAY, None, Some(OLD)),
+            (3, OLD - DAY, OLD, None, None),
+            (4, RECENT - DAY, RECENT + DAY, Some(RECENT), None),
+            (5, RECENT - DAY, RECENT + DAY, None, Some(RECENT)),
+            (6, RECENT - DAY, RECENT, None, None),
+            (7, OLD - DAY, NOW + DAY, None, None),
+            // Redeemed recently, though it expired long ago.
+            (8, OLD - DAY, OLD, Some(RECENT), None),
+        ];
+        for (id, created, expires, redeemed, revoked) in invites {
+            conn.execute(
+                "INSERT INTO invites (id, code_hash, created_at, expires_at, redeemed_at, \
+                 revoked_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![id, id.to_be_bytes(), created, expires, redeemed, revoked],
+            )?;
+            conn.execute(
+                "INSERT INTO invite_libraries (invite_id, library_id) VALUES (?1, 1)",
+                [id],
+            )?;
+        }
+        for id in 100..100 + extra {
+            conn.execute(
+                "INSERT INTO invites (id, code_hash, created_at, expires_at) \
+                 VALUES (?1, ?2, ?3, ?3)",
+                params![id, id.to_be_bytes(), OLD],
+            )?;
+        }
+        Ok(())
+    });
+    sweep(&db, NOW);
+    assert_eq!(column(&db, "SELECT id FROM invites ORDER BY id"), [4, 5, 6, 7, 8]);
+    assert_eq!(
+        column(&db, "SELECT invite_id FROM invite_libraries ORDER BY invite_id"),
+        [4, 5, 6, 7, 8]
+    );
+}
+
 /// The `played` hook's ends age out, and the plays themselves stay.
 #[test]
 fn play_ends_age_out_and_plays_stay() {
