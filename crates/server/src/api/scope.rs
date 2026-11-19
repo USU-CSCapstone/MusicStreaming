@@ -33,6 +33,8 @@ pub struct Caller {
     pub device: i64,
     /// An admin or the owner: administers the server, and reaches every library.
     pub admin: bool,
+    /// The owner: the one account that reads the audit log and the other owner-only actions.
+    pub owner: bool,
 }
 
 impl<S: Send + Sync> FromRequestParts<S> for Caller {

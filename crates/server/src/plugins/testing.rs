@@ -122,5 +122,5 @@ pub async fn connect(db: &Database, id: &'static str, user: i64, settings: Value
 
 /// User `user` calling from a device with the same ID, as an admin if `admin`.
 pub fn caller(user: i64, admin: bool) -> Caller {
-    Caller { user, device: user, admin }
+    Caller { user, device: user, admin, owner: false }
 }

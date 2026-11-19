@@ -205,7 +205,7 @@ async fn a_started_playlist_records_the_version_it_resolved() {
         .write(|tx| tx.execute("UPDATE playlists SET version = 8 WHERE id = 501", []))
         .await
         .unwrap();
-    let caller = crate::api::scope::Caller { user: 1, device: 1, admin: true };
+    let caller = crate::api::scope::Caller { user: 1, device: 1, admin: true, owner: true };
     let plain: crate::api::queue::Recipe =
         serde_json::from_value(recipe(None, None, &json!({}))).unwrap();
     let (_, stored) =

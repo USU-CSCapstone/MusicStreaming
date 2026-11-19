@@ -110,7 +110,7 @@ pub(super) async fn fixture() -> (tempfile::TempDir, AppState, Router) {
 
 /// The tracks `recipe` resolves to in library 1 for the owner, as the API spells their IDs.
 pub(super) async fn resolved(state: &AppState, recipe: &Value) -> Vec<String> {
-    resolved_as(state, Caller { user: 1, device: 1, admin: true }, recipe).await
+    resolved_as(state, Caller { user: 1, device: 1, admin: true, owner: true }, recipe).await
 }
 
 /// The tracks `recipe` resolves to in library 1 for `caller`, as the API spells their IDs.

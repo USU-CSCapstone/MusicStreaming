@@ -2238,6 +2238,29 @@ paths:
               schema: { $ref: '#/components/schemas/AdminUser' }
         default: { $ref: '#/components/responses/Problem' }
 
+  # ───────────────────────────── Admin: audit log ─────────────────────────────
+  /admin/audit-log:
+    get:
+      tags: [Admin]
+      summary: Read the audit log
+      description: |
+        What admins and the owner did to accounts, newest first, a page at a time. The owner's
+        alone: an admin who is not the owner is `403`. No operation edits or deletes an entry.
+        Each account is named as it was when the entry was written, and `deleted` says the
+        stored ID no longer names an account that exists, whatever its name has been given to
+        since. `actor` is `null` for what no one signed in did, such as the host's owner reset.
+      operationId: adminListAuditLog
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditPage' }
+        default: { $ref: '#/components/responses/Problem' }
+
   # ───────────────────────────── Admin: invites ─────────────────────────────
   /admin/invites:
     get:
@@ -3301,6 +3324,65 @@ components:
             items:
               type: array
               items: { $ref: '#/components/schemas/Invite' }
+
+    AuditEntry:
+      type: object
+      description: One thing done to one account (`requirements/users.md` §8).
+      required: [id, at, action, actor, target, detail]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        at: { type: string, format: date-time }
+        action:
+          type: string
+          enum:
+            - account_created
+            - access_changed
+            - suspended
+            - restored
+            - devices_signed_out
+            - password_reset_issued
+            - password_reset_used
+            - role_changed
+            - ownership_transferred
+            - deleted
+        actor:
+          description: Who did it, or `null` when no one signed in did.
+          oneOf:
+            - $ref: '#/components/schemas/AuditAccount'
+            - type: 'null'
+        target: { $ref: '#/components/schemas/AuditAccount' }
+        detail:
+          type: object
+          description: |
+            What the action did, by `action`. `account_created`: `inviteId` and `libraryIds`
+            (the libraries it granted). `access_changed`: `granted` and `revoked`, each a list
+            of library IDs, only what changed. `suspended` and `restored`: empty.
+            `devices_signed_out`: `deviceId` and `deviceName` for one device, or `all: true`
+            for every device. `password_reset_issued` and `password_reset_used`: empty.
+            `role_changed`: `from` and `to`. `ownership_transferred`: empty. `deleted`: empty.
+          additionalProperties: true
+
+    AuditAccount:
+      type: object
+      required: [id, username, deleted]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        username:
+          description: The name when the entry was written; `null` only for an actor that had none then, being deleted.
+          type: [string, 'null']
+        deleted:
+          type: boolean
+          description: The ID no longer names an account that exists.
+
+    AuditPage:
+      allOf:
+        - $ref: '#/components/schemas/PageInfo'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/AuditEntry' }
 
     InviteAccount:
       type: object

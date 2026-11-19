@@ -16,7 +16,7 @@ use crate::db::Database;
 fn report_to(players: &Players, status: &str, n: usize, position_ms: u32) {
     let changes = json!({ "itemId": item(n), "positionMs": position_ms, "start": true });
     let report = serde_json::from_value(progress_report(status, changes));
-    let caller = Caller { user: 1, device: 1, admin: true };
+    let caller = Caller { user: 1, device: 1, admin: true, owner: true };
     players.report(&Hub::default(), caller, 7, report.unwrap()).unwrap();
 }
 
@@ -119,7 +119,7 @@ async fn one_accounts_place_failing_to_save_keeps_no_one_elses_from_saving() {
     add_user(&conn, 2, "user");
     let players = Players::default();
     report_to(&players, "paused", 0, 1000);
-    let caller = Caller { user: 2, device: 2, admin: false };
+    let caller = Caller { user: 2, device: 2, admin: false, owner: false };
     let report = serde_json::from_value(progress_report("paused", json!({ "start": true })));
     players.report(&Hub::default(), caller, 8, report.unwrap()).unwrap();
     // An account deleted after the report was taken.

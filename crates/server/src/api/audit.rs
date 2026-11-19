@@ -2,10 +2,41 @@
 //! row of `admin_actions` per account affected, written in the transaction of the action itself
 //! so the two commit or roll back together.
 
-use rusqlite::{Connection, params};
+#[cfg(test)]
+mod tests;
+
+use std::sync::Arc;
+
+use axum::Json;
+use axum::extract::State;
+use rusqlite::types::Value as Param;
+use rusqlite::{Connection, Row, params};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::db::now_ms;
+use super::extract::Query;
+use super::page::{Order, Page, Request, Sort, Source, Total, Unknown};
+use super::time::serialize_rfc3339;
+use super::{Caller, Code, Id, Problem};
+use crate::db::{Database, Json as Column, now_ms};
+
+/// The record's order: newest first, which the row's ID follows, as it rises with time.
+const NEWEST: Sort = Sort { label: "audit.id", columns: &["a.id"], unknown: Unknown::Never };
+
+/// The columns [`entry`] reads. An account is `deleted` unless its stored ID names one that is
+/// not being deleted; the ID alone decides, so a name taken later by someone else changes nothing.
+const SELECT: &[&str] = &[
+    "a.id",
+    "a.at",
+    "a.action",
+    "a.actor_id",
+    "a.actor_name",
+    "NOT EXISTS (SELECT 1 FROM users WHERE id = a.actor_id AND status <> 'deleting')",
+    "a.target_id",
+    "a.target_name",
+    "NOT EXISTS (SELECT 1 FROM users WHERE id = a.target_id AND status <> 'deleting')",
+    "a.detail",
+];
 
 /// An action the record keeps, with what it records about it.
 pub enum Action {
@@ -57,4 +88,79 @@ pub fn record(
     )?
     .execute(params![now_ms(), action.name(), actor, target, action.detail().to_string()])
     .map(drop)
+}
+
+/// An account as the record named it.
+#[derive(Serialize)]
+pub struct AuditAccount {
+    id: Id,
+    /// Its name when the row was written; none for an actor already being deleted then.
+    username: Option<String>,
+    /// Whether the account no longer exists.
+    deleted: bool,
+}
+
+/// The spec's `AuditEntry`.
+#[derive(Serialize)]
+pub struct AuditEntry {
+    id: Id,
+    #[serde(serialize_with = "serialize_rfc3339")]
+    at: i64,
+    action: String,
+    actor: Option<AuditAccount>,
+    target: AuditAccount,
+    detail: Value,
+}
+
+/// The entry in `row`, which is [`SELECT`]'s columns.
+fn entry(row: &Row) -> rusqlite::Result<AuditEntry> {
+    let actor: Option<i64> = row.get(3)?;
+    Ok(AuditEntry {
+        id: Id(row.get(0)?),
+        at: row.get(1)?,
+        action: row.get(2)?,
+        actor: match actor {
+            Some(id) => {
+                Some(AuditAccount { id: Id(id), username: row.get(4)?, deleted: row.get(5)? })
+            }
+            None => None,
+        },
+        target: AuditAccount {
+            id: Id(row.get(6)?),
+            username: Some(row.get(7)?),
+            deleted: row.get(8)?,
+        },
+        detail: row.get::<_, Column<Value>>(9)?.0,
+    })
+}
+
+/// The query of [`list`].
+#[derive(Deserialize)]
+pub struct ListQuery {
+    cursor: Option<String>,
+    limit: Option<u32>,
+}
+
+/// `adminListAuditLog`: every entry, newest first, a page at a time. The owner's alone.
+pub async fn list(
+    State(db): State<Arc<Database>>,
+    Caller { owner, .. }: Caller,
+    Query(query): Query<ListQuery>,
+) -> Result<Json<Page<AuditEntry>>, Problem> {
+    if !owner {
+        return Err(Problem::new(Code::Forbidden).detail("Only the owner can read the audit log."));
+    }
+    let request = Request::new(&NEWEST, Order::Desc, query.cursor, query.limit)?;
+    let source = Source {
+        select: SELECT,
+        from: "admin_actions a".to_owned(),
+        joins: "",
+        filter: "1".to_owned(),
+        params: Vec::<Param>::new(),
+        total: Total::Counted,
+        counting: None,
+        back: None,
+        walk: None,
+    };
+    Ok(Json(db.read(move |conn| request.read(conn, &source, entry)).await?))
 }

@@ -1663,6 +1663,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/audit-log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the audit log
+         * @description What admins and the owner did to accounts, newest first, a page at a time. The owner's
+         *     alone: an admin who is not the owner is `403`. No operation edits or deletes an entry.
+         *     Each account is named as it was when the entry was written, and `deleted` says the
+         *     stored ID no longer names an account that exists, whatever its name has been given to
+         *     since. `actor` is `null` for what no one signed in did, such as the host's owner reset.
+         */
+        get: operations["adminListAuditLog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/invites": {
         parameters: {
             query?: never;
@@ -2232,6 +2256,38 @@ export interface components {
         };
         InvitePage: components["schemas"]["PageInfo"] & {
             items: components["schemas"]["Invite"][];
+        };
+        /** @description One thing done to one account (`requirements/users.md` §8). */
+        AuditEntry: {
+            id: components["schemas"]["Id"];
+            /** Format: date-time */
+            at: string;
+            /** @enum {string} */
+            action: "account_created" | "access_changed" | "suspended" | "restored" | "devices_signed_out" | "password_reset_issued" | "password_reset_used" | "role_changed" | "ownership_transferred" | "deleted";
+            /** @description Who did it, or `null` when no one signed in did. */
+            actor: components["schemas"]["AuditAccount"] | null;
+            target: components["schemas"]["AuditAccount"];
+            /**
+             * @description What the action did, by `action`. `account_created`: `inviteId` and `libraryIds`
+             *     (the libraries it granted). `access_changed`: `granted` and `revoked`, each a list
+             *     of library IDs, only what changed. `suspended` and `restored`: empty.
+             *     `devices_signed_out`: `deviceId` and `deviceName` for one device, or `all: true`
+             *     for every device. `password_reset_issued` and `password_reset_used`: empty.
+             *     `role_changed`: `from` and `to`. `ownership_transferred`: empty. `deleted`: empty.
+             */
+            detail: {
+                [key: string]: unknown;
+            };
+        };
+        AuditAccount: {
+            id: components["schemas"]["Id"];
+            /** @description The name when the entry was written; `null` only for an actor that had none then, being deleted. */
+            username: string | null;
+            /** @description The ID no longer names an account that exists. */
+            deleted: boolean;
+        };
+        AuditPage: components["schemas"]["PageInfo"] & {
+            items: components["schemas"]["AuditEntry"][];
         };
         InviteAccount: {
             id: components["schemas"]["Id"];
@@ -6297,6 +6353,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminUser"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    adminListAuditLog: {
+        parameters: {
+            query?: {
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditPage"];
                 };
             };
             default: components["responses"]["Problem"];
