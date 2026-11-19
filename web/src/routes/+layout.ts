@@ -5,6 +5,7 @@ import type { User } from '$lib/api/types';
 import { catalog } from '$lib/catalog/client.svelte';
 import { claim, logoutPending, owner, remember } from '$lib/last-known';
 import { finishLogout } from '$lib/logout';
+import { isPublic } from '$lib/public-routes';
 import type { LayoutLoad } from './$types';
 
 // SPA mode: static files served by the Rust server, no server rendering (`design/general.md` §1).
@@ -48,7 +49,9 @@ export const load: LayoutLoad = async ({ fetch, route, untrack }) => {
 		))
 	)
 		redirect(307, resolve('/'));
-	if (setupRequired || at === '/login') return { me: null, library: null, tagTypes: [] };
+	// A public page may be opened by someone with no session, or by one whose device still holds
+	// another account's files, which only signing in may wipe.
+	if (setupRequired || isPublic(at)) return { me: null, library: null, tagTypes: [] };
 
 	// Without a session, either answers `401`, which redirects to the login page.
 	// The libraries are asked for with the user. Only where the account changed are they asked
