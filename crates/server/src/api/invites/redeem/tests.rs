@@ -200,6 +200,7 @@ async fn a_taken_username_is_refused_only_with_a_live_code() {
     let (status, _, problem) =
         send_json(app.clone(), "POST", REDEEM, &redeem_request(&code, "OWNER", PASSWORD)).await;
     assert_eq!((status, &problem["code"]), (StatusCode::CONFLICT, &json!("username_taken")));
+    assert_eq!(problem["detail"], "That username is taken.");
     let conn = conn(&temp);
     assert_eq!(users(&conn), 0);
     let invite = listed(&app, &id).await;

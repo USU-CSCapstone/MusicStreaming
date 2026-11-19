@@ -115,7 +115,7 @@ pub async fn redeem(
                     if error.code == ErrorCode::ConstraintViolation
                         && error.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
                 {
-                    return Err(Problem::new(Code::UsernameTaken));
+                    return Err(Problem::new(Code::UsernameTaken).detail("That username is taken."));
                 }
                 created => created?,
             };
