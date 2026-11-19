@@ -23,7 +23,7 @@ use super::super::super::testing::{
 use super::super::{Presence, Revoked, handle, signed_in};
 use crate::db::{Database, Text};
 
-const OWNER: Caller = Caller { user: 1, device: 1, admin: true };
+const OWNER: Caller = Caller { user: 1, device: 1, admin: true, owner: true };
 
 /// The messages the hub has queued for `presence`, without waiting for more.
 async fn queued(presence: &mut Presence) -> Vec<Message> {

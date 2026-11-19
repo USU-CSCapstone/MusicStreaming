@@ -24,7 +24,7 @@ mod http;
 mod transfer;
 mod volume;
 
-const OWNER: Caller = Caller { user: 1, device: 1, admin: true };
+const OWNER: Caller = Caller { user: 1, device: 1, admin: true, owner: true };
 
 /// Library 1's tracks, served, with the owner on device 1 as [`TOKEN`] and device 2 as
 /// `phone`, and user 2, who reaches library 1, on device 3 as `stranger`, each with a queue

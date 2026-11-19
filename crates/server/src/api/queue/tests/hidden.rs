@@ -13,7 +13,7 @@ use crate::api::testing::catalog::page_through;
 use crate::api::testing::{TOKEN, call, json};
 
 /// User 2, who reaches library 1 and hides nothing.
-const USER2: Caller = Caller { user: 2, device: 3, admin: false };
+const USER2: Caller = Caller { user: 2, device: 3, admin: false, owner: false };
 
 /// What the owner hides: tracks of albums 101 and 102, credited to both artists, found by
 /// searches for "song" and "aria", and every track of album 103.
