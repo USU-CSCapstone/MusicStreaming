@@ -36,6 +36,7 @@ pub enum Code {
     PermissionsRequired,
     VersionConflict,
     IdTaken,
+    UsernameTaken,
     CursorExpired,
     CatalogBuilding,
     DeviceUnavailable,
@@ -63,6 +64,7 @@ impl Code {
             | Self::PermissionsRequired
             | Self::VersionConflict
             | Self::IdTaken
+            | Self::UsernameTaken
             | Self::DeviceUnavailable
             | Self::QueueChanged
             | Self::QueueActive

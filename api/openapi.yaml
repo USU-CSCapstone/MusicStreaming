@@ -252,6 +252,72 @@ paths:
         '204': { description: Logged out. }
         default: { $ref: '#/components/responses/Problem' }
 
+  /auth/invites/check:
+    post:
+      tags: [Auth]
+      summary: Check an invite's code
+      description: |
+        Whether an invite's code can still make an account (`requirements/users.md` §2.2). The
+        code travels in the body, never in a URL. A code that is unknown, already redeemed,
+        revoked or expired is `404`, the same answer for each.
+      operationId: checkInvite
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CheckInviteRequest' }
+      responses:
+        '204': { description: The code is live. }
+        '404':
+          description: '`not_found` — the code is unknown, redeemed, revoked or expired.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /auth/invites/redeem:
+    post:
+      tags: [Auth]
+      summary: Create an account with an invite
+      description: |
+        Creates a `user` account with the libraries the invite grants, uses up the invite, and
+        logs the new account in on this device, as `completeSetup` does
+        (`requirements/users.md` §2.2). A code that is not live is `404`, as `checkInvite`
+        answers, before anything else in the request is looked at. One code makes one account,
+        however many redeem it at once.
+      operationId: redeemInvite
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RedeemInviteRequest' }
+      responses:
+        '201':
+          description: Account created and logged in on this device. Also sets the session cookie.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '404':
+          description: '`not_found` — the code is unknown, redeemed, revoked or expired.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: '`username_taken` — another account has the username, regardless of case. The invite is still pending.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: |
+            `weak_password` — the password is too easy to guess; `detail` says why.
+            `validation_failed` — `username`, `displayName` or `device` is malformed.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
   # ───────────────────────────── Account ─────────────────────────────
   /me:
     get:
@@ -2690,6 +2756,7 @@ components:
             - duplicate_key
             - version_conflict
             - id_taken
+            - username_taken
             - cursor_expired
             - setup_required
             - catalog_building
@@ -2950,6 +3017,26 @@ components:
       type: object
       required: [username, password, device]
       properties:
+        username: { $ref: '#/components/schemas/Username' }
+        password: { type: string, format: password }
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Not blank. Defaults to the username.
+        device: { $ref: '#/components/schemas/DeviceRegistration' }
+
+    CheckInviteRequest:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string, description: "The invite's code, from the link's fragment." }
+
+    RedeemInviteRequest:
+      type: object
+      required: [code, username, password, device]
+      properties:
+        code: { type: string, description: "The invite's code, from the link's fragment." }
         username: { $ref: '#/components/schemas/Username' }
         password: { type: string, format: password }
         displayName:
