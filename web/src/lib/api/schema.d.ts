@@ -2073,6 +2073,15 @@ export interface components {
             id: components["schemas"]["Id"];
             username: string;
         };
+        InviteCreate: {
+            libraryIds: components["schemas"]["Id"][];
+            /** @default 7 */
+            expiresInDays: number;
+        };
+        CreatedInvite: components["schemas"]["Invite"] & {
+            /** @description The invite's code, shown once. */
+            code: string;
+        };
         /**
          * @description One scan of a library and its progress (`requirements/scanning.md` §5). Counts are as
          *     files are met, so they grow while it runs, and may run slightly high after a scan resumes
@@ -5997,11 +6006,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    libraryIds: components["schemas"]["Id"][];
-                    /** @default 7 */
-                    expiresInDays?: number;
-                };
+                "application/json": components["schemas"]["InviteCreate"];
             };
         };
         responses: {
@@ -6011,10 +6016,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Invite"] & {
-                        /** @description The invite's code, shown once. */
-                        code: string;
-                    };
+                    "application/json": components["schemas"]["CreatedInvite"];
                 };
             };
             default: components["responses"]["Problem"];
