@@ -82,10 +82,12 @@ it('says a dead link is no longer valid, with no form', async () => {
 	await expect.element(page.getByLabelText('Username')).not.toBeInTheDocument();
 });
 
-it('says a link with no code is no longer valid, without asking the server', async () => {
+it('asks for the link again when the page has no code, without asking the server', async () => {
 	location.hash = '';
 	render(Invite);
-	await expect.element(page.getByText('This link is no longer valid.')).toBeVisible();
+	await expect
+		.element(page.getByText('Open the invite link you were sent again to continue.'))
+		.toBeVisible();
 	expect(sent.map((r) => r.path)).toEqual(['/api/v1/me']);
 });
 

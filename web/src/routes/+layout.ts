@@ -51,7 +51,7 @@ export const load: LayoutLoad = async ({ fetch, route, untrack }) => {
 		redirect(307, resolve('/'));
 	// A public page may be opened by someone with no session, or by one whose device still holds
 	// another account's files, which only signing in may wipe.
-	if (setupRequired || isPublic(at)) return { me: null, library: null, tagTypes: [] };
+	if (isPublic(at)) return { me: null, library: null, tagTypes: [] };
 
 	// Without a session, either answers `401`, which redirects to the login page.
 	// The libraries are asked for with the user. Only where the account changed are they asked

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { AdminList } from '$lib/admin-list.svelte';
 	import {
 		ApiError,
@@ -44,7 +44,7 @@
 		formError = null;
 		try {
 			const made = await adminCreateInvite(fetch, { libraryIds: chosen, expiresInDays: days });
-			link = `${location.origin}${base}/invite#${made.code}`;
+			link = `${location.origin}${resolve('/invite')}#${made.code}`;
 			chosen = [];
 			await list.reload().catch(() => {});
 		} catch (err) {
