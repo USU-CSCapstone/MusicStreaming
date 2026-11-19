@@ -1583,6 +1583,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List accounts
+         * @description Every account, by username, a page at a time. `q` narrows it to accounts whose username
+         *     or display name holds that text, whatever its case; an empty `q` filters nothing. An
+         *     account being deleted is not listed. `libraryIds` are the library grants the account
+         *     holds, for every role: an admin or the owner reaches every library whether or not it has
+         *     grants, and keeps any it had if its role changes.
+         */
+        get: operations["adminListUsers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/invites": {
         parameters: {
             query?: never;
@@ -2076,6 +2100,20 @@ export interface components {
             role: components["schemas"]["Role"];
             /** @description Whether the account has an avatar image; clients show initials when it has none. Always `false` until avatars are built. */
             hasAvatar: boolean;
+        };
+        /** @description An account as an admin sees it. */
+        AdminUser: components["schemas"]["User"] & {
+            /** @enum {string} */
+            status: "active" | "suspended";
+            /** Format: date-time */
+            createdAt: string;
+            /** @description The libraries the account has been granted, in ascending order. */
+            libraryIds: components["schemas"]["Id"][];
+            /** @description Whether a reset link has been made for the account and has not expired. */
+            resetPending: boolean;
+        };
+        AdminUserPage: components["schemas"]["PageInfo"] & {
+            items: components["schemas"]["AdminUser"][];
         };
         /** @description What the account's active device is playing is in `PlayerState`. */
         Device: {
@@ -6115,6 +6153,31 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Scan"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    adminListUsers: {
+        parameters: {
+            query?: {
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+                q?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUserPage"];
                 };
             };
             default: components["responses"]["Problem"];

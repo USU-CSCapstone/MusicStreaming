@@ -2157,6 +2157,32 @@ paths:
               schema: { $ref: '#/components/schemas/Scan' }
         default: { $ref: '#/components/responses/Problem' }
 
+  # ───────────────────────────── Admin: accounts ─────────────────────────────
+  /admin/users:
+    get:
+      tags: [Admin]
+      summary: List accounts
+      description: |
+        Every account, by username, a page at a time. `q` narrows it to accounts whose username
+        or display name holds that text, whatever its case; an empty `q` filters nothing. An
+        account being deleted is not listed. `libraryIds` are the library grants the account
+        holds, for every role: an admin or the owner reaches every library whether or not it has
+        grants, and keeps any it had if its role changes.
+      operationId: adminListUsers
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: q
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUserPage' }
+        default: { $ref: '#/components/responses/Problem' }
+
   # ───────────────────────────── Admin: invites ─────────────────────────────
   /admin/invites:
     get:
@@ -3093,6 +3119,35 @@ components:
         hasAvatar:
           type: boolean
           description: Whether the account has an avatar image; clients show initials when it has none. Always `false` until avatars are built.
+
+    AdminUser:
+      description: An account as an admin sees it.
+      allOf:
+        - $ref: '#/components/schemas/User'
+        - type: object
+          required: [status, createdAt, libraryIds, resetPending]
+          properties:
+            status:
+              type: string
+              enum: [active, suspended]
+            createdAt: { type: string, format: date-time }
+            libraryIds:
+              type: array
+              description: The libraries the account has been granted, in ascending order.
+              items: { $ref: '#/components/schemas/Id' }
+            resetPending:
+              type: boolean
+              description: Whether a reset link has been made for the account and has not expired.
+
+    AdminUserPage:
+      allOf:
+        - $ref: '#/components/schemas/PageInfo'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/AdminUser' }
 
     # ───────────────────────────── Devices ─────────────────────────────
     Device:
