@@ -34,6 +34,7 @@ import type {
 	PlaylistItemPage,
 	PlaylistPage,
 	RecentSearch,
+	RedeemInviteRequest,
 	RecentSearchCreate,
 	RestoredQueue,
 	Scan,
@@ -206,6 +207,14 @@ export const getServerInfo = (f: Fetch) => kept('server', get<ServerInfo>(f, '/s
 /** Creates the owner and logs this browser in: the server sets the session cookie. */
 export const completeSetup = (f: Fetch, request: SetupRequest) =>
 	send<Session>(f, 'POST', '/setup', request);
+
+/** Whether an invite's code is still live: resolves if so, and rejects with `404` if not. */
+export const checkInvite = (f: Fetch, code: string) =>
+	send<void>(f, 'POST', '/auth/invites/check', { code });
+
+/** Creates an account with an invite and logs this browser in: the server sets the session cookie. */
+export const redeemInvite = (f: Fetch, request: RedeemInviteRequest) =>
+	send<Session>(f, 'POST', '/auth/invites/redeem', request);
 
 /** Logs this browser in as a new device: the server sets the session cookie. */
 export const login = (f: Fetch, request: LoginRequest) =>
