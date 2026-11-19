@@ -175,3 +175,148 @@ async fn only_an_account_the_caller_outranks_can_be_set() {
     let (status, account) = set(&app, TOKEN, 2, &["3"]).await;
     assert_eq!((status, &account["libraryIds"]), (StatusCode::OK, &json!(["3"])));
 }
+
+/// `adminChangeLibraryAccess` as `token`, naming `users` and `libraries`.
+async fn change(
+    app: &Router,
+    token: &str,
+    users: &[&str],
+    libraries: &[&str],
+    action: &str,
+) -> (StatusCode, Value) {
+    let body = json!({ "userIds": users, "libraryIds": libraries, "action": action });
+    call(app, token, "POST", "/api/v1/admin/users/library-access", Some(body)).await
+}
+
+#[tokio::test]
+async fn a_bulk_grant_and_revoke_apply_to_every_account_and_record_each_alone() {
+    let (temp, app) = accounts();
+    let conn = conn(&temp);
+    access(&conn, 5, 3).unwrap();
+    let address = serve(app.clone()).await;
+    let mut four = connect_with(address, "user-token").await;
+    let mut five = connect_with(address, "other-token").await;
+
+    // Account 4 holds 1 and 2; account 5 holds 3. Naming 2 and 3 grants 4 only 3, and 5 only 2.
+    let (status, body) = change(&app, TOKEN, &["4", "5", "4"], &["3", "2", "3"], "grant").await;
+    assert_eq!((status, &body), (StatusCode::NO_CONTENT, &Value::Null));
+    assert_eq!(grants(&conn, 4).iter().map(|g| g.0).collect::<Vec<_>>(), [1, 2, 3]);
+    assert_eq!(grants(&conn, 5).iter().map(|g| g.0).collect::<Vec<_>>(), [2, 3]);
+    let rows = audit(&conn);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows[0],
+        ("access_changed".to_owned(), 1, 4, json!({"granted": ["3"], "revoked": []}))
+    );
+    assert_eq!(
+        rows[1],
+        ("access_changed".to_owned(), 1, 5, json!({"granted": ["2"], "revoked": []}))
+    );
+    assert_eq!(next_of(&mut four, "accessChanged").await, json!({ "type": "accessChanged" }));
+    assert_eq!(next_of(&mut five, "accessChanged").await, json!({ "type": "accessChanged" }));
+
+    // Account 4 holds 1 and 3 of those and 5 holds only 3, so both change.
+    let (status, _) = change(&app, TOKEN, &["4", "5"], &["1", "3"], "revoke").await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(grants(&conn, 4).iter().map(|g| g.0).collect::<Vec<_>>(), [2]);
+    assert!(grants(&conn, 5).iter().all(|g| g.0 == 2));
+    let rows = audit(&conn);
+    assert_eq!(rows.len(), 4);
+    assert_eq!(rows[2].3, json!({"granted": [], "revoked": ["1", "3"]}));
+    assert_eq!(rows[3].3, json!({"granted": [], "revoked": ["3"]}));
+    next_of(&mut four, "accessChanged").await;
+    next_of(&mut five, "accessChanged").await;
+
+    // Nothing to change: no row and no message.
+    let (status, _) = change(&app, TOKEN, &["4", "5"], &["1"], "revoke").await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(audit(&conn).len(), 4);
+    hears_no_change(&mut four).await;
+    hears_no_change(&mut five).await;
+}
+
+#[tokio::test]
+async fn a_bulk_grant_gives_each_account_liked_songs_for_the_new_library() {
+    let (temp, app) = accounts();
+    let (status, _) = change(&app, TOKEN, &["4", "5"], &["3"], "grant").await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let count: i64 = conn(&temp)
+        .query_row(
+            "SELECT count(*) FROM playlists WHERE user_id IN (4, 5) AND library_id = 3 \
+             AND kind = 'liked'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 2);
+}
+
+#[tokio::test]
+async fn one_refused_or_unknown_account_or_library_changes_nothing() {
+    let (temp, app) = accounts();
+    let conn = conn(&temp);
+    let wrong = [
+        ("admin-token", "3", StatusCode::FORBIDDEN),
+        ("admin-token", "1", StatusCode::FORBIDDEN),
+        ("admin-token", "2", StatusCode::FORBIDDEN),
+        ("admin-token", "6", StatusCode::NOT_FOUND),
+        ("admin-token", "99", StatusCode::NOT_FOUND),
+    ];
+    for (token, user, status) in wrong {
+        for action in ["grant", "revoke"] {
+            let (answered, problem) =
+                change(&app, token, &["5", user, "4"], &["1", "3"], action).await;
+            assert_eq!(answered, status, "{user} {action}: {problem}");
+        }
+    }
+    let (status, problem) = change(&app, "admin-token", &["4", "3"], &["3"], "grant").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(problem["detail"], "Only the owner can do this to an admin's account.");
+    let (status, problem) = change(&app, TOKEN, &["4", "5"], &["3", "99"], "grant").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(problem["detail"], "libraryIds names a library that does not exist");
+
+    assert_eq!(grants(&conn, 4), [(1, 0), (2, 0)]);
+    for user in [1, 2, 3, 5, 6] {
+        assert!(grants(&conn, user).is_empty(), "{user}");
+    }
+    assert!(audit(&conn).is_empty());
+}
+
+#[tokio::test]
+async fn a_non_admin_cannot_change_access_in_bulk() {
+    let (temp, app) = accounts();
+    let (status, _) = change(&app, "user-token", &["5"], &["1"], "grant").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(grants(&conn(&temp), 5).is_empty());
+}
+
+#[tokio::test]
+async fn naming_no_account_or_over_a_thousand_is_refused() {
+    let (temp, app) = accounts();
+    let (status, problem) = change(&app, TOKEN, &[], &["1"], "grant").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(problem["detail"], "userIds must name at least one account");
+
+    let many: Vec<String> = (0..1001).map(|id| (id + 100).to_string()).collect();
+    let many: Vec<&str> = many.iter().map(String::as_str).collect();
+    let (status, problem) = change(&app, TOKEN, &many, &["1"], "grant").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(problem["detail"], "userIds names more than 1000 accounts");
+    assert!(audit(&conn(&temp)).is_empty());
+}
+
+/// Exactly 1,000 accounts is the most a request may name, and each gets its own record.
+#[tokio::test]
+async fn a_grant_to_a_thousand_accounts_is_accepted() {
+    let (temp, app) = accounts();
+    let conn = conn(&temp);
+    for id in 100..1100 {
+        add_user(&conn, id, "user");
+    }
+    let ids: Vec<String> = (100..1100).map(|id| id.to_string()).collect();
+    let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let (status, _) = change(&app, TOKEN, &ids, &["1", "2", "3"], "grant").await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(audit(&conn).len(), 1000);
+}
