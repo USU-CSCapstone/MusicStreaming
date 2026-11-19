@@ -1,7 +1,7 @@
 // Aliases for the API schemas the client uses. `schema.d.ts` is generated from
 // `api/openapi.yaml` by `pnpm gen:api`; never edit it by hand.
 
-import type { components, paths } from './schema';
+import type { components } from './schema';
 
 type Schemas = components['schemas'];
 
@@ -13,11 +13,9 @@ export type Scan = Schemas['Scan'];
 export type Invite = Schemas['Invite'];
 export type InviteAccount = Schemas['InviteAccount'];
 export type InvitePage = Schemas['InvitePage'];
-export type InviteCreate =
-	paths['/admin/invites']['post']['requestBody']['content']['application/json'];
+export type InviteCreate = Schemas['InviteCreate'];
 /** A new invite with its code, which is shown only this once. */
-export type CreatedInvite =
-	paths['/admin/invites']['post']['responses'][201]['content']['application/json'];
+export type CreatedInvite = Schemas['CreatedInvite'];
 export type ImageRef = Schemas['ImageRef'];
 export type ArtistRef = Schemas['ArtistRef'];
 export type AlbumRef = Schemas['AlbumRef'];
