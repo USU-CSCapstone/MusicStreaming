@@ -489,6 +489,7 @@ export const search = (f: Fetch, libraryId: string, q: string, query: Query = {}
 /**
  * A page of every match in one of a search's sections: in the search's ranking, or by `sort` and
  * `order` as the section's own list sorts it. Pass the previous page's `nextCursor` as `cursor`.
+ * As `search`, the server's answer, or the device's where the server cannot give it in time.
  */
 export const searchSection = (
 	f: Fetch,
@@ -497,10 +498,12 @@ export const searchSection = (
 	q: string,
 	query: Query = {}
 ) =>
-	get<SearchSectionPage>(f, `${lib(libraryId)}/search/${encodeURIComponent(section)}`, {
-		q,
-		...query
-	});
+	readSearch<SearchSectionPage>('searchSection', libraryId, { section, q, ...query }, () =>
+		get<SearchSectionPage>(f, `${lib(libraryId)}/search/${encodeURIComponent(section)}`, {
+			q,
+			...query
+		})
+	);
 
 const recent = (libraryId: string) => `${lib(libraryId)}/recent-searches`;
 
