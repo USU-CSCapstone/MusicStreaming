@@ -112,9 +112,10 @@ impl Index {
             let (kind, group) = (self.kinds[d as usize], self.groups_of[d as usize]);
             let total = hits.len();
             best(&mut hits, limit);
+            let best = hits[0].0;
             let ids = self.hit_ids(&hits);
-            let section = Section { kind, group: self.group(group), ids, total };
-            sections.push((hits[0].0, group, section));
+            let section = Section { kind, group: self.group(group), ids, total, best };
+            sections.push((best, group, section));
         }
         // Groups compare as their indexes do, since they are sorted.
         sections.sort_by(|(a, g, x), (b, h, y)| a.cmp(b).then(x.kind.cmp(&y.kind)).then(g.cmp(h)));

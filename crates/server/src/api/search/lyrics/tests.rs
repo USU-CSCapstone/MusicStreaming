@@ -8,7 +8,8 @@ use crate::api::testing::{catalog, json, send};
 /// [`catalog::app`] with lyrics for library 1's tracks: Come Together (1001), plain, with a label
 /// and a blank line; Something (1002), timed; Her Majesty (1003) and Bonus (1004), which hold
 /// "other side" in order, and Idioteque (1005), which holds it out of order in a shorter line and
-/// sings Something's title; and library 2's Elsewhere (2001).
+/// sings Something's title; untitled (1006), which sings a word of Her Majesty's; and library 2's
+/// Elsewhere (2001).
 async fn app_with_lyrics() -> (tempfile::TempDir, Arc<Database>, Router) {
     let (temp, db, app) = catalog::app().await;
     db.write(|tx| {
@@ -26,6 +27,8 @@ Other side of the world', NULL),
                 (1, 1004, 'Over to the other side we go', NULL),
                 (1, 1005, 'Side the other way
 Something in the way', NULL),
+                (1, 1006, 'Majesty
+Oh majesty, majesty rose', NULL),
                 (2, 2001, 'Hello from elsewhere', NULL);"#,
         )
     })
@@ -87,15 +90,35 @@ async fn a_line_finds_its_song_shown_with_the_lines_around_it() {
     assert_eq!((&lyric["before"], &lyric["after"]), (&json!(["Say it ain't so"]), &json!([])));
 }
 
+/// Each section's type, in order.
+fn kinds(body: &Value) -> Vec<&str> {
+    body["sections"].as_array().unwrap().iter().map(|s| s["type"].as_str().unwrap()).collect()
+}
+
 #[tokio::test]
-async fn lyrics_are_searched_by_default_after_the_names() {
+async fn lyrics_never_come_before_a_name_matched_exactly() {
     let (_temp, _db, app) = app_with_lyrics().await;
     let (_, body) = json(&app, "/api/v1/libraries/1/search?q=something").await;
-    let kinds: Vec<&str> =
-        body["sections"].as_array().unwrap().iter().map(|s| s["type"].as_str().unwrap()).collect();
-    assert_eq!(kinds, ["tracks", "lyrics"]);
+    assert_eq!(kinds(&body), ["tracks", "lyrics"]);
     assert_eq!(body["top"]["track"]["id"], "1002", "the title, not the lyric");
     assert_eq!(found(&body), [line("1005", "Something in the way")]);
+}
+
+#[tokio::test]
+async fn lyrics_that_match_better_than_any_name_lead_with_the_top_result() {
+    let (_temp, _db, app) = app_with_lyrics().await;
+    // "Her Majesty" has a word more than the line "Majesty", as typed or whole.
+    for q in ["majesty", "majes"] {
+        let (_, body) = json(&app, &format!("/api/v1/libraries/1/search?q={q}")).await;
+        assert_eq!(kinds(&body), ["lyrics", "tracks"], "{q}");
+        assert_eq!(matched(&body["top"]["lyric"]), line("1006", "Majesty"), "{q}");
+        assert_eq!(body["top"]["type"], "lyric");
+    }
+}
+
+#[tokio::test]
+async fn lyrics_are_searched_by_default() {
+    let (_temp, _db, app) = app_with_lyrics().await;
     let (_, body) = json(&app, "/api/v1/libraries/1/search?q=called").await;
     assert_eq!(found(&body), [line("1001", "I must have called a thousand times")]);
     let (_, body) = json(&app, "/api/v1/libraries/1/search?q=bonus%20go").await;

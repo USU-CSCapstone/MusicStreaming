@@ -4521,7 +4521,9 @@ components:
           type: string
           description: Echo of `q`, so a client can discard responses for text no longer in the box (`requirements/search.md` §7).
         top:
-          description: The single best match, also present in its section (`requirements/search.md` §4).
+          description: |
+            The single best match, also present in its section (`requirements/search.md` §4): the
+            first of the first section, so a lyric only when the `lyrics` section leads.
           oneOf:
             - $ref: '#/components/schemas/SearchResult'
             - type: 'null'
@@ -4530,7 +4532,10 @@ components:
           description: |
             Ordered by how well each matches; ties break tracks, then albums, then artists, then
             playlists, then tags (`requirements/search.md` §4). Each type of tag is a section of
-            its own, ties between them by `tagType`. A section with no match is left out.
+            its own, ties between them by `tagType`. `lyrics` goes among them by its first line
+            as though that were never a name matched exactly, so it never comes before a section
+            whose best is exact, and after the sections it ties (`design/search.md` §2.3). A
+            section with no match is left out.
           items:
             type: object
             required: [type, items, total]

@@ -209,10 +209,10 @@ fn totals_count_past_the_limit() {
 #[test]
 fn kinds_filter_the_sections() {
     let index = library();
-    assert_eq!(
-        index.search("blue", &[Kind::Album], 10),
-        [Section { kind: Kind::Album, group: None, ids: vec![11, 10], total: 2 }]
-    );
+    let sections = index.search("blue", &[Kind::Album], 10);
+    let found: Vec<_> =
+        sections.iter().map(|s| (s.kind, s.group.clone(), &s.ids, s.total)).collect();
+    assert_eq!(found, [(Kind::Album, None, &vec![11, 10], 2)]);
 }
 
 #[test]

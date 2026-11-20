@@ -113,12 +113,13 @@ pub async fn search(
     let response = db
         .read(move |conn| {
             let lyrics = match lyrics {
-                Some(Ranked { mut hits, .. }) => {
-                    let total = hits.len();
+                Some(Ranked { mut hits, .. }) if !hits.is_empty() => {
+                    let (total, first) = (hits.len(), hits[0].clone());
                     hits.truncate(limit);
-                    Some(Lyrics { matches: lyrics::matches(conn, user, library, &hits)?, total })
+                    let matches = lyrics::matches(conn, user, library, &hits)?;
+                    Some(Lyrics { matches, total, first })
                 }
-                None => None,
+                _ => None,
             };
             let keep = Keep::new(&hid, tagged.as_deref(), held.as_deref());
             let search = Search { user, library, q: query.q, keep };

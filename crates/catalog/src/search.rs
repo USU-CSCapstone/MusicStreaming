@@ -7,8 +7,8 @@ use std::cmp::Reverse;
 use std::collections::HashSet;
 
 use jewelcase_core::{
-    Document, Index, IndexBuilder, Kind, Rank, Score, Section as Found, SectionPage as FoundPage,
-    Union,
+    Document, Index, IndexBuilder, Kind, LyricHit, Rank, Score, Section as Found,
+    SectionPage as FoundPage, Union, lyrics_place,
 };
 use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -246,7 +246,7 @@ pub fn section(
             let next_cursor = found.next.map(|rank| cursor::encode(&label, &rank_values(&rank)));
             let FoundPage { ids, total, .. } = found;
             let group = group.map(str::to_owned);
-            let found = vec![Found { kind, group, ids, total }];
+            let found = vec![Matched { kind, group, ids, total }];
             let items = sections(conn, user, library, found, losses)?
                 .pop()
                 .map_or_else(Vec::new, |section| section.items);
@@ -285,7 +285,7 @@ fn sorted(
         }
     };
     let page = read_matches(conn, library, table, id, request, ids)?;
-    let found = Found { kind, group: None, ids: page.items, total: ids.len() };
+    let found = Matched { kind, group: None, ids: page.items, total: ids.len() };
     let items = sections(conn, user, library, vec![found], losses)?.pop();
     let items = items.map_or_else(Vec::new, |section| section.items);
     Ok(Page { items, next_cursor: page.next_cursor, total: page.total })
@@ -401,11 +401,26 @@ impl LyricMatch {
     }
 }
 
-/// The best of a search's lyric matches, and how many there are in all: a section [`response`]
-/// shows with the rest.
+/// The best of a search's lyric matches, how many there are in all, and the first as the index
+/// found it: a section [`response`] places among the rest by it ([`lyrics_place`]).
 pub struct Lyrics {
     pub matches: Vec<LyricMatch>,
     pub total: usize,
+    pub first: LyricHit,
+}
+
+/// One section's matches, as the index found them, to read as [`sections`] shows them.
+struct Matched {
+    kind: Kind,
+    group: Option<String>,
+    ids: Vec<i64>,
+    total: usize,
+}
+
+impl From<Found> for Matched {
+    fn from(Found { kind, group, ids, total, .. }: Found) -> Matched {
+        Matched { kind, group, ids, total }
+    }
 }
 
 impl SectionPage {
@@ -713,12 +728,20 @@ pub fn response(
     lyrics: Option<Lyrics>,
 ) -> rusqlite::Result<SearchResponse> {
     let Search { user, library, q, keep } = search;
-    let mut sections = sections(conn, user, library, found, &keep.hid.losses)?;
-    // Lyrics after the names, as the server finds them.
-    if let Some(Lyrics { matches, total }) = lyrics.filter(|lyrics| !lyrics.matches.is_empty()) {
+    // Lyrics go among the names by how well their first line matched, never before a name
+    // matched exactly (`design/search.md` §2.3), so they lead, and give the top result, only when
+    // they match better than any name.
+    let mut found = found;
+    let place = lyrics.as_ref().map_or(found.len(), |lyrics| lyrics_place(&found, &lyrics.first));
+    let after: Vec<Matched> = found.split_off(place).into_iter().map(Matched::from).collect();
+    let before: Vec<Matched> = found.into_iter().map(Matched::from).collect();
+    let mut sections = self::sections(conn, user, library, before, &keep.hid.losses)?;
+    if let Some(Lyrics { matches, total, .. }) = lyrics.filter(|lyrics| !lyrics.matches.is_empty())
+    {
         let items = matches.into_iter().map(|lyric| SearchResult::Lyric { lyric }).collect();
         sections.push(Section { kind: "lyrics", tag_type: None, items, total });
     }
+    sections.extend(self::sections(conn, user, library, after, &keep.hid.losses)?);
     let library_empty = library_number(conn, library, "track_count")? == 0;
     // Nothing found in a library with music: what was nearly found (`requirements/search.md` §8).
     let near_misses = if sections.is_empty() && !library_empty {
@@ -803,7 +826,7 @@ fn sections(
     conn: &Connection,
     user: i64,
     library: i64,
-    found: Vec<Found>,
+    found: Vec<Matched>,
     losses: &Losses,
 ) -> rusqlite::Result<Vec<Section>> {
     let mut sections = Vec::with_capacity(found.len());
