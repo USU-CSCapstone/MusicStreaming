@@ -8,10 +8,10 @@ import { LOGOUT_PENDING, lastKnown, logoutPending } from '$lib/last-known';
 import { realtime } from '$lib/realtime.svelte';
 
 /**
- * Codes of the errors the error page explains: a library not on the device, or a page that needs
- * the server.
+ * Codes of the errors the error page explains: a library not on the device, a page that needs the
+ * server, or an admin page opened by a non-admin.
  */
-const SHOWN = new Set(['not_on_device', 'unavailable_offline']);
+const SHOWN = new Set(['not_on_device', 'unavailable_offline', 'forbidden']);
 
 /**
  * Passes the code of an error the error page explains on to it; any other is logged and shows
