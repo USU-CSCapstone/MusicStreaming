@@ -5,11 +5,13 @@
 	import {
 		ApiError,
 		adminChangeLibraryAccess,
+		adminIssuePasswordReset,
 		adminListUsers,
 		adminSetUserStatus
 	} from '$lib/api/client';
 	import type { AdminUser } from '$lib/api/types';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import CopyLink from '$lib/components/CopyLink.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import AccountDevices from './AccountDevices.svelte';
 	import AccountLibraries from './AccountLibraries.svelte';
@@ -29,6 +31,9 @@
 
 	let query = $derived(data.q);
 	let suspending = $state<AdminUser | null>(null);
+	let resetting = $state<AdminUser | null>(null);
+	/** The reset link just made, held only here: the server does not give the code again. */
+	let issued = $state<{ username: string; link: string } | null>(null);
 	let listError = $state<string | null>(null);
 	/** The accounts ticked, by ID, kept here so a reloaded list neither loses nor misapplies them. */
 	let selected = $state<string[]>([]);
@@ -71,6 +76,16 @@
 		}
 	}
 
+	/** Makes the account's reset link, keeps it for showing, and marks the row as waiting for it. */
+	async function issueReset(row: AdminUser, password: string) {
+		const made = await adminIssuePasswordReset(fetch, row.id, { password });
+		issued = {
+			username: row.username,
+			link: `${location.origin}${resolve('/reset')}#${made.code}`
+		};
+		list.replace({ ...row, resetPending: true }, (r) => r.id === row.id);
+	}
+
 	function toggle(row: AdminUser, which: 'libraries' | 'devices') {
 		panel[row.id] = panel[row.id] === which ? undefined : which;
 	}
@@ -111,6 +126,18 @@
 
 <section aria-labelledby="all-title">
 	<h2 id="all-title">All accounts</h2>
+	{#if issued}
+		<div class="made">
+			<h3>Reset link for {issued.username}</h3>
+			<CopyLink url={issued.link} />
+			<p class="muted small">
+				It is shown only now, and lasts 24 hours. It works only where this address works: if you are
+				using an address on your home network, people elsewhere cannot open it. Making another link
+				replaces this one.
+			</p>
+			<button type="button" onclick={() => (issued = null)}>Done</button>
+		</div>
+	{/if}
 	<form class="search" role="search" onsubmit={search}>
 		<input
 			type="search"
@@ -188,6 +215,7 @@
 							>
 								Devices
 							</button>
+							<button type="button" onclick={() => (resetting = row)}>Reset password</button>
 						</div>
 						{#if panel[row.id] === 'libraries'}
 							<!-- Restarts on a new row, so the boxes show the grants the server now has. -->
@@ -229,10 +257,38 @@
 	</ConfirmDialog>
 {/if}
 
+{#if resetting}
+	{@const row = resetting}
+	<ConfirmDialog
+		title={`Reset ${row.username}’s password?`}
+		confirmLabel="Reset password"
+		password
+		action={(password) => issueReset(row, password)}
+		onclose={() => (resetting = null)}
+	>
+		<p>
+			You get a link to give {row.username}, who uses it to choose a new password. Using it signs
+			them out of every device.
+		</p>
+	</ConfirmDialog>
+{/if}
+
 <style>
 	section {
 		max-width: 760px;
 		margin-bottom: var(--space-6);
+	}
+
+	.made {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: var(--space-2);
+		margin-bottom: var(--space-4);
+	}
+
+	.made h3 {
+		margin: 0;
 	}
 
 	.search {
