@@ -2402,7 +2402,14 @@ export interface components {
                 items: components["schemas"]["SearchResult"][];
                 total: number;
             }[];
-            /** @description Suggested queries when little or nothing matched (`requirements/search.md` §8). Always empty until suggestions are built. */
+            /**
+             * @description When nothing matched in a library with music, up to three names of what nearly did,
+             *     nearest first, to search for instead (`requirements/search.md` §8): the query matched
+             *     again with a wrong first letter, a typo more, or one of its words left unmatched,
+             *     those leaving the fewest words unmatched only. Only what the search could have found
+             *     is named, so not what the caller hid, nor another account's playlist, nor anything
+             *     beyond `within`, `types` or `tagType`. Empty when anything matched.
+             */
             nearMisses: string[];
             /** @description Distinguishes "no music yet" from "nothing matches". */
             libraryEmpty: boolean;

@@ -236,7 +236,9 @@ test('a search that finds nothing offers what it nearly found, and keeps where i
 }) => {
 	// A wrong first letter, which a search never allows.
 	await page.goto('/search?q=pindling');
-	await expect(main(page).getByRole('heading', { name: 'No music matches “pindling”' })).toBeVisible();
+	await expect(
+		main(page).getByRole('heading', { name: 'No music matches “pindling”' })
+	).toBeVisible();
 	await expect(main(page).getByText(/^\s*Did you mean/)).toHaveText(/Did you mean\s+Kindling\s*\?/);
 	await main(page).getByRole('link', { name: 'Kindling' }).click();
 	await expect(page).toHaveURL(/\/search\?q=Kindling$/);
@@ -248,7 +250,9 @@ test('a search that finds nothing offers what it nearly found, and keeps where i
 	const offered = main(page).getByRole('link', { name: /^Signal Part/ });
 	await expect(offered).toHaveText(['Signal Part 1', 'Signal Part 2']);
 	await offered.first().click();
-	await expect(page).toHaveURL(new RegExp(`q=Signal\\+Part\\+1&from=${ambient}&within=${ambient}$`));
+	await expect(page).toHaveURL(
+		new RegExp(`q=Signal\\+Part\\+1&from=${ambient}&within=${ambient}$`)
+	);
 	await expect(songTitles(page)).toHaveText(['Signal Part 1']);
 });
 
