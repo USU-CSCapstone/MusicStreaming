@@ -1,6 +1,8 @@
 <script lang="ts">
 	import '../app.css';
 	import { untrack } from 'svelte';
+	import { invalidateAll } from '$app/navigation';
+	import { getMe, listLibraries } from '$lib/api/client';
 	import { page } from '$app/state';
 	import favicon from '$lib/assets/favicon.svg';
 	import DevicesPanel from '$lib/components/DevicesPanel.svelte';
@@ -32,6 +34,18 @@
 		player.libraryId = data.library?.id ?? '';
 	});
 
+	/**
+	 * Runs the root load again if the account's role or its library is no longer what the page
+	 * shows: a connection that was down missed any `accessChanged`. Only then, as running it again
+	 * rebuilds every list a page made from its load, from the first page. A failed read changes
+	 * nothing.
+	 */
+	async function followAccess() {
+		const [me, { items }] = await Promise.all([getMe(fetch), listLibraries(fetch)]);
+		if (me.role !== data.me?.role || (items[0]?.id ?? null) !== (data.library?.id ?? null))
+			await invalidateAll();
+	}
+
 	// Live updates, the account's devices and playback as last heard, its queue and the device's
 	// copy of its libraries, for someone signed in; the public pages have nothing to update. They
 	// leave the catalog's election but keep its files, which stay the last account's until the
@@ -49,10 +63,14 @@
 		}
 		const unsubscribe = untrack(() => {
 			void tellServiceWorker(user);
-			// A restarted server may be a new version: its connection saying hello is the cue to
-			// look, and to send what was made while it could not be reached.
 			const unsubscribe = realtime.on((message) => {
+				// The account's role or libraries changed: the root load reads them again, while the
+				// catalog's worker drops or downloads libraries (`design/web.md`).
+				if (message.type === 'accessChanged') void invalidateAll();
 				if (message.type !== 'hello') return;
+				void followAccess().catch(() => {});
+				// A restarted server may be a new version: its connection saying hello is the cue to
+				// look, and to send what was made while it could not be reached.
 				checkForUpdate();
 				sender.wake();
 			});
@@ -99,13 +117,14 @@
 	});
 
 	// Working offline closes the realtime connection and keeps the workers from any request;
-	// turning it off connects again, and the `hello` that follows makes them catch up.
+	// turning it off connects again, and the `hello` that follows makes them catch up. Keyed on the
+	// account, as above: a load run again keeps the connection, whose new `hello` would run it again.
 	$effect(() => {
 		const working = connectivity.workOffline;
 		queue.setWorkingOffline(working);
 		catalog.setWorkingOffline(working);
 		if (working) player.stopStreaming();
-		if (bare || !data.me || working) return;
+		if (bare || !userId || working) return;
 		realtime.start();
 		return () => realtime.stop();
 	});

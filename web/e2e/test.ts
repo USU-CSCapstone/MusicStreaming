@@ -40,6 +40,29 @@ export async function createPlaylist(server: Server, title: string, trackTitles:
 	return made.id as string;
 }
 
+/**
+ * Creates a user who reaches `libraryIds`, through an invite the owner makes and redeems as the
+ * person sent it would, and returns their ID and login.
+ */
+export async function createUser(server: Server, libraryIds: string[]) {
+	const { code } = await server.api('/admin/invites', { method: 'POST', body: { libraryIds } });
+	const username = `e2e-${randomUUID().slice(0, 8)}`;
+	const password = `e2e-${randomUUID()}`;
+	const res = await fetch(`${server.url}/api/v1/auth/invites/redeem`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			code,
+			username,
+			password,
+			device: { name: 'E2E harness', type: 'desktop' }
+		})
+	});
+	if (!res.ok) throw new Error(`Redeem failed: ${res.status} ${await res.text()}`);
+	const { user } = (await res.json()) as { user: { id: string } };
+	return { id: user.id, username, password };
+}
+
 /** Whether the catalog's owner says `library` is on the device. */
 export const onDevice = (page: Page, library: string) =>
 	page.evaluate(

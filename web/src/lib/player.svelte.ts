@@ -151,6 +151,7 @@ class Player {
 			if (message.type === 'hello') this.#progress.connected();
 			else if (message.type === 'player') this.#heard(message.state);
 			else if (message.type === 'execute') void this.#execute(message.command);
+			else if (message.type === 'accessChanged') void this.#checkAccess();
 		});
 		this.#tabs?.addEventListener('message', () => this.#yield());
 		$effect.root(() => {
@@ -257,6 +258,22 @@ class Player {
 		// on its way does.
 		this.#go(found.track, found.libraryId, item, startAt, !this.#pausedMove);
 		void this.#preload();
+	}
+
+	/**
+	 * Stops playback here if the account no longer reaches the track it holds: its library was
+	 * taken away, and asking for its audio again would only be refused.
+	 */
+	async #checkAccess() {
+		const item = this.#item;
+		const loaded = this.#loaded;
+		if (!this.#holds || !item || !loaded) return;
+		try {
+			await getPlaybackInfo(fetch, loaded.libraryId, loaded.track.id);
+		} catch (error) {
+			const lost = error instanceof ApiError && error.status === 404;
+			if (lost && this.#holds && this.#item === item) this.#end();
+		}
 	}
 
 	/** Runs `again` after a wait, in place of any other waiting. */
