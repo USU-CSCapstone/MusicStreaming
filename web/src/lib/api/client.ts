@@ -27,6 +27,7 @@ import type {
 	InvitePage,
 	KeptQueue,
 	Library,
+	ChangePasswordRequest,
 	LoginRequest,
 	Lyrics,
 	PlaybackInfo,
@@ -102,7 +103,7 @@ async function body<T>(res: Response): Promise<T> {
 			if (owner() && !ending) {
 				ending = true;
 				void catalog
-					.signOut()
+					.signOut(false, problem.reason)
 					.catch(console.error)
 					.finally(() => location.assign(login));
 			}
@@ -223,6 +224,10 @@ export const redeemInvite = (f: Fetch, request: RedeemInviteRequest) =>
 /** Logs this browser in as a new device: the server sets the session cookie. */
 export const login = (f: Fetch, request: LoginRequest) =>
 	send<Session>(f, 'POST', '/auth/login', request);
+
+/** Changes the caller's password; every other device of theirs is signed out. */
+export const changeMyPassword = (f: Fetch, request: ChangePasswordRequest) =>
+	send<void>(f, 'PUT', '/me/password', request);
 
 /** Logs this browser out: the server forgets the device and clears the cookie. */
 export const logout = (f: Fetch) => send<void>(f, 'POST', '/auth/logout');

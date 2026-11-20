@@ -25,12 +25,18 @@ export const MAX_RETRY_MS = 30_000;
 
 type Listener = (message: RealtimeServerMessage) => void;
 
+/** Why the server signed a device out. */
+export type Revoked = 'credentials_changed' | 'logged_out';
+
 export type Options = {
 	/** Where the connection goes; `/realtime` on this page's host by default. */
 	url?: () => string;
 	create?: (url: string) => WebSocket;
-	/** Whether the session is still good; asked when a connection is refused. */
-	signedIn?: () => Promise<boolean>;
+	/**
+	 * Whether the session is still good; asked when a connection is refused. A session the server
+	 * ended with a reason answers it.
+	 */
+	signedIn?: () => Promise<boolean | Revoked>;
 	/**
 	 * What happens once the server signs this device out and `onSessionEnd` is done; the login page
 	 * by default.
@@ -43,10 +49,14 @@ const defaultUrl = () => {
 	return `${scheme}//${location.host}${API}/realtime`;
 };
 
-/** False only when the server says the session is over; a server that is down says nothing. */
-const defaultSignedIn = () =>
+/**
+ * False, or the reason it gave, only when the server says the session is over; a server that is
+ * down says nothing.
+ */
+const defaultSignedIn = (): Promise<boolean | Revoked> =>
 	fetch(`${API}/me`).then(
-		(response) => response.status !== 401,
+		async (response) =>
+			response.status !== 401 || ((await response.json().catch(() => null))?.reason ?? false),
 		() => true
 	);
 
@@ -64,11 +74,11 @@ export class Realtime {
 	 * What the app does, before the login page loads, once the server has ended the session: wipes
 	 * the device.
 	 */
-	onSessionEnd: () => unknown = () => {};
+	onSessionEnd: (reason?: Revoked) => unknown = () => {};
 
 	#url: () => string;
 	#create: (url: string) => WebSocket;
-	#signedIn: () => Promise<boolean>;
+	#signedIn: () => Promise<boolean | Revoked>;
 	#revoked: () => void;
 	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- who listens is not state to render
 	#listeners = new Set<Listener>();
@@ -176,7 +186,7 @@ export class Realtime {
 			// Halfway between asking and hearing is the best guess at when the server answered.
 			this.#setClock(Date.parse(message.serverTime) - (this.#pingedAt + now) / 2);
 		} else if (message.type === 'sessionRevoked') {
-			this.#signOut();
+			this.#signOut(message.reason);
 			return;
 		}
 		for (const listener of this.#listeners) {
@@ -234,7 +244,8 @@ export class Realtime {
 		// it, asleep perhaps; the browser does not say why, so the API is asked.
 		if (refused) {
 			this.#signedIn().then((signedIn) => {
-				if (!signedIn && this.#running) this.#signOut();
+				if (signedIn !== true && this.#running)
+					this.#signOut(signedIn === false ? undefined : signedIn);
 			});
 		}
 		// Spread out, so devices that lost the server together do not all return at once.
@@ -244,9 +255,9 @@ export class Realtime {
 	}
 
 	/** The session is over: stops, lets the app wipe the device, then goes to the login page. */
-	#signOut() {
+	#signOut(reason?: Revoked) {
 		this.stop();
-		void Promise.resolve(this.onSessionEnd())
+		void Promise.resolve(this.onSessionEnd(reason))
 			.catch(console.error)
 			.then(() => this.#revoked());
 	}

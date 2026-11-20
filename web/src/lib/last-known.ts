@@ -34,6 +34,11 @@ const USER = 'jewelcase-user:';
 const DEVICE = 'jewelcase-device:';
 /** The start of the key of an account's devices and playback as last heard; the user's ID follows. */
 const PLAYBACK = 'jewelcase-playback:';
+/**
+ * The key of this browser's device ID, kept past a sign-out the server ended by changing the
+ * account's credentials so the next login can take the device back.
+ */
+const RECLAIM = 'jewelcase-reclaim';
 /** The marker of a logout the server has not been told of. */
 export const LOGOUT_PENDING = 'jewelcase-logout-pending';
 
@@ -121,9 +126,20 @@ export function lastPlayback(user: string): LastPlayback {
 
 /**
  * Deletes everything kept of any account and who owns the device; the server's details are not an
- * account's.
+ * account's. Only `reclaim`, the ID of a device the server signed out for a credentials change, is
+ * kept, for the next login (`reclaimedDevice`).
  */
-export function forget() {
+export function forget(reclaim?: string) {
+	try {
+		// Only a session still recorded is ended here: a second sign-out of the same session, from
+		// another tab or the socket after a failed request, leaves what the first kept.
+		if (localStorage.getItem(OWNER) !== null) {
+			localStorage.removeItem(RECLAIM);
+			if (reclaim) localStorage.setItem(RECLAIM, reclaim);
+		}
+	} catch {
+		// Nothing was kept.
+	}
 	try {
 		for (const key of Object.keys(localStorage)) {
 			if (
@@ -134,6 +150,24 @@ export function forget() {
 			)
 				localStorage.removeItem(key);
 		}
+	} catch {
+		// Nothing was kept.
+	}
+}
+
+/** The device ID kept by `forget` to be sent with the next login, until one succeeds. */
+export function reclaimedDevice(): string | null {
+	try {
+		return localStorage.getItem(RECLAIM);
+	} catch {
+		return null;
+	}
+}
+
+/** Lets go of the kept device ID, once a login has used it. */
+export function clearReclaimedDevice() {
+	try {
+		localStorage.removeItem(RECLAIM);
 	} catch {
 		// Nothing was kept.
 	}

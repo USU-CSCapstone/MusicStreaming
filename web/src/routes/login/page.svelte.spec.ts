@@ -15,6 +15,7 @@ const { connectivity } = await import('$lib/connectivity.svelte');
 
 afterEach(() => {
 	sessionStorage.clear();
+	localStorage.clear();
 	ending.now = false;
 	connectivity.setWorkOffline(false);
 	vi.restoreAllMocks();
@@ -56,4 +57,36 @@ it('turns Work offline off to log in, as no page a signed-out user reaches has t
 	await page.getByRole('button', { name: 'Log in' }).click();
 	await vi.waitFor(() => expect(sent).toHaveBeenCalled());
 	expect(connectivity.workOffline).toBe(false);
+});
+
+/** Logs in as `owner` and answers with the body the server's login request carried. */
+async function logInAs(answer: Response = Response.json({ id: 's1' })) {
+	const sent = vi.spyOn(globalThis, 'fetch').mockResolvedValue(answer);
+	render(Login);
+	await page.getByLabelText('Username').fill('owner');
+	await page.getByLabelText('Password').fill('secret');
+	await page.getByRole('button', { name: 'Log in' }).click();
+	await vi.waitFor(() => expect(sent).toHaveBeenCalled());
+	return JSON.parse(String(sent.mock.calls[0][1]?.body));
+}
+
+it('sends the device ID a credentials change signed out, and lets it go once logged in', async () => {
+	localStorage.setItem('jewelcase-reclaim', '7');
+	expect(await logInAs()).toMatchObject({ username: 'owner', deviceId: '7' });
+	await vi.waitFor(() => expect(localStorage.getItem('jewelcase-reclaim')).toBeNull());
+});
+
+it('keeps the device ID through a refused login, for the attempt with the new password', async () => {
+	localStorage.setItem('jewelcase-reclaim', '7');
+	const refusal = Response.json(
+		{ code: 'invalid_credentials', title: 'Unauthorized', status: 401 },
+		{ status: 401 }
+	);
+	expect(await logInAs(refusal)).toMatchObject({ deviceId: '7' });
+	await expect.element(page.getByRole('alert')).toBeVisible();
+	expect(localStorage.getItem('jewelcase-reclaim')).toBe('7');
+});
+
+it('sends no device ID when none was kept', async () => {
+	expect(await logInAs()).not.toHaveProperty('deviceId');
 });

@@ -56,6 +56,7 @@ export type SetupRequest = Schemas['SetupRequest'];
 export type RedeemInviteRequest = Schemas['RedeemInviteRequest'];
 export type Session = Schemas['Session'];
 export type LoginRequest = Schemas['LoginRequest'];
+export type ChangePasswordRequest = Schemas['ChangePasswordRequest'];
 export type User = Schemas['User'];
 /** An account as an admin sees it. */
 export type AdminUser = Schemas['AdminUser'];

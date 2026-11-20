@@ -3,6 +3,7 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import {
+		changeMyPassword,
 		disconnectMyPlugin,
 		getMyPluginSettings,
 		setMyPluginSettings,
@@ -112,6 +113,37 @@
 	/** Whether the account is signed in on a device besides this one. */
 	const hasOthers = $derived(playback.devices.some((d) => d.id !== playback.thisDevice));
 	let signingOutOthers = $state(false);
+
+	let currentPassword = $state('');
+	let newPassword = $state('');
+	let newPasswordAgain = $state('');
+	let changingPassword = $state(false);
+	let passwordError = $state('');
+	let passwordChanged = $state(false);
+
+	/**
+	 * Changes the password once the new one is typed twice alike. A refusal, a wrong current
+	 * password included, is shown on the form, which keeps what was typed; the session goes on.
+	 */
+	async function changePassword(event: SubmitEvent) {
+		event.preventDefault();
+		passwordChanged = false;
+		passwordError = '';
+		if (newPassword !== newPasswordAgain) {
+			passwordError = 'The new passwords do not match.';
+			return;
+		}
+		changingPassword = true;
+		try {
+			await changeMyPassword(fetch, { currentPassword, newPassword });
+			currentPassword = newPassword = newPasswordAgain = '';
+			passwordChanged = true;
+		} catch (e) {
+			passwordError = e instanceof Error ? e.message : String(e);
+		} finally {
+			changingPassword = false;
+		}
+	}
 
 	let busy = $state(false);
 	/**
@@ -269,6 +301,38 @@
 				Sign out all other devices
 			</button>
 		{/if}
+	</section>
+{/if}
+
+{#if me}
+	<section aria-labelledby="password">
+		<h2 id="password">Change password</h2>
+		<form onsubmit={changePassword}>
+			<label>
+				Current password
+				<input
+					type="password"
+					bind:value={currentPassword}
+					required
+					autocomplete="current-password"
+				/>
+			</label>
+			<label>
+				New password
+				<input type="password" bind:value={newPassword} required autocomplete="new-password" />
+			</label>
+			<label>
+				New password again
+				<input type="password" bind:value={newPasswordAgain} required autocomplete="new-password" />
+			</label>
+			{#if passwordError}<p class="error" role="alert">{passwordError}</p>{/if}
+			{#if passwordChanged}
+				<p role="status">Your password was changed and your other devices were signed out.</p>
+			{/if}
+			<button type="submit" disabled={changingPassword}>
+				{changingPassword ? 'Changing…' : 'Change password'}
+			</button>
+		</form>
 	</section>
 {/if}
 
@@ -559,6 +623,31 @@
 	.share .muted {
 		display: block;
 		font-size: 13px;
+	}
+
+	form {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: var(--space-3);
+		width: 100%;
+	}
+
+	label:has(input[type='password']) {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-1);
+		width: 100%;
+	}
+
+	input[type='password'] {
+		height: 36px;
+		padding: 0 var(--space-3);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-m);
+		background: var(--surface);
+		color: var(--text);
+		font: inherit;
 	}
 
 	li div {
