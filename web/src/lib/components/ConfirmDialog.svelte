@@ -152,8 +152,8 @@
 	}
 
 	.danger {
-		background: #dc2626;
-		color: #fff;
+		background: var(--danger);
+		color: var(--accent-text);
 	}
 
 	button:disabled {
@@ -162,12 +162,6 @@
 	}
 
 	.error {
-		color: #dc2626;
-	}
-
-	@media (prefers-color-scheme: dark) {
-		.error {
-			color: #f87171;
-		}
+		color: var(--danger);
 	}
 </style>
