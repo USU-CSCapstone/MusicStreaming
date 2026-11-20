@@ -60,6 +60,7 @@ export type User = Schemas['User'];
 /** An account as an admin sees it. */
 export type AdminUser = Schemas['AdminUser'];
 export type AdminUserPage = Schemas['AdminUserPage'];
+export type LibraryAccessChange = Schemas['LibraryAccessChange'];
 export type Device = Schemas['Device'];
 
 /** A cursor-paged list, as every list endpoint returns it. */

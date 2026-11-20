@@ -12,6 +12,7 @@ import { API, ApiError, loginUrl } from './root';
 import type {
 	AdminUser,
 	AdminUserPage,
+	LibraryAccessChange,
 	Album,
 	AlbumPage,
 	AppliedEdit,
@@ -20,6 +21,7 @@ import type {
 	EditQueue,
 	ImageRef,
 	CreatedInvite,
+	Device,
 	InviteCreate,
 	Invite,
 	InvitePage,
@@ -576,6 +578,28 @@ export const adminListUsers = (f: Fetch, query: { q?: string; cursor?: string } 
 /** Suspends an account, which signs it out everywhere, or restores it; answers the account. */
 export const adminSetUserStatus = (f: Fetch, userId: string, status: AdminUser['status']) =>
 	send<AdminUser>(f, 'PUT', `/admin/users/${encodeURIComponent(userId)}/status`, { status });
+
+const adminUser = (userId: string) => `/admin/users/${encodeURIComponent(userId)}`;
+
+/** Replaces the account's library grants with exactly `libraryIds`, and answers the account. */
+export const adminSetUserLibraries = (f: Fetch, userId: string, libraryIds: string[]) =>
+	send<AdminUser>(f, 'PUT', `${adminUser(userId)}/libraries`, { libraryIds });
+
+/** Grants or revokes libraries for up to 1,000 accounts at once, all or nothing. */
+export const adminChangeLibraryAccess = (f: Fetch, change: LibraryAccessChange) =>
+	send<void>(f, 'POST', '/admin/users/library-access', change);
+
+/** The account's signed-in devices, most recently seen first. */
+export const adminListUserDevices = (f: Fetch, userId: string) =>
+	get<{ items: Device[] }>(f, `${adminUser(userId)}/devices`);
+
+/** Signs out one device of the account. */
+export const adminSignOutDevice = (f: Fetch, userId: string, deviceId: string) =>
+	send<void>(f, 'DELETE', `${adminUser(userId)}/devices/${encodeURIComponent(deviceId)}`);
+
+/** Signs out every device of the account. */
+export const adminSignOutDevices = (f: Fetch, userId: string) =>
+	send<void>(f, 'DELETE', `${adminUser(userId)}/devices`);
 
 // ───────────────────────────── Invite administration ─────────────────────────────
 
