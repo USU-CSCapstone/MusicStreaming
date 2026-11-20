@@ -1053,6 +1053,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/libraries/{libraryId}/search/{section}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+                section: components["schemas"]["SearchSectionType"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Page through one section of a search
+         * @description Every match of one of `search`'s sections, in the same ranking, cursor-paged as the
+         *     browse lists are (`requirements/search.md` §4). A page continues after the last match of
+         *     the one before, so a library that changes between pages neither repeats a match nor passes
+         *     over one still there. What the caller hid is left out as `search` leaves it out. The
+         *     `playlists` section is empty until playlists are searched, and `lyrics` answers `422`
+         *     until they are indexed. A section that is none of these is `404`.
+         */
+        get: operations["searchSection"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/libraries/{libraryId}/recent-searches": {
         parameters: {
             query?: never;
@@ -3081,6 +3109,11 @@ export interface components {
             nearMisses: string[];
             /** @description Distinguishes "no music yet" from "nothing matches". */
             libraryEmpty: boolean;
+        };
+        SearchSectionPage: components["schemas"]["PageInfo"] & {
+            /** @description Echo of `q`, as `SearchResponse` echoes it. */
+            query: string;
+            items: components["schemas"]["SearchResult"][];
         };
         RecentSearch: {
             id: components["schemas"]["Id"];
@@ -6012,6 +6045,49 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SearchResponse"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    searchSection: {
+        parameters: {
+            query: {
+                /** @description Search text, from the first character typed. */
+                q: components["parameters"]["Query"];
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+                /**
+                 * @description Tag IDs, of any types, every one of which an item must carry. With `tagAny`, genre Rock
+                 *     in `tagAll` and Jazz and Blues in `tagAny` is Rock and (Jazz or Blues). A filter naming
+                 *     a tag the library does not have matches nothing, as `artistId` does. `tagAll` and
+                 *     `tagAny` name at most 100 tags together.
+                 */
+                tagAll?: components["parameters"]["TagAll"];
+                /**
+                 * @description Tag IDs, of any types, of which an item must carry one of each type named, since types
+                 *     are independent (`requirements/tags.md` §2): genre Rock and Jazz with mood Calm is
+                 *     (Rock or Jazz) and Calm. A filter naming a tag the library does not have matches
+                 *     nothing, as `artistId` does.
+                 */
+                tagAny?: components["parameters"]["TagAny"];
+            };
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+                section: components["schemas"]["SearchSectionType"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchSectionPage"];
                 };
             };
             default: components["responses"]["Problem"];
