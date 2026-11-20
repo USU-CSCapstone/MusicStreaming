@@ -228,6 +228,10 @@
 				<span class="muted">Scan your music, and see how the last scan went.</span>
 			</li>
 			<li>
+				<a href={resolve('/admin/accounts')}>Accounts</a>
+				<span class="muted">Find an account, and suspend or restore it.</span>
+			</li>
+			<li>
 				<a href={resolve('/admin/invites')}>Invites</a>
 				<span class="muted">Let people join, with the libraries they can reach.</span>
 			</li>

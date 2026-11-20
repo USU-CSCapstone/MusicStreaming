@@ -10,6 +10,8 @@ import { type LastKnown, lastKnown, owner, remember } from '$lib/last-known';
 import { read, readSearch, unavailableIfNotOnline, unreachable } from '$lib/catalog/read';
 import { API, ApiError, loginUrl } from './root';
 import type {
+	AdminUser,
+	AdminUserPage,
 	Album,
 	AlbumPage,
 	AppliedEdit,
@@ -564,6 +566,16 @@ export const adminListScans = (f: Fetch, libraryId: string) =>
 
 /** Queues a scan of the whole library; answers the scan that will do it, which may be one already queued. */
 export const startScan = (f: Fetch, libraryId: string) => send<Scan>(f, 'POST', scans(libraryId));
+
+// ───────────────────────────── Account administration ─────────────────────────────
+
+/** Accounts by username; `q` narrows them to those whose username or display name holds it. */
+export const adminListUsers = (f: Fetch, query: { q?: string; cursor?: string } = {}) =>
+	get<AdminUserPage>(f, '/admin/users', query);
+
+/** Suspends an account, which signs it out everywhere, or restores it; answers the account. */
+export const adminSetUserStatus = (f: Fetch, userId: string, status: AdminUser['status']) =>
+	send<AdminUser>(f, 'PUT', `/admin/users/${encodeURIComponent(userId)}/status`, { status });
 
 // ───────────────────────────── Invite administration ─────────────────────────────
 
