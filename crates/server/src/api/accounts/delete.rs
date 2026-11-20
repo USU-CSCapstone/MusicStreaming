@@ -61,8 +61,9 @@ pub async fn delete(
         hub.revoke_all(target, Revoked::LoggedOut);
         players.forget(target);
         queues.forget(target);
-        // What a request already past the gate gives memory later is dropped at its first save
-        // that finds the account gone.
+        // What a request already past the gate gives memory later is saved while the account's
+        // row is still there, then never written again, or dropped at the first save that finds
+        // the row gone; neither is tried again.
         tokio::spawn(async move { empty(&db, target).await });
         Ok(())
     })
