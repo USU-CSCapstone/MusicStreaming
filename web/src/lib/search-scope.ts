@@ -35,13 +35,13 @@ export function containerOf(routeId: string | null, params: Record<string, strin
 /**
  * The tabs of what a container holds (`api/openapi.yaml`, `Within`): an album and a playlist
  * their songs, an artist their albums and songs, and a tag the albums, artists and songs that
- * carry it. A tab of anything else would always be empty.
+ * carry it, and each its songs' lyrics. A tab of anything else would always be empty.
  */
 export const HELD: Record<ContainerKind, SearchTab[]> = {
-	album: ['tracks'],
-	artist: ['albums', 'tracks'],
-	playlist: ['tracks'],
-	tag: ['albums', 'artists', 'tracks']
+	album: ['tracks', 'lyrics'],
+	artist: ['albums', 'tracks', 'lyrics'],
+	playlist: ['tracks', 'lyrics'],
+	tag: ['albums', 'artists', 'tracks', 'lyrics']
 };
 
 /** What kind of container `within` names, if it names one. */

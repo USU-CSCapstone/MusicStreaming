@@ -107,6 +107,25 @@ describe('TopResult.svelte', () => {
 		expect(acted).toHaveBeenCalledWith({ type: 'track', id: '5' });
 	});
 
+	it('shows a lyric with its line, and plays its song among the lyric matches', async () => {
+		const acted = vi.fn();
+		const [before, song] = [track('4', 'Buddy Holly'), track('5', "Say It Ain't So")];
+		const lyric = { track: song, line: { text: "Say it ain't so", startMs: 1200 }, before: [], after: [] };
+		const lyricContext: PlayContext = { type: 'search', query: 'say it', section: 'lyrics' };
+		const lyrics = { tracks: [before, song], context: lyricContext };
+		render(TopResult, {
+			props: { result: { type: 'lyric', lyric }, context, from, lyrics, onact: acted }
+		});
+
+		await expect.element(page.getByText('Lyrics', { exact: true })).toBeVisible();
+		await expect.element(page.getByText("“Say it ain't so”")).toBeVisible();
+		await page.getByRole('button', { name: "Play Say It Ain't So" }).click();
+
+		// From the song's start, among the matches, not the search's songs.
+		expect(fake.plays).toEqual([[[before, song], 1, lyricContext]]);
+		expect(acted).toHaveBeenCalledWith({ type: 'track', id: '5' });
+	});
+
 	it('plays an album from its first song, the server resolving the rest', async () => {
 		const acted = vi.fn();
 		const first = [track('7', 'My Name Is Jonas'), track('8', 'No One Else')];

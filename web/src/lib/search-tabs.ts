@@ -1,13 +1,14 @@
 // The tabs above a search's results: All, then one for each type of result, as the sidebar
-// names and orders them, a type of tag each after the rest (`requirements/search.md` §4–5). A
-// tab is in the URL, so Back and a link keep it.
+// names and orders them, a type of tag each after the rest, and Lyrics last, which the sidebar
+// has no place for (`requirements/search.md` §4–5). A tab is in the URL, so Back and a link keep
+// it.
 
 import { resolve } from '$app/paths';
 import type { SearchSectionType, TagType } from './api/types';
 import { tagTypePlural } from './tags';
 
-/** A type of result a tab shows: those a search finds, but lyrics, not yet searched. */
-export type SearchTab = Exclude<SearchSectionType, 'lyrics'>;
+/** A type of result a tab shows: any a search finds. */
+export type SearchTab = SearchSectionType;
 
 /** A tab that shows one section: one type of result, and for tags one type of tag. */
 export type Tab = { type: SearchTab; tagType?: string };
@@ -17,16 +18,22 @@ export const TAB_PARAM = 'type';
 export const TAG_TYPE_PARAM = 'tagType';
 
 /** Each section's tab but the tags', in the sidebar's order, with the sidebar's name for it. */
-export const SEARCH_TABS: { type: Exclude<SearchTab, 'tags'>; label: string }[] = [
+export const SEARCH_TABS: { type: Exclude<SearchTab, 'tags' | 'lyrics'>; label: string }[] = [
 	{ type: 'albums', label: 'Albums' },
 	{ type: 'artists', label: 'Artists' },
 	{ type: 'playlists', label: 'Playlists' },
 	{ type: 'tracks', label: 'Songs' }
 ];
 
+/** The tab of lyric matches, after every other. */
+export const LYRICS_TAB = { type: 'lyrics', label: 'Lyrics' } as const;
+
+/** Each tab of one type, whatever its place, with its name. */
+const NAMED: { type: Exclude<SearchTab, 'tags'>; label: string }[] = [...SEARCH_TABS, LYRICS_TAB];
+
 /**
  * Every tab, in order, with its name: All, each section's, then one for each type of tag the
- * library has, `types` as `listTagTypes` gives them.
+ * library has, `types` as `listTagTypes` gives them, then Lyrics.
  */
 export function searchTabs(types: readonly TagType[]): { tab: Tab | null; label: string }[] {
 	return [
@@ -35,7 +42,8 @@ export function searchTabs(types: readonly TagType[]): { tab: Tab | null; label:
 		...types.map((tagType) => ({
 			tab: { type: 'tags' as const, tagType: tagType.key },
 			label: tagTypePlural(tagType.key, types)
-		}))
+		})),
+		{ tab: { type: LYRICS_TAB.type }, label: LYRICS_TAB.label }
 	];
 }
 
@@ -43,7 +51,7 @@ export function searchTabs(types: readonly TagType[]): { tab: Tab | null; label:
 export function tabLabel(tab: Tab | null, types: readonly TagType[]): string | null {
 	if (!tab) return null;
 	if (tab.type === 'tags') return tagTypePlural(tab.tagType ?? '', types);
-	return SEARCH_TABS.find((t) => t.type === tab.type)?.label ?? null;
+	return NAMED.find((t) => t.type === tab.type)?.label ?? null;
 }
 
 /** The tab `params` names, or null for All, as for a tab that is none of these. */
@@ -53,7 +61,7 @@ export function readTab(params: URLSearchParams): Tab | null {
 		const tagType = params.get(TAG_TYPE_PARAM);
 		return tagType ? { type, tagType } : null;
 	}
-	const found = SEARCH_TABS.find((tab) => tab.type === type);
+	const found = NAMED.find((tab) => tab.type === type);
 	return found ? { type: found.type } : null;
 }
 
