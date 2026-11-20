@@ -3771,7 +3771,14 @@ export interface components {
          *     the library lacks finds none.
          */
         SearchTagType: string;
-        /** @description Narrow to a container, as `artist:ID`, `album:ID`, or `playlist:ID` (`requirements/search.md` §5). Planned. */
+        /**
+         * @description Narrow to a container, as `album:ID`, `artist:ID`, `playlist:ID` or `tag:ID`
+         *     (`requirements/search.md` §5): to the tracks of an album; the tracks and albums credited
+         *     to an artist, owned or featured; the tracks of the caller's own playlist; or the tracks,
+         *     albums and artists that carry a tag, as `tagAny` reads them. A container holds nothing
+         *     of any other kind. One the caller does not reach, such as another account's playlist or
+         *     an album every track of which they hid, is `404`, as one that is not there is.
+         */
         Within: string;
         /** @description Longest edge in pixels. The server rounds up to one of a fixed set of sizes, and never enlarges an image. */
         ImageSize: number;
@@ -5059,7 +5066,14 @@ export interface operations {
                  *     the library lacks finds none.
                  */
                 tagType?: components["parameters"]["SearchTagType"];
-                /** @description Narrow to a container, as `artist:ID`, `album:ID`, or `playlist:ID` (`requirements/search.md` §5). Planned. */
+                /**
+                 * @description Narrow to a container, as `album:ID`, `artist:ID`, `playlist:ID` or `tag:ID`
+                 *     (`requirements/search.md` §5): to the tracks of an album; the tracks and albums credited
+                 *     to an artist, owned or featured; the tracks of the caller's own playlist; or the tracks,
+                 *     albums and artists that carry a tag, as `tagAny` reads them. A container holds nothing
+                 *     of any other kind. One the caller does not reach, such as another account's playlist or
+                 *     an album every track of which they hid, is `404`, as one that is not there is.
+                 */
                 within?: components["parameters"]["Within"];
                 /**
                  * @description Tag IDs, of any types, every one of which an item must carry. With `tagAny`, genre Rock
@@ -5108,6 +5122,15 @@ export interface operations {
                  *     the library lacks finds none.
                  */
                 tagType?: components["parameters"]["SearchTagType"];
+                /**
+                 * @description Narrow to a container, as `album:ID`, `artist:ID`, `playlist:ID` or `tag:ID`
+                 *     (`requirements/search.md` §5): to the tracks of an album; the tracks and albums credited
+                 *     to an artist, owned or featured; the tracks of the caller's own playlist; or the tracks,
+                 *     albums and artists that carry a tag, as `tagAny` reads them. A container holds nothing
+                 *     of any other kind. One the caller does not reach, such as another account's playlist or
+                 *     an album every track of which they hid, is `404`, as one that is not there is.
+                 */
+                within?: components["parameters"]["Within"];
                 /**
                  * @description One of the sorts the section's list takes, as it takes them: `listTracks`' for
                  *     `tracks`, `listAlbums`' for `albums`, and `listArtists`' for `artists`, the planned
