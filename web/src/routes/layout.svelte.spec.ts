@@ -80,16 +80,19 @@ describe('the app layout', () => {
 		expect(catalog.connect).not.toHaveBeenCalled();
 	});
 
-	it('shows the invite page on its own, without the sidebar or player', async () => {
-		route.id = '/invite';
-		const { container } = await render(Layout, {
-			data: { me: null, library: null, tagTypes: [] },
-			children
-		} as never);
+	it.each(['/invite', '/reset'])(
+		'shows %s on its own, without the sidebar or player',
+		async (id) => {
+			route.id = id;
+			const { container } = await render(Layout, {
+				data: { me: null, library: null, tagTypes: [] },
+				children
+			} as never);
 
-		expect(container.textContent).toContain('page');
-		expect(container.querySelector('.app')).toBeNull();
-	});
+			expect(container.textContent).toContain('page');
+			expect(container.querySelector('.app')).toBeNull();
+		}
+	);
 
 	it('tells both workers when Work offline is turned on and off', async () => {
 		route.id = '/login';

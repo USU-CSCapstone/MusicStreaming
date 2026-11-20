@@ -81,6 +81,9 @@
 	<p role="status">Signing out…</p>
 {:else}
 	<AuthForm title="Log in" submit="Log in" busyLabel="Logging in…" action={logIn}>
+		{#if page.url.searchParams.has('reset')}
+			<p role="status">Your password was changed. Log in with the new one.</p>
+		{/if}
 		{#if discarded > 0}
 			<p role="status">
 				Your session ended, so {discarded} unsent {discarded === 1
