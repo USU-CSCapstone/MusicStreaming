@@ -51,10 +51,9 @@ test('the top result plays a song or an album from where it stands, and keeps th
 	await top.getByRole('button', { name: 'Play Hearth' }).click();
 	// The album plays from its first song, as its page's Play does.
 	await expect(player(page).getByText('Kindling')).toBeVisible();
-	await expect.poll(async () => (await searches())[0]).toEqual([
-		'hearth',
-		{ type: 'album', id: server.ids.albums.Hearth }
-	]);
+	await expect
+		.poll(async () => (await searches())[0])
+		.toEqual(['hearth', { type: 'album', id: server.ids.albums.Hearth }]);
 });
 
 test('a tab shows one type of result, and stays as the search is typed', async ({ page }) => {
@@ -82,7 +81,9 @@ test('a tab shows one type of result, and stays as the search is typed', async (
 	await expect(songTitles(page)).toHaveText(['Kindling']);
 
 	await tabs(page).getByRole('link', { name: 'Playlists' }).click();
-	await expect(main(page).getByRole('heading', { name: 'No playlists match “kindling”' })).toBeVisible();
+	await expect(
+		main(page).getByRole('heading', { name: 'No playlists match “kindling”' })
+	).toBeVisible();
 	await page.goBack();
 	await expect(page).toHaveURL(/type=tracks$/);
 	await expect(songTitles(page)).toHaveText(['Kindling']);
@@ -105,7 +106,12 @@ test.describe('on a server of its own, with many songs', () => {
 			const args = ['-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono', '-t', '1'];
 			const tags = { title: `Lullaby ${number}`, artist: 'Night Owl', album: 'Lullabies' };
 			for (const [key, value] of Object.entries(tags)) args.push('-metadata', `${key}=${value}`);
-			return run('ffmpeg', [...args, '-c:a', 'flac', join(home, 'music', `lullaby-${number}.flac`)]);
+			return run('ffmpeg', [
+				...args,
+				'-c:a',
+				'flac',
+				join(home, 'music', `lullaby-${number}.flac`)
+			]);
 		};
 		for (let first = 1; first <= 120; first += 12) {
 			await Promise.all(Array.from({ length: 12 }, (_, i) => write(first + i)));
