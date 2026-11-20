@@ -353,54 +353,111 @@ impl Index {
 
     /// The vocabulary words that `word` matches, and how well.
     pub(super) fn matching_words(&self, word: &str) -> Vec<(u32, Quality)> {
-        let chars: Vec<char> = word.chars().collect();
-        let max_typos = typos_allowed(chars.len());
-        let mut found = Vec::new();
-        if max_typos == 0 || chars.len() > MAX_FUZZY_CHARS {
-            // Exact and prefix matches are one contiguous run of the sorted vocabulary.
-            for w in self.prefixed(word) {
-                let prefix = self.word(w).len() != word.len();
-                found.push((w as u32, quality(0, prefix)));
-            }
-            return found;
-        }
-        // Typos: every word starting with the same character.
-        let first = &word[..chars[0].len_utf8()];
-        let mut candidate: Vec<char> = Vec::with_capacity(MAX_FUZZY_CHARS);
-        for w in self.prefixed(first) {
-            candidate.clear();
-            candidate.extend(self.word(w).chars().take(MAX_FUZZY_CHARS + max_typos as usize));
-            if let Some((typos, prefix)) = distance(&chars, &candidate, max_typos) {
-                found.push((w as u32, quality(typos, prefix)));
-            }
-        }
-        found
-    }
-
-    /// The vocabulary indexes of the words that start with `prefix`.
-    pub(super) fn prefixed(&self, prefix: &str) -> Range<usize> {
-        let start = self.partition(0..self.vocabulary_len(), |w| w < prefix);
-        let end = self.partition(start..self.vocabulary_len(), |w| w.starts_with(prefix));
-        start..end
+        matching_words(self, word)
     }
 
     /// The vocabulary index of `word`, if it is there.
     fn find(&self, word: &str) -> Option<usize> {
-        let w = self.partition(0..self.vocabulary_len(), |v| v < word);
+        let w = partition(self, 0..self.vocabulary_len(), |v| v < word);
         (w < self.vocabulary_len() && self.word(w) == word).then_some(w)
     }
+}
 
-    /// The first vocabulary index in `within` whose word `before` is false of, where it holds of
-    /// every word up to some point and of none after, as `slice::partition_point` finds it.
-    fn partition(&self, mut within: Range<usize>, before: impl Fn(&str) -> bool) -> usize {
-        while within.start < within.end {
-            let middle = within.start + (within.end - within.start) / 2;
-            if before(self.word(middle)) {
-                within.start = middle + 1;
-            } else {
-                within.end = middle;
-            }
-        }
-        within.start
+/// A sorted vocabulary, its words by their places: a names index's, kept end to end, and a lyric
+/// index's, kept as strings. Names and lyrics match words alike over either ([`matching_words`]).
+pub(super) trait Vocabulary {
+    /// How many words there are.
+    fn size(&self) -> usize;
+    /// The word at place `w`.
+    fn word_at(&self, w: usize) -> &str;
+}
+
+impl Vocabulary for Index {
+    fn size(&self) -> usize {
+        self.vocabulary_len()
     }
+
+    fn word_at(&self, w: usize) -> &str {
+        self.word(w)
+    }
+}
+
+impl Vocabulary for [String] {
+    fn size(&self) -> usize {
+        self.len()
+    }
+
+    fn word_at(&self, w: usize) -> &str {
+        &self[w]
+    }
+}
+
+/// The first place in `within` of `vocabulary` whose word `before` is false of, where it holds of
+/// every word up to some point and of none after, as `slice::partition_point` finds it.
+fn partition(
+    vocabulary: &(impl Vocabulary + ?Sized),
+    mut within: Range<usize>,
+    before: impl Fn(&str) -> bool,
+) -> usize {
+    while within.start < within.end {
+        let middle = within.start + (within.end - within.start) / 2;
+        if before(vocabulary.word_at(middle)) {
+            within.start = middle + 1;
+        } else {
+            within.end = middle;
+        }
+    }
+    within.start
+}
+
+/// The words of the sorted `vocabulary` that `word` matches, by their places in it, and how well:
+/// exactly, as a prefix, or with the typos a word as long may have, its first letter right. Names
+/// and lyrics match words alike by it.
+pub(super) fn matching_words(
+    vocabulary: &(impl Vocabulary + ?Sized),
+    word: &str,
+) -> Vec<(u32, Quality)> {
+    let chars: Vec<char> = word.chars().collect();
+    let max_typos = typos_allowed(chars.len());
+    let mut found = Vec::new();
+    if max_typos == 0 || chars.len() > MAX_FUZZY_CHARS {
+        // Exact and prefix matches are one contiguous run of the sorted vocabulary.
+        for w in prefixed(vocabulary, word) {
+            let prefix = vocabulary.word_at(w).len() != word.len();
+            found.push((w as u32, quality(0, prefix)));
+        }
+        return found;
+    }
+    // Typos: every word starting with the same character.
+    let first = &word[..chars[0].len_utf8()];
+    let mut candidate: Vec<char> = Vec::with_capacity(MAX_FUZZY_CHARS);
+    for w in prefixed(vocabulary, first) {
+        candidate.clear();
+        candidate.extend(vocabulary.word_at(w).chars().take(MAX_FUZZY_CHARS + max_typos as usize));
+        if let Some((typos, prefix)) = distance(&chars, &candidate, max_typos) {
+            found.push((w as u32, quality(typos, prefix)));
+        }
+    }
+    found
+}
+
+/// How well query word `query`, its characters `chars`, matches `word`, as [`matching_words`] would
+/// find it, if at all: for one word read back from text rather than looked up.
+pub(super) fn word_quality(query: &str, chars: &[char], word: &str) -> Option<Quality> {
+    let max_typos = typos_allowed(chars.len());
+    if max_typos == 0 || chars.len() > MAX_FUZZY_CHARS {
+        return word.starts_with(query).then(|| quality(0, word.len() != query.len()));
+    }
+    if !word.starts_with(&query[..chars[0].len_utf8()]) {
+        return None;
+    }
+    let candidate: Vec<char> = word.chars().take(MAX_FUZZY_CHARS + max_typos as usize).collect();
+    distance(chars, &candidate, max_typos).map(|(typos, prefix)| quality(typos, prefix))
+}
+
+/// The places in the sorted `vocabulary` of the words that start with `prefix`.
+pub(super) fn prefixed(vocabulary: &(impl Vocabulary + ?Sized), prefix: &str) -> Range<usize> {
+    let start = partition(vocabulary, 0..vocabulary.size(), |w| w < prefix);
+    let end = partition(vocabulary, start..vocabulary.size(), |w| w.starts_with(prefix));
+    start..end
 }

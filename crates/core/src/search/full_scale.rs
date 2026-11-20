@@ -167,7 +167,7 @@ fn benchmark_lyrics_full_scale() {
     let given: usize = tracks.iter().map(|(_, lines)| lines.len()).sum();
 
     let started = std::time::Instant::now();
-    let index = LyricIndex::build(tracks);
+    let index = LyricIndex::build(tracks.iter().map(|(id, lines)| (*id, lines.clone())));
     let took = started.elapsed();
     println!(
         "{} tracks, {given} lines given, {} indexed, built in {took:?}: {:.1} MB",
@@ -177,5 +177,45 @@ fn benchmark_lyrics_full_scale() {
     );
     for (part, bytes) in index.parts() {
         println!("{part:>24}: {:>6.1} MB", bytes as f64 / 1_000_000.0);
+    }
+
+    // Searches: a first letter, as typing starts; the commonest word, which most lines hold; two
+    // common words together; a rare word; a common word and a rare one with a typo; and a phrase
+    // of four.
+    let common = &vocabulary[0];
+    let second = &vocabulary[1];
+    let rare = vocabulary.iter().rev().find(|w| w.len() >= 6).unwrap();
+    let mut typo = rare.clone();
+    typo.replace_range(3..4, "z");
+    let queries = [
+        common[..1].to_owned(),
+        common.clone(),
+        format!("{common} {second}"),
+        rare.clone(),
+        format!("{common} {typo}"),
+        format!("{common} {second} {} {}", vocabulary[2], vocabulary[3]),
+    ];
+    for query in &queries {
+        let started = std::time::Instant::now();
+        let rounds = 10;
+        let mut hits = Vec::new();
+        for _ in 0..rounds {
+            hits = index.search(query, |_| true);
+        }
+        let searched = started.elapsed() / rounds;
+        // Step two, given the lyrics already read: the best tracks' lines folded and checked.
+        let started = std::time::Instant::now();
+        for _ in 0..rounds {
+            lift_phrases(query, &mut hits, |track| {
+                usize::try_from(track)
+                    .ok()
+                    .map(|t| tracks[t].1.iter().map(String::as_str).collect())
+            });
+        }
+        let lifted = started.elapsed() / rounds;
+        println!(
+            "{query:>28}: {searched:>8.2?} per search, {} tracks, then {lifted:>8.2?} to lift phrases",
+            hits.len()
+        );
     }
 }

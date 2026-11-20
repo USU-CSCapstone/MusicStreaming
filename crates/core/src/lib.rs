@@ -22,8 +22,8 @@ pub use queue::{
     positions_holding,
 };
 pub use search::{
-    Document, Finishing, Index, IndexBuilder, Kind, LyricIndex, Rank, Section, SectionPage, Union,
-    plain_lines, words,
+    Document, Finishing, Index, IndexBuilder, Kind, LyricHit, LyricIndex, PHRASE_TRACKS, Rank,
+    Section, SectionPage, Union, lift_phrases, plain_lines, words,
 };
 pub use sort::{SortField, SortRow, sort_key, sort_rows, tag_sort_key};
 pub use waveform::{shape_waveform, waveform_level};
