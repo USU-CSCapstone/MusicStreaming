@@ -9,6 +9,7 @@
 //! with whatever of the catalog goes with them. A request to forget searches (`stopped`) is
 //! kept until it is delivered instead, however old it is. Art and biographies that nothing
 //! points at go whatever their age, and idempotency keys go after 8 days, not the window.
+//! Accounts marked for deletion are emptied, and their rows deleted ([`accounts`]).
 //!
 //! The sweep is one write per chunk of rows ([`sweep`]), so a write queued behind it waits for
 //! one chunk, never the whole sweep. A kind of row that fails is passed over until the next
@@ -25,6 +26,7 @@ use rusqlite::{Result, Transaction, params};
 
 use super::{Database, Text, feed, now_ms};
 
+mod accounts;
 mod catalog;
 #[cfg(test)]
 mod tests;
@@ -69,9 +71,10 @@ const STAGES: [Stage; 14] = [
     catalog::biographies,
 ];
 
-/// Sweeps every kind of row at `now`, one write per chunk, until none has more to delete. A
-/// kind whose write fails, or panics, is logged and passed over until the next sweep, so one row
-/// that cannot go never holds up the others.
+/// Sweeps every kind of row at `now`, one write per chunk, until none has more to delete, then
+/// empties every account being deleted ([`accounts::empty`]). A kind whose write fails, or
+/// panics, is logged and passed over until the next sweep, so one row that cannot go never holds
+/// up the others.
 pub async fn sweep(db: &Database, now: i64) {
     for stage in STAGES {
         let mut after = i64::MIN;
@@ -91,6 +94,21 @@ pub async fn sweep(db: &Database, now: i64) {
                 }
             }
         }
+    }
+    let deleting = db
+        .read(|conn| {
+            conn.prepare_cached("SELECT id FROM users WHERE status = 'deleting'")?
+                .query_map([], |row| row.get(0))?
+                .collect::<Result<Vec<i64>>>()
+        })
+        .await;
+    match deleting {
+        Ok(users) => {
+            for user in users {
+                accounts::empty(db, user).await;
+            }
+        }
+        Err(error) => warn!(%error, "cannot find the accounts being deleted"),
     }
 }
 
