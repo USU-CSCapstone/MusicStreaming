@@ -314,7 +314,37 @@ export interface paths {
         get: operations["listDevices"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Sign out the caller's other devices
+         * @description Signs out every signed-in device of the caller except the calling one, as
+         *     `adminSignOutDevices` does for an account: each later request with its token is
+         *     `401 session_revoked` with `logged_out`, its realtime connections are sent
+         *     `sessionRevoked` and closed, and the remaining connections are sent the new device list.
+         *     Not recorded in the audit log. The calling device signs itself out with `logout`.
+         */
+        delete: operations["signOutMyOtherDevices"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/devices/{deviceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Sign out one of the caller's other devices
+         * @description Signs out the device as `signOutMyOtherDevices` does all of them. A device that is not
+         *     the caller's, or is not signed in, is `404` and nothing changes. The calling device's
+         *     own ID is `422`: it signs itself out with `logout`.
+         */
+        delete: operations["signOutMyDevice"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4597,6 +4627,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeviceList"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    signOutMyOtherDevices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    signOutMyDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `validation_failed` — the calling device's own ID. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
                 };
             };
             default: components["responses"]["Problem"];
