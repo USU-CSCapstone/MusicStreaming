@@ -301,6 +301,20 @@ it('drops a deleted account from the list and the selection, keeps the other row
 	expect(fake.asked).toEqual([{ q: '', cursor: 'next' }]);
 });
 
+it('drops a reset link shown for an account once that account is deleted, which cancelled it', async () => {
+	render(Accounts, open([account('3', 'bob')], as('admin')) as never);
+	await page.getByRole('button', { name: 'Reset password' }).click();
+	await page.getByLabelText('Your password').fill('pw');
+	await page.getByRole('dialog').getByRole('button', { name: 'Reset password' }).click();
+	await expect.element(page.getByText(`${location.origin}/jc/reset#reset-code`)).toBeVisible();
+
+	await rowOf('bob').getByRole('button', { name: 'Delete' }).click();
+	await page.getByLabelText('Your password').fill('pw');
+	await page.getByRole('dialog').getByRole('button', { name: 'Delete' }).click();
+	await expect.element(page.getByText('bob Display')).not.toBeInTheDocument();
+	expect(document.body.textContent).not.toContain('reset-code');
+});
+
 it('keeps the dialog and shows the server’s reason when the password is wrong, or the delete is refused', async () => {
 	fake.fail = new ApiError(403, 'wrong_password', 'Your current password is not correct.');
 	render(Accounts, open([account('3', 'bob')], as('admin')) as never);
