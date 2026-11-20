@@ -63,11 +63,11 @@ info:
     the key when it carries no header.
 
     **Pagination.** The lists that can grow without bound — tracks, albums, artists,
-    playlists, a playlist's items, and kept queues — are cursor-paged: pass the previous page's
-    `nextCursor` as `cursor`, with the same `sort` and `order`; the last page's `nextCursor`
-    is `null`. `limit` defaults to 100 and may be up to 1000 — a bound on one transfer,
-    never on a collection. Each page reports the list's `total`. Every other list is one
-    `items` array.
+    playlists, a playlist's items, a search's sections, and kept queues — are cursor-paged:
+    pass the previous page's `nextCursor` as `cursor`, with the same `sort` and `order`; the
+    last page's `nextCursor` is `null`. `limit` defaults to 100 and may be up to 1000 — a
+    bound on one transfer, never on a collection. Each page reports the list's `total`. Every
+    other list is one `items` array.
 
     **Absent and null.** In a response, a property whose type allows `null` is always sent,
     as `null` when it has no value; a property a response may leave out is never `null`.
@@ -1242,6 +1242,38 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SearchResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /libraries/{libraryId}/search/{section}:
+    parameters:
+      - $ref: '#/components/parameters/LibraryId'
+      - name: section
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/SearchSectionType' }
+    get:
+      tags: [Search]
+      summary: Page through one section of a search
+      description: |
+        Every match of one of `search`'s sections, in the same ranking, cursor-paged as the
+        browse lists are (`requirements/search.md` §4). A page continues after the last match of
+        the one before, so a library that changes between pages neither repeats a match nor passes
+        over one still there. What the caller hid is left out as `search` leaves it out. The
+        `playlists` section is empty until playlists are searched, and `lyrics` answers `422`
+        until they are indexed. A section that is none of these is `404`.
+      operationId: searchSection
+      parameters:
+        - $ref: '#/components/parameters/Query'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/TagAll'
+        - $ref: '#/components/parameters/TagAny'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SearchSectionPage' }
         default: { $ref: '#/components/responses/Problem' }
 
   /libraries/{libraryId}/recent-searches:
@@ -3536,6 +3568,19 @@ components:
         libraryEmpty:
           type: boolean
           description: Distinguishes "no music yet" from "nothing matches".
+
+    SearchSectionPage:
+      allOf:
+        - $ref: '#/components/schemas/PageInfo'
+        - type: object
+          required: [query, items]
+          properties:
+            query:
+              type: string
+              description: Echo of `q`, as `SearchResponse` echoes it.
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/SearchResult' }
 
     RecentSearch:
       type: object

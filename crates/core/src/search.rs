@@ -30,11 +30,13 @@ mod distance;
 #[cfg(test)]
 mod full_scale;
 mod query;
+mod rank;
 #[cfg(test)]
 mod tests;
 mod words;
 
 pub use build::{Finishing, IndexBuilder};
+pub use rank::Rank;
 pub use words::words;
 
 /// What a name names. The order is the tie-break: the more specific thing first.
@@ -84,6 +86,16 @@ pub struct Section {
     pub ids: Vec<i64>,
     /// How many matched in all.
     pub total: usize,
+}
+
+/// A page of one kind's matches, best first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionPage {
+    pub ids: Vec<i64>,
+    /// How many matched in all.
+    pub total: usize,
+    /// The rank of the page's last match while more follow it, to continue after.
+    pub next: Option<Rank>,
 }
 
 /// Names by their words, ready to search. Each part is one flat array, ranges of which belong to
