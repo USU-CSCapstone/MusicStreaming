@@ -6,16 +6,26 @@ import { claim, remember } from '$lib/last-known';
 const fake = vi.hoisted(() => ({
 	calls: [] as string[],
 	role: 'owner' as 'owner' | 'admin' | 'user',
-	libraries: {} as Record<string, object>
+	libraries: {} as Record<string, object>,
+	signedOutOthers: 0,
+	failure: null as Error | null
 }));
 
 vi.mock('$lib/realtime.svelte', () => ({
 	realtime: {
 		connected: false,
 		offline: false,
+		deviceId: '2',
 		on: () => () => {},
 		start: () => fake.calls.push('start'),
 		stop: () => fake.calls.push('stop')
+	}
+}));
+vi.mock('$lib/api/client', async (original) => ({
+	...(await original<object>()),
+	signOutMyOtherDevices: async () => {
+		fake.signedOutOthers++;
+		if (fake.failure) throw fake.failure;
 	}
 }));
 vi.mock('$lib/catalog/client.svelte', () => ({
@@ -49,12 +59,17 @@ vi.mock('$app/state', () => ({
 const { default: Account } = await import('./+page.svelte');
 const { connectivity } = await import('$lib/connectivity.svelte');
 const { sender } = await import('$lib/sync/sender');
+const { playback } = await import('$lib/playback.svelte');
+const { ApiError } = await import('$lib/api/root');
 const { memoryEnv } = await import('$lib/sync/store');
 
 beforeEach(() => {
 	fake.calls.length = 0;
 	fake.role = 'owner';
 	fake.libraries = {};
+	fake.signedOutOthers = 0;
+	fake.failure = null;
+	playback.devices = [];
 	localStorage.clear();
 	// The wait for the server is never over, so the page does not go to the login page.
 	vi.useFakeTimers({ toFake: ['setTimeout'] });
@@ -266,4 +281,52 @@ it('says of a library already on the device that its new copy was not downloaded
 		)
 		.toBeVisible();
 	await expect.element(page.getByText('It keeps up with the server’s changes')).toBeVisible();
+});
+
+const device = (id: string, name: string) =>
+	({ id, name, type: 'desktop', connected: true, firstSeenAt: '', lastSeenAt: '' }) as never;
+
+it('offers to sign out all other devices only when another is signed in', async () => {
+	playback.devices = [device('2', 'Phone')];
+	render(Account, { data: { connectable: [] } } as never);
+	await expect.element(page.getByRole('list', { name: 'Devices' })).toBeVisible();
+	await expect
+		.element(page.getByRole('button', { name: 'Sign out all other devices' }))
+		.not.toBeInTheDocument();
+	playback.devices = [device('2', 'Phone'), device('1', 'Desk')];
+	await expect
+		.element(page.getByRole('button', { name: 'Sign out all other devices' }))
+		.toBeVisible();
+});
+
+it('asks before signing out all other devices, and signs them out only on yes', async () => {
+	playback.devices = [device('2', 'Phone'), device('1', 'Desk')];
+	render(Account, { data: { connectable: [] } } as never);
+	await page.getByRole('button', { name: 'Sign out all other devices' }).click();
+	await expect.element(page.getByRole('dialog')).toBeVisible();
+	expect(fake.signedOutOthers).toBe(0);
+
+	await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
+	await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
+	expect(fake.signedOutOthers).toBe(0);
+
+	await page.getByRole('button', { name: 'Sign out all other devices' }).click();
+	await page
+		.getByRole('dialog')
+		.getByRole('button', { name: 'Sign out all other devices' })
+		.click();
+	await vi.waitFor(() => expect(fake.signedOutOthers).toBe(1));
+	await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
+});
+
+it("shows the server's reason in the dialog when signing out the others fails", async () => {
+	playback.devices = [device('2', 'Phone'), device('1', 'Desk')];
+	fake.failure = new ApiError(500, 'internal', 'The server could not do that.');
+	render(Account, { data: { connectable: [] } } as never);
+	await page.getByRole('button', { name: 'Sign out all other devices' }).click();
+	await page
+		.getByRole('dialog')
+		.getByRole('button', { name: 'Sign out all other devices' })
+		.click();
+	await expect.element(page.getByRole('alert')).toHaveTextContent('The server could not do that.');
 });

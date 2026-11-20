@@ -59,3 +59,39 @@ test('the owner takes a user’s library away, suspends them, and restores them,
 		await context.close();
 	}
 });
+
+test('a user signs their other browser out from the Account page, and it ends up at the login page', async ({
+	browser,
+	server
+}) => {
+	const user = await createUser(server, [server.ids.library]);
+	const first = await browser.newContext({ baseURL: server.url });
+	const second = await browser.newContext({ baseURL: server.url });
+	try {
+		const here = await first.newPage();
+		await login(here, server.url, user.username, user.password, {
+			name: 'First browser',
+			type: 'desktop'
+		});
+		const there = await second.newPage();
+		await login(there, server.url, user.username, user.password, {
+			name: 'Second browser',
+			type: 'desktop'
+		});
+		await there.goto('/albums');
+		await expect(there.getByText('Signal', { exact: true }).first()).toBeVisible();
+
+		await here.goto('/account');
+		const devices = here.getByRole('list', { name: 'Devices' });
+		await expect(devices.getByRole('listitem').filter({ hasText: 'Second browser' })).toBeVisible();
+		await expect(here.getByRole('button', { name: 'Sign out First browser' })).toHaveCount(0);
+		await here.getByRole('button', { name: 'Sign out Second browser' }).click();
+
+		await expect(there).toHaveURL(/\/login(\?|$)/);
+		await expect(devices.getByText('Second browser')).toHaveCount(0);
+		await expect(devices.getByText('First browser')).toBeVisible();
+	} finally {
+		await first.close();
+		await second.close();
+	}
+});
