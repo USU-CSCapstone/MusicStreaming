@@ -31,6 +31,7 @@ mod build;
 mod distance;
 #[cfg(test)]
 mod full_scale;
+mod near;
 mod query;
 mod rank;
 #[cfg(test)]
