@@ -19,7 +19,9 @@
 	} = $props();
 
 	const tabs = $derived(
-		searchTabs(page.data.tagTypes ?? []).filter(({ tab }) => !tab || !holds || holds.includes(tab.type))
+		searchTabs(page.data.tagTypes ?? []).filter(
+			({ tab }) => !tab || !holds || holds.includes(tab.type)
+		)
 	);
 
 	/** At phone width the tabs scroll sideways, so the one open is brought into view. */
