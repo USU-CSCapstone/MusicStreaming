@@ -1,14 +1,21 @@
-//! Passwords: the strength every new one must have, the PHC string stored in its place, and
-//! checking one against it (`requirements/users.md` §3, `design/database.md`).
+//! Passwords: the strength every new one must have, the PHC string stored in its place,
+//! checking one against it, and confirming a sensitive action with the caller's own
+//! (`requirements/users.md` §3, `design/database.md`).
+
+pub(super) mod change;
 
 use std::sync::LazyLock;
 use std::thread;
 
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
+use rusqlite::{Connection, OptionalExtension};
 use tokio::sync::Semaphore;
 use zxcvbn::{Score, zxcvbn};
 
-use super::{Code, Problem};
+use super::login::limits;
+use super::origin::Origin;
+use super::{AppState, Caller, Code, Problem};
+use crate::db::now_ms;
 
 /// zxcvbn's own threshold: below it, a password is guessable offline in hours.
 const MIN_SCORE: Score = Score::Three;
@@ -95,6 +102,77 @@ async fn off_thread<T: Send + 'static>(
     })
     .await
     .map_err(|_| Problem::new(Code::Internal))?
+}
+
+/// The caller's password, checked by [`confirm`]: whose it is and the stored hash it matched.
+pub struct Confirmed {
+    user: i64,
+    hash: String,
+}
+
+impl Confirmed {
+    /// Refuses unless the account is still active with the password that was checked. Call it
+    /// inside the action's write, so a password changed or an account suspended since the check
+    /// stops the action: `403 wrong_password` for the one, and for the other `401
+    /// unauthenticated`, as the gate would now answer.
+    pub fn check(&self, conn: &Connection) -> Result<(), Problem> {
+        let current = conn
+            .prepare_cached("SELECT password FROM users WHERE id = ?1 AND status = 'active'")?
+            .query_row([self.user], |row| row.get::<_, String>(0))
+            .optional()?;
+        match current {
+            None => Err(Problem::new(Code::Unauthenticated)),
+            Some(hash) if hash != self.hash => Err(wrong_password()),
+            Some(_) => Ok(()),
+        }
+    }
+}
+
+/// Checks `password` as the caller's current one, for a sensitive action (`requirements/users.md`
+/// §3). Each check counts as a sign-in attempt under the account's username and `from`
+/// ([`limits`]), so a stolen session cannot guess the password faster than a sign-in could:
+/// past the limits it is `429 rate_limited` without a check. A wrong password is `403
+/// wrong_password`, never `401`, which would end the caller's session. An account that is no
+/// longer active is `401 unauthenticated`, as the gate would now answer, with nothing recorded.
+pub async fn confirm(
+    state: &AppState,
+    caller: Caller,
+    from: &Origin,
+    password: String,
+) -> Result<Confirmed, Problem> {
+    let (user, client) = (caller.user, from.client);
+    let (attempt, stored) = state
+        .db
+        .try_write(move |tx| {
+            let account = tx
+                .prepare_cached(
+                    "SELECT username, password FROM users WHERE id = ?1 AND status = 'active'",
+                )?
+                .query_row([user], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+                .optional()?;
+            let Some((username, stored)) = account else {
+                return Err(Problem::new(Code::Unauthenticated));
+            };
+            let now = now_ms();
+            let wait = limits::wait_ms(tx, &username, client, now)?;
+            if wait > 0 {
+                return Err(Problem::rate_limited(wait)
+                    .detail("Too many wrong passwords. Wait a moment and try again."));
+            }
+            let attempt = limits::record(tx, &username, Some(user), client, now)?;
+            Ok((attempt, stored))
+        })
+        .await?;
+    if !verify(password, Some(stored.clone())).await? {
+        return Err(wrong_password());
+    }
+    state.db.write(move |tx| limits::succeeded(tx, attempt)).await?;
+    Ok(Confirmed { user, hash: stored })
+}
+
+/// A `403 wrong_password`: the password given is not the account's current one.
+fn wrong_password() -> Problem {
+    Problem::new(Code::WrongPassword).detail("Your current password is not correct.")
 }
 
 /// Takes every [`HASHING`] permit, waiting for checks already running, so a check started

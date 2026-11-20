@@ -20,7 +20,7 @@ use super::realtime::{Hub, Revoked, ServerMessage};
 use super::scope::Caller;
 use super::time::serialize_rfc3339;
 use super::{Code, Id, Problem};
-use crate::db::{Database, new_id, now_ms};
+use crate::db::{Database, Text, new_id, now_ms};
 
 /// The spec's `Device`.
 #[derive(Serialize)]
@@ -128,7 +128,7 @@ pub enum Which {
     All { keep: Option<i64> },
 }
 
-/// Signs out the devices of `user` that `which` names and are still signed in, as `logged_out`,
+/// Signs out the devices of `user` that `which` names and are still signed in, for `reason`,
 /// keeping their rows and token hashes so each one's next request is told why. Returns each
 /// one's ID and name. Once the write commits, close their connections with `Hub::revoke` or
 /// `Hub::revoke_all` and call [`changed`].
@@ -136,18 +136,19 @@ pub fn sign_out(
     conn: &Connection,
     user: i64,
     which: Which,
+    reason: Revoked,
 ) -> rusqlite::Result<Vec<(i64, String)>> {
     let (only, keep) = match which {
         Which::One(id) => (Some(id), None),
         Which::All { keep } => (None, keep),
     };
     conn.prepare_cached(
-        "UPDATE devices SET revoked_reason = 'logged_out' \
+        "UPDATE devices SET revoked_reason = ?4 \
          WHERE user_id = ?1 AND revoked_reason IS NULL \
            AND (?2 IS NULL OR id = ?2) AND (?3 IS NULL OR id <> ?3) \
          RETURNING id, name",
     )?
-    .query_map(params![user, only, keep], |row| Ok((row.get(0)?, row.get(1)?)))?
+    .query_map(params![user, only, keep, Text(reason)], |row| Ok((row.get(0)?, row.get(1)?)))?
     .collect()
 }
 
@@ -208,7 +209,7 @@ async fn sign_out_of(
     // Spawned: a client that hangs up drops this request, which must not leave the connections
     // open once the sign-out is committed.
     let done = tokio::spawn(async move {
-        let signed_out = db.write(move |tx| sign_out(tx, user, which)).await?;
+        let signed_out = db.write(move |tx| sign_out(tx, user, which, Revoked::LoggedOut)).await?;
         if one && signed_out.is_empty() {
             return Err(Problem::not_found());
         }
