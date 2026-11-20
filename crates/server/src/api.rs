@@ -63,6 +63,7 @@ pub use catalog_snapshot::Snapshots;
 pub use id::{AnyId, Id, Uuid};
 pub use idempotency::Idempotency;
 pub use images::Images;
+pub(crate) use password::reset::issue_for_owner;
 pub use player::Players;
 pub use problem::{Code, Problem};
 pub use realtime::{Hub, hint_feed_changes};

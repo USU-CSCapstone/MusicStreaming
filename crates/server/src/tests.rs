@@ -227,3 +227,132 @@ async fn a_stop_saves_players_and_closes_connections_while_a_request_hangs() {
         conn.query_row("SELECT count(*) FROM queues WHERE active = 1", [], |r| r.get(0)).unwrap();
     assert_eq!(queues, 1, "the queue started just before the stop is saved by it");
 }
+
+/// Runs `work` with the logs it writes captured, as the default `info` filter would show them.
+async fn logged<T>(work: impl Future<Output = T>) -> (T, String) {
+    #[derive(Clone, Default)]
+    struct Capture(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Capture {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let capture = Capture::default();
+    let writer = capture.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let result = work.await;
+    let text = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+    (result, text)
+}
+
+#[tokio::test]
+async fn the_owner_reset_logs_a_live_link_once_and_records_it_without_an_actor() {
+    let (temp, db, app) = crate::api::testing::app("/music");
+    let before = db::now_ms();
+    let (done, log) = logged(reset_owner_password(&db, "/music")).await;
+    done.unwrap();
+
+    let lines: Vec<_> = log.lines().filter(|line| line.contains("/music/reset#")).collect();
+    assert_eq!(lines.len(), 1, "{log}");
+    let code = lines[0]
+        .split("/music/reset#")
+        .nth(1)
+        .unwrap()
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
+        .next()
+        .unwrap();
+    assert_eq!(log.matches(code).count(), 1, "{log}");
+    assert!(lines[0].contains("WARN") || lines[0].contains("INFO"), "{log}");
+
+    let check = |code: &str| {
+        let request = axum::http::Request::post("/music/api/v1/auth/password-resets/check")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(json!({ "code": code }).to_string()))
+            .unwrap();
+        crate::api::testing::respond(app.clone(), request)
+    };
+    let (status, _, body) = check(code).await;
+    assert_eq!(status, 200, "{body:?}");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+        json!({ "username": "owner" })
+    );
+
+    let conn = crate::api::testing::conn(&temp);
+    let expires: i64 = conn
+        .query_row("SELECT reset_expires_at FROM users WHERE id = 1", [], |r| r.get(0))
+        .unwrap();
+    let lifetime = expires - before;
+    assert!((86_400_000..86_400_000 + 60_000).contains(&lifetime), "{lifetime}");
+    let audit = "SELECT action, actor_id, target_id FROM admin_actions";
+    let rows: Vec<(String, Option<i64>, i64)> = conn
+        .prepare(audit)
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(rows, [("password_reset_issued".to_owned(), None, 1)]);
+    // The owner's session is untouched.
+    let (status, _) = crate::api::testing::call(&app, TOKEN, "GET", "/music/api/v1/me", None).await;
+    assert_eq!(status, 200);
+
+    // Another start replaces the link.
+    let (done, again) = logged(reset_owner_password(&db, "/music")).await;
+    done.unwrap();
+    let newer = again.split("/music/reset#").nth(1).unwrap().split(' ').next().unwrap();
+    assert_ne!(newer, code);
+    assert_eq!(check(code).await.0, 404);
+
+    let redeem = axum::http::Request::post("/music/api/v1/auth/password-resets/redeem")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({ "code": newer, "password": "vqp-mfrk-ztlw" }).to_string(),
+        ))
+        .unwrap();
+    assert_eq!(crate::api::testing::respond(app.clone(), redeem).await.0, 204);
+}
+
+#[tokio::test]
+async fn the_owner_reset_before_setup_writes_nothing_and_says_so() {
+    let (temp, db, _app) = crate::api::testing::app_before_setup("");
+    let (done, log) = logged(reset_owner_password(&db, "")).await;
+    done.unwrap();
+    assert!(log.contains("no owner"), "{log}");
+    assert!(!log.contains("reset#"), "{log}");
+    let conn = crate::api::testing::conn(&temp);
+    let rows: i64 = conn.query_row("SELECT count(*) FROM admin_actions", [], |r| r.get(0)).unwrap();
+    assert_eq!(rows, 0);
+}
+
+#[tokio::test]
+async fn only_the_setting_makes_a_start_issue_a_link() {
+    for owner_reset in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("data");
+        {
+            let data_dir = DataDir::open(&data, None).unwrap();
+            let db = Database::open(&data_dir.state().join("jewelcase.db")).unwrap();
+            db.write(|tx| testing::User::new(1, "owner").insert(tx)).await.unwrap();
+        }
+        let config = Config { owner_reset, ..config(&data, None) };
+        let server = run_until(config, sleep(Duration::from_millis(300)));
+        let (done, log) = logged(timeout(REFUSED, server)).await;
+        done.unwrap().unwrap();
+        assert_eq!(log.contains("reset#"), owner_reset, "{log}");
+        let conn = rusqlite::Connection::open(data.join("state/jewelcase.db")).unwrap();
+        let rows = "SELECT (SELECT count(*) FROM admin_actions), \
+                           (SELECT count(*) FROM users WHERE reset_hash IS NOT NULL)";
+        let rows: (i64, i64) = conn.query_row(rows, [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(rows, (owner_reset.into(), owner_reset.into()));
+    }
+}
