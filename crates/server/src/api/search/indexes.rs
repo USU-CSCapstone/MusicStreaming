@@ -1,6 +1,7 @@
 //! Each library's search index, in memory and tagged with the library's names version, which the
-//! catalog's triggers bump whenever a track, album or artist is added, deleted or renamed, and
-//! never for analysis, art or any other write (`0007_catalog_counts.sql`). Every library's index
+//! catalog's triggers bump whenever a track, album, artist or tag is added, deleted or renamed, or
+//! a tag's track count changes, and never for analysis, art or any other write
+//! (`0007_catalog_counts.sql`). Every library's index
 //! is built in the background as the server starts. A search whose library's names have changed
 //! since starts a rebuild in the background and answers from the index it has, so a search waits
 //! only while its library's first index is built. A deleted library's index is dropped by the
