@@ -668,6 +668,13 @@ export const setMyPluginSettings = (f: Fetch, id: string, values: Record<string,
 
 export const disconnectMyPlugin = (f: Fetch, id: string) => send<void>(f, 'DELETE', mySettings(id));
 
+/** Signs out one of the caller's other devices; the calling device logs out instead. */
+export const signOutMyDevice = (f: Fetch, deviceId: string) =>
+	send<void>(f, 'DELETE', `/me/devices/${encodeURIComponent(deviceId)}`);
+
+/** Signs out every device of the caller's but the one calling. */
+export const signOutMyOtherDevices = (f: Fetch) => send<void>(f, 'DELETE', '/me/devices');
+
 /** Turns sharing the caller's searches with a plugin on or off (`requirements/search.md` §6). */
 export const setMySearchSharing = (
 	f: Fetch,
