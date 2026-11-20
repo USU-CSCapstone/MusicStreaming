@@ -1,5 +1,5 @@
-//! Accounts, for admins: `adminListUsers` and `adminSetUserLibraries` (`api/openapi.yaml`,
-//! Admin). An admin sees every account, whatever its role (`requirements/users.md` §8), and acts
+//! Accounts, for admins: `adminListUsers`, `adminSetUserLibraries` and
+//! `adminChangeLibraryAccess` (`api/openapi.yaml`, Admin). An admin sees every account, whatever its role (`requirements/users.md` §8), and acts
 //! on those the rank rule allows ([`authorize`]). Admins and the owner only, as everything under
 //! `/admin` is (`authenticate`).
 
