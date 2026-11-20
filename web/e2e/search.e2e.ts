@@ -264,6 +264,49 @@ test('a search that finds nothing offers what it nearly found, and keeps where i
 	await expect(songTitles(page)).toHaveText(['Signal Part 1']);
 });
 
+test('a line of a song’s lyrics finds it, shown among its words, and plays it', async ({
+	page,
+	server
+}) => {
+	const searches = recentSearches(server);
+	// Signal Part 1's `.lrc` sings "First line of the song", then "Second line of the song". Its
+	// second line, half typed, is the best match there is, so it is the top result.
+	await page.goto('/search?q=second%20lin');
+	const top = page.getByRole('region', { name: 'Top result' });
+	await expect(top.getByText('Lyrics', { exact: true })).toBeVisible();
+	await expect(top.getByText('Signal Part 1')).toBeVisible();
+	await expect(top.getByText('“Second line of the song”')).toBeVisible();
+	// In its section, between the lines around it.
+	const lyrics = main(page).locator('section').filter({
+		has: page.getByRole('heading', { name: 'Lyrics' })
+	});
+	await expect(lyrics.getByRole('listitem')).toHaveCount(1);
+	await expect(lyrics.getByRole('listitem')).toHaveText(
+		/Signal Part 1\s*Aurora Lane\s*First line of the song\s*Second line of the song/
+	);
+
+	// Played, the song plays, and the search is kept.
+	await lyrics.getByRole('button', { name: 'Play Signal Part 1' }).click();
+	await expect(player(page).getByText('Signal Part 1')).toBeVisible();
+	await expect
+		.poll(searches)
+		.toEqual([['second lin', { type: 'track', id: server.ids.tracks['Signal Part 1'] }]]);
+
+	// The Lyrics tab, last, holds every match, with no top result.
+	await expect(tabs(page).getByRole('link').last()).toHaveText('Lyrics');
+	await tabs(page).getByRole('link', { name: 'Lyrics' }).click();
+	await expect(page).toHaveURL(/\/search\?q=second(\+|%20)lin&type=lyrics$/);
+	await expect(page.getByRole('region', { name: 'Top result' })).toHaveCount(0);
+	await expect(main(page).getByRole('listitem')).toHaveText([/Second line of the song/]);
+
+	// A line the song's title does not hold finds the song by its lyrics alone; two letters search
+	// none.
+	await searchBox(page).fill('first line');
+	await expect(main(page).getByRole('listitem')).toHaveText([/First line of the song/]);
+	await searchBox(page).fill('fi');
+	await expect(main(page).getByRole('heading', { name: 'No lyrics match “fi”' })).toBeVisible();
+});
+
 test.describe('on a server of its own, with many songs', () => {
 	test.use({ loggedIn: false });
 
