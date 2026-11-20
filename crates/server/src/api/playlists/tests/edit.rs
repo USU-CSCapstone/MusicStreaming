@@ -4,7 +4,7 @@ use axum::body::Body;
 use axum::http::Request;
 use jewelcase_core::playlist::{Op, apply_ops};
 
-use super::super::super::testing::respond;
+use super::super::super::testing::{eventually, respond};
 use super::*;
 use crate::db::testing::Track;
 
@@ -566,8 +566,21 @@ async fn an_edit_of_a_large_playlist_writes_only_the_rows_it_changes() {
     let uri = format!("{URI}/900");
     let mut model: Vec<i64> = (1000..1000 + n).collect();
     let before = rows(&db, "900").await;
-    // The first request of a device writes its last-seen time, which is not what is counted.
+    // The first request of a device writes its last-seen time, which is not what is counted. That
+    // write happens beside the request and may land after it answers, so it is waited for before
+    // anything is counted.
     call(&app, TOKEN, "GET", &uri, None).await;
+    let last_seen = || {
+        db.read(|conn| {
+            conn.query_row("SELECT last_seen_at FROM devices WHERE id = 1", [], |row| {
+                row.get::<_, i64>(0)
+            })
+        })
+    };
+    eventually("the device's last-seen time written", async || {
+        (last_seen().await.unwrap() > 0).then_some(())
+    })
+    .await;
 
     // Three items moved far apart: each is a delete and an insert, and the playlist one update.
     // Each row written to the account feed is one more write, the playlist's included, and so is
