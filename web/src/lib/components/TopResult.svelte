@@ -81,15 +81,14 @@
 <section class="top" aria-label="Top result">
 	<div class="art">
 		{#if card}
-			<Artwork
-				image={card.image}
-				seed={card.id}
-				size={120}
-				icon={card.icon}
-				round={card.round}
-			/>
+			<Artwork image={card.image} seed={card.id} size={120} icon={card.icon} round={card.round} />
 		{:else if track}
-			<Artwork image={track.album?.image ?? null} seed={track.album?.id ?? track.id} size={120} icon="song" />
+			<Artwork
+				image={track.album?.image ?? null}
+				seed={track.album?.id ?? track.id}
+				size={120}
+				icon="song"
+			/>
 		{/if}
 	</div>
 	<div class="text">
@@ -104,10 +103,8 @@
 				<ArtistLinks artists={track.artists} />
 				{#if track.album}
 					<span class="sep">·</span>
-					<a
-						class="album"
-						href={resolve('/albums/[id]', { id: track.album.id })}
-						{@attach fullText}>{albumTitle(track.album.title)}</a
+					<a class="album" href={resolve('/albums/[id]', { id: track.album.id })} {@attach fullText}
+						>{albumTitle(track.album.title)}</a
 					>
 				{/if}
 			</span>
