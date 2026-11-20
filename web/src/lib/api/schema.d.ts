@@ -1971,6 +1971,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/ownership-transfer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Transfer ownership
+         * @description Makes the account the owner and the caller an admin, at once and together: there is
+         *     always exactly one owner. The owner's alone: an admin is `403`. `password` is the owner's
+         *     own current password, checked as `changeMyPassword` checks it: a wrong one is `403
+         *     wrong_password`, and past the sign-in limits the request is `429`.
+         *
+         *     The account must be an active admin: a user or a suspended admin is `422`. The owner
+         *     cannot transfer to themselves (`403`), and an account that does not exist or is being
+         *     deleted is `404`. The transfer clears both accounts' password reset links, and both
+         *     accounts' realtime connections are sent `accessChanged`. Recorded in the audit log as
+         *     `ownership_transferred`, with the former owner as the actor.
+         */
+        post: operations["transferOwnership"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/audit-log": {
         parameters: {
             query?: never;
@@ -2478,6 +2507,15 @@ export interface components {
             /**
              * Format: password
              * @description The caller's own current password.
+             */
+            password: string;
+        };
+        OwnershipTransfer: {
+            /** @description The admin to make the owner. */
+            userId: string;
+            /**
+             * Format: password
+             * @description The owner's own current password.
              */
             password: string;
         };
@@ -7112,6 +7150,52 @@ export interface operations {
              *     act on this account; `detail` says why.
              */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    transferOwnership: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OwnershipTransfer"];
+            };
+        };
+        responses: {
+            /** @description Transferred. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /**
+             * @description `wrong_password` — `password` is not the caller's current password, or it changed
+             *     while the request was handled. `forbidden` — the caller is not the owner, or the
+             *     account is their own; `detail` says why.
+             */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description `validation_failed` — the account is not an active admin; `detail` says so. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

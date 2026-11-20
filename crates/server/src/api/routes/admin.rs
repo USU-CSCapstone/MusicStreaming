@@ -41,6 +41,7 @@ pub fn router() -> Router<AppState> {
             get(accounts::devices::list).delete(accounts::devices::sign_out_all),
         )
         .route("/admin/users/{user_id}/devices/{device_id}", delete(accounts::devices::sign_out))
+        .route("/admin/ownership-transfer", post(accounts::transfer::transfer))
         .route("/admin/audit-log", get(audit::list))
         .route("/admin/invites", get(invites::list))
         .route("/admin/invites/{invite_id}", delete(invites::revoke))
