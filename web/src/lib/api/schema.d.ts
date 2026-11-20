@@ -3189,7 +3189,8 @@ export interface components {
         QueueTrackOrder: "asc" | "desc";
         /**
          * @description A search's tracks, all of them: in the search's ranking, or with `sort` and `order` in
-         *     that sort, as `searchSection`'s `tracks` pages them to the end.
+         *     that sort, as `searchSection`'s `tracks` pages them to the end, under its filter and
+         *     `within`.
          */
         QueueSearchRecipe: {
             /**
@@ -3205,6 +3206,13 @@ export interface components {
              *     no track.
              */
             filters?: components["schemas"]["BrowseFilter"];
+            /**
+             * @description The container the search is narrowed to, as `search`'s `within` names it; left out for
+             *     the whole library. Another shape is `422` on a start. An album, artist or tag the
+             *     library lacks holds no track, as its own recipe resolves to none; a playlist not the
+             *     caller's own is `404`, as a playlist recipe's is.
+             */
+            within?: string;
             /**
              * @description A sort of `listTracks`, as `searchSection` takes it for `tracks`; the planned ones are
              *     `422` as there. Left out, with `order`, for the search's ranking.

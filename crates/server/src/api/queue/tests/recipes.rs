@@ -317,6 +317,57 @@ async fn a_sorted_search_resolve_equals_the_sorted_section_read_to_its_end() {
 }
 
 #[tokio::test]
+async fn a_search_resolve_within_a_container_equals_its_narrowed_section() {
+    let (_temp, state, app) = fixture().await;
+    let containers = ["album:101", "album:102", "artist:10", "artist:11", "tag:30", "tag:32"];
+    for within in containers {
+        for q in ["song", "hymn", "o", "aria tune"] {
+            for sort in [None, Some(("name", "desc")), Some(("album", "asc"))] {
+                let mut recipe = json!({ "type": "search", "q": q, "within": within });
+                let mut uri = format!(
+                    "/api/v1/libraries/1/search/tracks?q={}&within={within}",
+                    q.replace(' ', "%20")
+                );
+                if let Some((sort, order)) = sort {
+                    recipe["sort"] = json!(sort);
+                    recipe["order"] = json!(order);
+                    uri += &format!("&sort={sort}&order={order}");
+                }
+                let shown: Vec<String> = page_through(&app, &uri, 2, "track")
+                    .await
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|track| track["id"].as_str().unwrap().to_owned())
+                    .collect();
+                assert_eq!(resolved(&state, &recipe).await, shown, "{recipe}");
+            }
+        }
+    }
+    // Narrowed, a search is the container's matches alone: the songs of album 101.
+    let song = json!({ "type": "search", "q": "song", "within": "album:102" });
+    assert!(resolved(&state, &song).await.is_empty());
+    let hymn = json!({ "type": "search", "q": "hymn", "within": "album:102" });
+    assert_eq!(resolved(&state, &hymn).await, ["7", "8"]);
+}
+
+#[tokio::test]
+async fn a_search_within_what_is_not_there_resolves_to_nothing() {
+    let (_temp, state, _app) = fixture().await;
+    for within in ["album:999", "artist:999", "tag:999", "album:nope"] {
+        let recipe = json!({ "type": "search", "q": "song", "within": within });
+        assert!(resolved(&state, &recipe).await.is_empty(), "{within}");
+    }
+    // A playlist that is not the caller's own is not found, as a playlist recipe's is.
+    let recipe: Recipe =
+        serde_json::from_value(json!({ "type": "search", "q": "song", "within": "playlist:999" }))
+            .unwrap();
+    let caller = Caller { user: 1, device: 1, admin: true };
+    let problem = resolve(&state.db, &state.indexes, &caller, Id(1), &recipe).await.unwrap_err();
+    assert_eq!(serde_json::to_value(problem).unwrap()["code"], "not_found");
+}
+
+#[tokio::test]
 async fn tag_filters_narrow_each_recipe() {
     let (_temp, state, app) = fixture().await;
     let library =
@@ -403,8 +454,9 @@ async fn a_recipe_keeps_its_tag_filter() {
     let (status, answer) = start_new(search.clone(), "12").await;
     assert_eq!(status, StatusCode::OK, "{answer}");
     assert_eq!(snapshot(&app).await["state"]["sources"][0]["recipe"], search);
-    // And its sort, where it has one.
-    let search = with_sort(search);
+    // And its container and sort, where it has them.
+    let mut search = with_sort(search);
+    search["within"] = json!("album:101");
     let (status, answer) = start_new(search.clone(), "12").await;
     assert_eq!(status, StatusCode::OK, "{answer}");
     assert_eq!(snapshot(&app).await["state"]["sources"][0]["recipe"], search);
@@ -527,6 +579,10 @@ async fn recipes_the_server_cannot_resolve_are_refused() {
         ("an empty search", json!({ "type": "search", "q": "" })),
         ("a search sort with no direction", json!({ "type": "search", "q": "a", "sort": "name" })),
         ("a search direction with no sort", json!({ "type": "search", "q": "a", "order": "asc" })),
+        (
+            "a search within no kind of container",
+            json!({ "type": "search", "q": "a", "within": "song:1" }),
+        ),
         (
             "a search sort not built",
             json!({ "type": "search", "q": "a", "sort": "playCount", "order": "asc" }),
