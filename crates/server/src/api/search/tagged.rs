@@ -18,8 +18,8 @@ use crate::db::{Database, DbError};
 const KEPT: usize = 4;
 
 /// For each kind in `Kind::ALL` order, the IDs of the rows of it that carry a search's tags: none
-/// for a kind it does not search.
-pub type Sets = Arc<[HashSet<i64>; 3]>;
+/// for a kind it does not search, or one that carries no tags.
+pub type Sets = Arc<[HashSet<i64>; Kind::ALL.len()]>;
 
 /// What kept rows are found by: the library, the tags as the filter's `tagAll` and `tagAny` name
 /// them, each sorted and each tag once, and the kinds searched, sorted.

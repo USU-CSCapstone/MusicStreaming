@@ -1,10 +1,12 @@
 //! Where a match stands in its section, so a page can continue after it.
 //!
-//! A rank is the match's score, then its folded name's words and its ID: the section's whole
-//! order, written out in values rather than index positions. Those values come from the name and
-//! the query alone, so a rank still places a page correctly once the index is rebuilt, as a list
-//! cursor's sort values do after rows are added: nothing is shown twice, and nothing still there
-//! is passed over.
+//! A rank is the match's score, then its weight, its folded name's words and its ID: the section's
+//! whole order, written out in values rather than index positions. Those values come from the
+//! document and the query alone, so a rank still places a page correctly once the index is
+//! rebuilt, as a list cursor's sort values do after rows are added: nothing is shown twice, and
+//! nothing still there is passed over.
+
+use std::cmp::Reverse;
 
 use super::query::Score;
 
@@ -12,6 +14,8 @@ use super::query::Score;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Rank {
     pub(super) score: Score,
+    /// The heavier first.
+    pub(super) weight: Reverse<u32>,
     /// The name's folded words. They compare as the index's tie-break compares them, since its
     /// vocabulary is sorted.
     pub(super) words: Vec<String>,
@@ -23,7 +27,7 @@ impl Rank {
     pub fn to_bytes(&self) -> Vec<u8> {
         let Score { inexact, typos, skipped, prefixes, extra_words } = self.score;
         let mut bytes = vec![u8::from(inexact), u8::from(skipped)];
-        for n in [typos, prefixes, extra_words] {
+        for n in [typos, prefixes, extra_words, self.weight.0] {
             bytes.extend(n.to_be_bytes());
         }
         bytes.extend(self.id.to_be_bytes());
@@ -47,6 +51,7 @@ impl Rank {
         let (typos, rest) = rest.split_first_chunk::<4>()?;
         let (prefixes, rest) = rest.split_first_chunk::<4>()?;
         let (extra_words, rest) = rest.split_first_chunk::<4>()?;
+        let (weight, rest) = rest.split_first_chunk::<4>()?;
         let (id, mut rest) = rest.split_first_chunk::<8>()?;
         let mut words = Vec::new();
         while !rest.is_empty() {
@@ -64,6 +69,7 @@ impl Rank {
                 prefixes: u32::from_be_bytes(*prefixes),
                 extra_words: u32::from_be_bytes(*extra_words),
             },
+            weight: Reverse(u32::from_be_bytes(*weight)),
             words,
             id: i64::from_be_bytes(*id),
         })

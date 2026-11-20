@@ -23,7 +23,9 @@
 //! either side (the guardrail that keeps an exact match from being buried); fewer typos; the
 //! query's leading article matched, so typing `the` narrows toward names that have it; fewer words
 //! matched only as a prefix; fewer words in the name beyond those the query matched. Ties break
-//! by kind (tracks, then albums, then artists), then folded name, then ID.
+//! by kind (tracks, then albums, then artists, then playlists, then tags), then weight, heaviest
+//! first, then folded name, then ID. Only a tag weighs anything: the tracks that carry it, so of
+//! equally good tags the one with more music comes first.
 
 mod build;
 mod distance;
@@ -39,17 +41,21 @@ pub use build::{Finishing, IndexBuilder};
 pub use rank::Rank;
 pub use words::words;
 
-/// What a name names. The order is the tie-break: the more specific thing first.
+/// What a name names. The order is the tie-break: the more specific thing first
+/// (`requirements/search.md` §4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Kind {
     Track,
     Album,
     Artist,
+    Playlist,
+    /// A tag, of the type its document's group names: each type is a section of its own.
+    Tag,
 }
 
 impl Kind {
     /// Every kind, in tie-break order.
-    pub const ALL: [Kind; 3] = [Kind::Track, Kind::Album, Kind::Artist];
+    pub const ALL: [Kind; 5] = [Kind::Track, Kind::Album, Kind::Artist, Kind::Playlist, Kind::Tag];
 }
 
 /// A thing to find by its name. The constructors are the rule for what is searched, so the
@@ -57,31 +63,50 @@ impl Kind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Document {
     kind: Kind,
+    /// The section of its kind it is in, where a kind has several: a tag's type.
+    group: Option<String>,
     id: i64,
     name: String,
+    /// What puts it ahead of a match as good as it, heaviest first.
+    weight: u32,
 }
 
 impl Document {
     /// A track, by its title.
     pub fn from_track(id: i64, title: String) -> Document {
-        Document { kind: Kind::Track, id, name: title }
+        Document { kind: Kind::Track, group: None, id, name: title, weight: 0 }
     }
 
     /// An album, by its title. The unknown album, which has none, is not searched.
     pub fn from_album(id: i64, title: Option<String>) -> Option<Document> {
-        title.map(|name| Document { kind: Kind::Album, id, name })
+        title.map(|name| Document { kind: Kind::Album, group: None, id, name, weight: 0 })
     }
 
     /// An artist, by their name. The unknown artist, who has none, is not searched.
     pub fn from_artist(id: i64, name: Option<String>) -> Option<Document> {
-        name.map(|name| Document { kind: Kind::Artist, id, name })
+        name.map(|name| Document { kind: Kind::Artist, group: None, id, name, weight: 0 })
+    }
+
+    /// A playlist, by its title.
+    pub fn from_playlist(id: i64, title: String) -> Document {
+        Document { kind: Kind::Playlist, group: None, id, name: title, weight: 0 }
+    }
+
+    /// A tag of the type `tag_type`, such as `genre`, by its name, carried by `tracks` tracks.
+    /// Each type is its own section, and of tags that match equally well the one with more music
+    /// comes first, as the likelier meant (`requirements/search.md` §4).
+    pub fn from_tag(id: i64, tag_type: String, name: String, tracks: u64) -> Document {
+        let weight = u32::try_from(tracks).unwrap_or(u32::MAX);
+        Document { kind: Kind::Tag, group: Some(tag_type), id, name, weight }
     }
 }
 
-/// One kind's matches, best first.
+/// One kind's matches, or one group's of a kind that has groups, best first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Section {
     pub kind: Kind,
+    /// The group, for a kind that has them: a tag's type.
+    pub group: Option<String>,
     /// The best `limit` matches' IDs.
     pub ids: Vec<i64>,
     /// How many matched in all.
@@ -109,9 +134,15 @@ pub struct Index {
     /// For each word, the documents holding it, ascending: `postings[span(&posting_ends, w)]`.
     postings: Vec<u32>,
     posting_ends: Vec<u32>,
-    /// Documents in tie-break order (by kind, then folded name, then ID): each one's kind and ID.
+    /// Documents in tie-break order (by kind, then group, then weight, heaviest first, then folded
+    /// name, then ID): each one's kind, group (an index of `groups`, 0 for none), weight and ID.
     kinds: Vec<Kind>,
+    groups_of: Vec<u32>,
+    weights: Vec<u32>,
     ids: Vec<i64>,
+    /// Every distinct group, sorted, after the empty one of the documents with none, so group
+    /// indexes compare as the groups do.
+    groups: Vec<String>,
     /// Each document's words as vocabulary indexes, in name order: `words[span(&ends, d)]`.
     words: Vec<u32>,
     ends: Vec<u32>,

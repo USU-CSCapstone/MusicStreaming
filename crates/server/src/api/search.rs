@@ -10,7 +10,7 @@ use axum::Json;
 use axum::extract::State;
 use jewelcase_catalog::page::Order;
 use jewelcase_catalog::search::{
-    self, Hid, SearchResponse, SectionPage, SectionReading, SectionType, kinds, response,
+    self, Hid, SEARCHED, SearchResponse, SectionPage, SectionReading, SectionType, kinds, response,
     section_limit,
 };
 use jewelcase_core::Kind;
@@ -45,7 +45,7 @@ pub async fn search(
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<SearchResponse>, Problem> {
     let limit = section_limit(&query.q, query.section_limit)?;
-    let kinds = query.types.as_deref().map_or_else(|| Ok(Kind::ALL.to_vec()), kinds)?;
+    let kinds = query.types.as_deref().map_or_else(|| Ok(SEARCHED.to_vec()), kinds)?;
 
     let filter = TagFilter::new(query.tag_all.as_deref(), query.tag_any.as_deref())?;
     let tagged = indexes.tagged.get(&db, library, &filter, &kinds).await?;
@@ -116,7 +116,7 @@ pub async fn section(
 }
 
 /// How many of `library`'s tracks, albums, and artists match `q`, as a search counts them, in
-/// the order of `Kind::ALL`.
+/// that order: what a plugin sent a user's searches is told they found.
 pub async fn totals(
     db: &Arc<Database>,
     indexes: &Indexes,
@@ -124,8 +124,8 @@ pub async fn totals(
     q: &str,
 ) -> Result<[usize; 3], Problem> {
     let index = indexes.index(db, library).await?;
-    let found = index.search(q, &Kind::ALL, 1);
-    Ok(Kind::ALL.map(|kind| {
+    let found = index.search(q, &SEARCHED, 1);
+    Ok(SEARCHED.map(|kind| {
         found.iter().find(|section| section.kind == kind).map_or(0, |section| section.total)
     }))
 }

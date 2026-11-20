@@ -2,7 +2,7 @@ use super::*;
 
 /// A document of `kind` named `name`, made directly rather than through a constructor.
 pub(super) fn doc(kind: Kind, id: i64, name: &str) -> Document {
-    Document { kind, id, name: name.to_owned() }
+    Document { kind, group: None, id, name: name.to_owned(), weight: 0 }
 }
 
 /// An index of a small library: a few artists, albums, and tracks with names that share words.
@@ -211,7 +211,7 @@ fn kinds_filter_the_sections() {
     let index = library();
     assert_eq!(
         index.search("blue", &[Kind::Album], 10),
-        [Section { kind: Kind::Album, ids: vec![11, 10], total: 2 }]
+        [Section { kind: Kind::Album, group: None, ids: vec![11, 10], total: 2 }]
     );
 }
 
@@ -294,7 +294,7 @@ fn pages(index: &Index, query: &str, kind: Kind, limit: usize) -> Vec<Vec<i64>> 
     let mut pages = Vec::new();
     let mut after = None;
     loop {
-        let page = index.page(query, kind, after.as_ref(), limit, |_, _| true);
+        let page = index.page(query, kind, None, after.as_ref(), limit, |_, _| true);
         pages.push(page.ids);
         match page.next {
             Some(next) => after = Some(next),
@@ -310,9 +310,9 @@ fn a_section_reads_a_page_at_a_time_in_its_ranking() {
     assert_eq!(index.search("h", &[Kind::Track], 10)[0].ids, [25, 23, 24]);
     assert_eq!(pages(&index, "h", Kind::Track, 2), [vec![25, 23], vec![24]]);
     assert_eq!(pages(&index, "h", Kind::Track, 3), [vec![25, 23, 24]], "no page past the last");
-    let first = index.page("h", Kind::Track, None, 2, |_, _| true);
+    let first = index.page("h", Kind::Track, None, None, 2, |_, _| true);
     assert_eq!(first.total, 3);
-    let rest = index.page("h", Kind::Track, first.next.as_ref(), 2, |_, _| true);
+    let rest = index.page("h", Kind::Track, None, first.next.as_ref(), 2, |_, _| true);
     assert_eq!((rest.total, rest.next), (3, None), "the total counts every match");
 }
 
@@ -327,20 +327,20 @@ fn pages_put_together_are_the_whole_section() {
 fn a_page_is_only_of_its_kind_and_what_the_filter_keeps() {
     let index = library();
     let blue = |keep: fn(Kind, i64) -> bool| {
-        let page = index.page("blue", Kind::Album, None, 10, keep);
+        let page = index.page("blue", Kind::Album, None, None, 10, keep);
         (page.ids, page.total)
     };
     assert_eq!(blue(|_, _| true), (vec![11, 10], 2));
     assert_eq!(blue(|_, id| id != 11), (vec![10], 1));
     assert_eq!(blue(|_, _| false), (vec![], 0));
-    assert_eq!(index.page("", Kind::Album, None, 10, |_, _| true).total, 0);
+    assert_eq!(index.page("", Kind::Album, None, None, 10, |_, _| true).total, 0);
 }
 
 #[test]
 fn a_page_continues_in_an_index_rebuilt_since() {
     let names = ["Love A", "Love B", "Love C", "Love D", "Love E"];
     let before = Index::build(names.iter().zip(1..).map(|(name, id)| doc(Kind::Track, id, name)));
-    let first = before.page("love", Kind::Track, None, 2, |_, _| true);
+    let first = before.page("love", Kind::Track, None, None, 2, |_, _| true);
     assert_eq!(first.ids, [1, 2]);
     // Since then, one before the cursor was added and one after it removed, and the documents'
     // positions all moved.
@@ -352,17 +352,17 @@ fn a_page_continues_in_an_index_rebuilt_since() {
         doc(Kind::Track, 5, "Love E"),
         doc(Kind::Artist, 7, "Love"),
     ]);
-    let next = after.page("love", Kind::Track, first.next.as_ref(), 10, |_, _| true);
+    let next = after.page("love", Kind::Track, None, first.next.as_ref(), 10, |_, _| true);
     assert_eq!(next.ids, [3, 5], "nothing shown twice, nothing still there passed over");
 }
 
 #[test]
 fn a_rank_reads_back_from_its_bytes() {
     let index = library();
-    let next = index.page("say it", Kind::Track, None, 0, |_, _| true).next;
+    let next = index.page("say it", Kind::Track, None, None, 0, |_, _| true).next;
     assert_eq!(next, None, "an empty page continues after nothing");
     let index = Index::build([doc(Kind::Track, -4, "Ça va"), doc(Kind::Track, 9, "Ça va mieux")]);
-    let rank = index.page("ca", Kind::Track, None, 1, |_, _| true).next.unwrap();
+    let rank = index.page("ca", Kind::Track, None, None, 1, |_, _| true).next.unwrap();
     assert_eq!(Rank::from_bytes(&rank.to_bytes()), Some(rank.clone()));
     let bytes = rank.to_bytes();
     assert_eq!(Rank::from_bytes(&bytes[..bytes.len() - 1]), None, "truncated");
@@ -381,9 +381,129 @@ fn matching_finds_what_a_page_finds_in_any_order() {
     let keep = |_: Kind, id: i64| id != 24;
     let mut matching = index.matching("h", Kind::Track, keep);
     matching.sort_unstable();
-    let mut paged = index.page("h", Kind::Track, None, 10, keep).ids;
+    let mut paged = index.page("h", Kind::Track, None, None, 10, keep).ids;
     paged.sort_unstable();
     assert_eq!(matching, paged);
     assert_eq!(matching, [23, 25]);
     assert!(index.matching("", Kind::Track, keep).is_empty());
+}
+
+/// Sections as (kind, group, IDs).
+fn grouped(sections: Vec<Section>) -> Vec<(Kind, Option<String>, Vec<i64>)> {
+    sections.into_iter().map(|section| (section.kind, section.group, section.ids)).collect()
+}
+
+/// An index with a track, an album and a playlist called Rock, the genres Rock and Punk Rock,
+/// and the mood Rock.
+fn rocks() -> Index {
+    Index::build([
+        Document::from_track(1, "Rock".into()),
+        Document::from_album(2, Some("Rock".into())).unwrap(),
+        Document::from_tag(3, "genre".into(), "Rock".into(), 1),
+        Document::from_tag(4, "genre".into(), "Punk Rock".into(), 1),
+        Document::from_tag(5, "mood".into(), "Rock".into(), 1),
+        Document::from_playlist(6, "Rock".into()),
+    ])
+}
+
+#[test]
+fn each_type_of_tag_is_a_section_of_its_own() {
+    let index = rocks();
+    let genre = || Some("genre".to_owned());
+    assert_eq!(
+        grouped(index.search("rock", &Kind::ALL, 10)),
+        [
+            // Equally exact: the more specific kind first, then the tag types by name.
+            (Kind::Track, None, vec![1]),
+            (Kind::Album, None, vec![2]),
+            (Kind::Playlist, None, vec![6]),
+            (Kind::Tag, genre(), vec![3, 4]),
+            (Kind::Tag, Some("mood".to_owned()), vec![5]),
+        ]
+    );
+    // Only Punk Rock has punk in it, so only genres are found.
+    assert_eq!(grouped(index.search("punk", &Kind::ALL, 10)), [(Kind::Tag, genre(), vec![4])]);
+    assert_eq!(
+        grouped(index.search("rock", &[Kind::Tag], 1)),
+        [(Kind::Tag, genre(), vec![3]), (Kind::Tag, Some("mood".to_owned()), vec![5]),]
+    );
+}
+
+#[test]
+fn a_page_reads_one_type_of_tag() {
+    let index = rocks();
+    let page = |group: Option<&str>| {
+        let page = index.page("rock", Kind::Tag, group, None, 10, |_, _| true);
+        (page.ids, page.total)
+    };
+    assert_eq!(page(Some("genre")), (vec![3, 4], 2));
+    assert_eq!(page(Some("mood")), (vec![5], 1));
+    assert_eq!(page(Some("decade")), (vec![], 0), "a type the index lacks");
+    assert_eq!(page(Some("")), (vec![], 0), "the group of no group is not one");
+    let mut every = index.matching("rock", Kind::Tag, |_, _| true);
+    every.sort_unstable();
+    assert_eq!(every, [3, 4, 5]);
+}
+
+#[test]
+fn playlists_and_tags_are_searched_by_their_names() {
+    assert_eq!(
+        Document::from_playlist(7, "Road Trip".into()),
+        Document { kind: Kind::Playlist, group: None, id: 7, name: "Road Trip".into(), weight: 0 }
+    );
+    assert_eq!(
+        Document::from_tag(8, "mood".into(), "Calm".into(), 12),
+        Document {
+            kind: Kind::Tag,
+            group: Some("mood".into()),
+            id: 8,
+            name: "Calm".into(),
+            weight: 12
+        }
+    );
+}
+
+/// Genres with the tracks that carry them: Rock on one, and three that contain the word.
+fn genres() -> Vec<Document> {
+    [(1, "Rock", 1), (2, "Alt Rock", 3), (3, "Hard Rock", 12), (4, "Punk Rock", 40)]
+        .map(|(id, name, tracks)| Document::from_tag(id, "genre".into(), name.into(), tracks))
+        .into()
+}
+
+#[test]
+fn tags_that_match_equally_well_put_the_one_with_more_music_first() {
+    let index = Index::build(genres());
+    // Rock is exact, so it leads however little it carries; the rest are one word more each.
+    assert_eq!(index.search("rock", &[Kind::Tag], 10)[0].ids, [1, 4, 3, 2]);
+    // Equal weights fall back to the name.
+    let even = Index::build([
+        Document::from_tag(5, "genre".into(), "Punk Rock".into(), 7),
+        Document::from_tag(6, "genre".into(), "Alt Rock".into(), 7),
+    ]);
+    assert_eq!(even.search("rock", &[Kind::Tag], 10)[0].ids, [6, 5]);
+    // Weight never reaches past the match: a name the query only begins stays behind an exact
+    // one, however heavy.
+    let typo = Index::build([
+        Document::from_tag(7, "genre".into(), "Rockk".into(), 1_000),
+        Document::from_tag(8, "genre".into(), "Rock".into(), 1),
+    ]);
+    assert_eq!(typo.search("rock", &[Kind::Tag], 10)[0].ids, [8, 7]);
+}
+
+#[test]
+fn a_page_of_weighed_tags_continues_where_it_left_off() {
+    let index = Index::build(genres());
+    let first = index.page("rock", Kind::Tag, Some("genre"), None, 2, |_, _| true);
+    assert_eq!(first.ids, [1, 4]);
+    let rank = first.next.unwrap();
+    assert_eq!(Rank::from_bytes(&rank.to_bytes()), Some(rank.clone()), "the weight reads back");
+    // Since then Alt Rock outgrew Punk Rock, and Hard Rock was added to.
+    let mut changed = genres();
+    changed[1] = Document::from_tag(2, "genre".into(), "Alt Rock".into(), 50);
+    changed[2] = Document::from_tag(3, "genre".into(), "Hard Rock".into(), 20);
+    let rebuilt = Index::build(changed);
+    let next = rebuilt.page("rock", Kind::Tag, Some("genre"), Some(&rank), 10, |_, _| true);
+    // Alt Rock moved ahead of where the page left off, so this pass skips it, as a list does a row
+    // whose sort value moved behind its cursor; nothing already shown comes again.
+    assert_eq!(next.ids, [3]);
 }
