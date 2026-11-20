@@ -15,7 +15,11 @@
 	// Kept to the container, a tab of what it cannot hold would always be empty, so it is All.
 	const held = $derived(tab && HELD[container.kind].includes(tab.type) ? tab : null);
 	const options = $derived([
-		{ label: 'Everywhere', scoped: false, href: tabHref(q, tab, scopeParams(container.within, false)) },
+		{
+			label: 'Everywhere',
+			scoped: false,
+			href: tabHref(q, tab, scopeParams(container.within, false))
+		},
 		{
 			label: `In ${container.name}`,
 			scoped: true,

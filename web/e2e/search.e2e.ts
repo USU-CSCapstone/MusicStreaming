@@ -173,7 +173,10 @@ test('a search started from a tag’s page keeps to it when asked, and plays wit
 	await expect(page).toHaveURL(new RegExp(`/search\\?q=signal&from=${ambient}$`));
 	const scope = page.getByRole('navigation', { name: 'Where to search' });
 	await expect(scope.getByRole('link')).toHaveText(['Everywhere', 'In Ambient']);
-	await expect(scope.getByRole('link', { name: 'Everywhere' })).toHaveAttribute('aria-current', 'page');
+	await expect(scope.getByRole('link', { name: 'Everywhere' })).toHaveAttribute(
+		'aria-current',
+		'page'
+	);
 	// Everywhere first, so the Remix, which is Electronic, is found too.
 	await expect(songTitles(page)).toHaveCount(3);
 
@@ -192,7 +195,8 @@ test('a search started from a tag’s page keeps to it when asked, and plays wit
 	const starts: { source: { recipe: unknown } }[] = [];
 	page.on('request', (request) => {
 		const path = new URL(request.url()).pathname;
-		if (request.method() === 'POST' && path.endsWith('/me/queue')) starts.push(request.postDataJSON());
+		if (request.method() === 'POST' && path.endsWith('/me/queue'))
+			starts.push(request.postDataJSON());
 	});
 	await main(page).getByRole('button', { name: 'Signal Part 2', exact: true }).click();
 	await expect(player(page).getByText('Signal Part 2')).toBeVisible();

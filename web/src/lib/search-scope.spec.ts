@@ -37,8 +37,16 @@ describe('search scope', () => {
 
 	it('names a container as its page does, and none it cannot read', async () => {
 		const read = (within: string) => readContainer(fetch, '1', within);
-		expect(await read('album:31')).toEqual({ within: 'album:31', kind: 'album', name: 'Unknown Album' });
-		expect(await read('artist:21')).toEqual({ within: 'artist:21', kind: 'artist', name: 'Weezer' });
+		expect(await read('album:31')).toEqual({
+			within: 'album:31',
+			kind: 'album',
+			name: 'Unknown Album'
+		});
+		expect(await read('artist:21')).toEqual({
+			within: 'artist:21',
+			kind: 'artist',
+			name: 'Weezer'
+		});
 		expect((await read('playlist:61'))?.name).toBe('Road Trip');
 		expect((await read('tag:30'))?.name).toBe('Rock');
 		expect(await read('album:9')).toBeNull();
