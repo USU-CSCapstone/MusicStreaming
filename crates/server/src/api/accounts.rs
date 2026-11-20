@@ -1,8 +1,8 @@
 //! Accounts, for admins: `adminListUsers`, `adminSetUserLibraries`, `adminChangeLibraryAccess`,
-//! `adminSetUserStatus`, `adminSetUserRole`, `adminDeleteUser` and the operations on an
-//! account's devices (`api/openapi.yaml`, Admin). An admin sees every account, whatever its role
-//! (`requirements/users.md` §8), and acts on those the rank rule allows ([`authorize`]). Admins
-//! and the owner only, as everything under `/admin` is (`authenticate`).
+//! `adminSetUserStatus`, `adminSetUserRole`, `transferOwnership`, `adminDeleteUser` and the
+//! operations on an account's devices (`api/openapi.yaml`, Admin). An admin sees every account,
+//! whatever its role (`requirements/users.md` §8), and acts on those the rank rule allows
+//! ([`authorize`]). Admins and the owner only, as everything under `/admin` is (`authenticate`).
 
 pub(super) mod access;
 mod authorize;
@@ -12,6 +12,7 @@ pub(super) mod roles;
 pub(super) mod status;
 #[cfg(test)]
 mod tests;
+pub(super) mod transfer;
 
 pub(super) use authorize::{authorize, manager_rank};
 
