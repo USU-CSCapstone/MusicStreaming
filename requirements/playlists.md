@@ -87,7 +87,7 @@ A user editing from several devices must never silently lose work or find change
 - **Sort** by name, date created, date modified, and play count.
 - **Filter and search** within the playlist list by name.
 - **Pin** playlists to keep frequently used ones at the top.
-- **Search within a playlist** for a track, without leaving it.
+- **Search within a playlist** for a track, by keeping a search started from it to the playlist ([`search.md` §5](search.md#5-scope)).
 
 ---
 
