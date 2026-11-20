@@ -134,8 +134,9 @@ fn entry(row: &Row) -> rusqlite::Result<AuditEntry> {
     })
 }
 
-/// The query of [`list`].
+/// The query of [`list`]. Any other parameter answers `422`.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ListQuery {
     cursor: Option<String>,
     limit: Option<u32>,
