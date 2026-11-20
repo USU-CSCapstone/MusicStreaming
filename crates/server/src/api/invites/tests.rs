@@ -2,12 +2,15 @@
 
 use axum::Router;
 use axum::body::Body;
+use axum::extract::State;
 use axum::http::{StatusCode, header};
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 
+use super::{NewInvite, create};
 use crate::api::session::token_hash;
 use crate::api::testing::{TOKEN, add_device, add_user, app, call, conn, owner_request, respond};
+use crate::api::{Caller, extract};
 use crate::db::now_ms;
 use crate::db::testing::{library, mark_deleting};
 
@@ -221,5 +224,33 @@ async fn a_user_is_refused_all_three() {
     ] {
         let (status, _) = call(&app, "user-token", method, &uri, body).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{method}");
+    }
+}
+
+#[tokio::test]
+async fn a_creator_suspended_or_demoted_since_the_gate_makes_no_invite() {
+    for change in [
+        "UPDATE users SET status = 'suspended' WHERE id = 3",
+        "UPDATE users SET role = 'user' WHERE id = 3",
+    ] {
+        let (temp, db, _app) = app("");
+        let conn = conn(&temp);
+        add_user(&conn, 3, "admin");
+        conn.execute(change, []).unwrap();
+        let caller = Caller { user: 3, device: 3, admin: true, owner: false };
+        let request = NewInvite { library_ids: vec![], expires_in_days: None };
+        let Err(problem) = create(State(db), caller, extract::Json(request)).await else {
+            panic!("{change}: an invite was made");
+        };
+        let problem = serde_json::to_value(problem).unwrap();
+        assert_eq!(problem["status"], 403, "{change}");
+        assert_eq!(problem["code"], "forbidden", "{change}");
+        assert_eq!(
+            problem["detail"], "Only an active admin or the owner can manage accounts.",
+            "{change}"
+        );
+        let invites: i64 =
+            conn.query_row("SELECT count(*) FROM invites", [], |r| r.get(0)).unwrap();
+        assert_eq!(invites, 0, "{change}");
     }
 }

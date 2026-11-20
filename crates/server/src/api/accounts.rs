@@ -9,7 +9,7 @@ pub(super) mod status;
 #[cfg(test)]
 mod tests;
 
-pub(super) use authorize::authorize;
+pub(super) use authorize::{authorize, manager_rank};
 
 use std::sync::Arc;
 
