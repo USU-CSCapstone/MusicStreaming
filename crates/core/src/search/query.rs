@@ -111,6 +111,13 @@ impl Index {
         SectionPage { ids: self.hit_ids(&hits), total, next }
     }
 
+    /// The IDs of every match for `query` of `kind` that `keep` keeps, in no order, for a caller
+    /// that orders them itself, such as by a list's sort. Leaving out the ranking saves sorting
+    /// them all.
+    pub fn matching(&self, query: &str, kind: Kind, keep: impl Fn(Kind, i64) -> bool) -> Vec<i64> {
+        self.hit_ids(&self.matches(query, &[kind], keep)[kind as usize])
+    }
+
     /// The IDs of the documents of `hits`, in their order.
     fn hit_ids(&self, hits: &[(Score, u32)]) -> Vec<i64> {
         hits.iter().map(|&(_, d)| self.ids[d as usize]).collect()

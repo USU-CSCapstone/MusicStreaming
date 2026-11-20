@@ -173,6 +173,89 @@ pub fn fetch<T>(
 /// A page's rows so far, each with its sort values.
 type Rows<T> = Vec<(T, Vec<Value>)>;
 
+/// A check a page's rows must pass that SQL cannot make cheaply, such as being among a search's
+/// matches, which may be hundreds of thousands. The page walks the sort's index a chunk at a time
+/// and keeps the rows that pass, so it reads about as many rows as it keeps over the share that
+/// pass, where they are spread through the sort. Where they are not, such as titles matching a
+/// word that starts them, read by name, the walk gives up after `budget` rows, so the caller can
+/// read the page another way. A [`Walk`] checks its rows in SQL instead, which suits a tag's,
+/// whose links are indexed.
+pub struct Kept<'a> {
+    /// Whether the row with this ID is kept. A sort's last column is the row's ID.
+    pub keeps: &'a dyn Fn(i64) -> bool,
+    /// About how many rows there are for each one kept, so each read is enough for the rest of
+    /// the page.
+    pub spread: u32,
+    /// How many rows the walk reads for one page before it gives up.
+    pub budget: u32,
+}
+
+/// The most rows a [`Kept`] walk reads at once, which bounds what one read holds in memory.
+const MAX_CHUNK: u32 = 10_000;
+
+/// Reads the page of `source` that `request` asks for, of the rows `kept` keeps, walking the
+/// sort's index for them; `None` if the walk gave up ([`Kept`]).
+pub(super) fn fetch_kept<T>(
+    conn: &Connection,
+    source: &Source,
+    request: &Request,
+    kept: &Kept,
+    mut map: impl FnMut(&Row) -> rusqlite::Result<T>,
+) -> rusqlite::Result<Option<(Vec<T>, Option<String>)>> {
+    // The row after the page, if there is one, says whether there is a next page.
+    let mut left = request.limit + 1;
+    let mut walked: u32 = 0;
+    let mut rows: Rows<T> = Vec::new();
+    let after = request.after.as_deref();
+    for &part in parts(request.sort, after) {
+        // Where the next read of this part starts: the cursor, then the last row read.
+        let mut from = after.map(<[Value]>::to_vec);
+        while left > 0 {
+            // Half again what the share predicts, so a page rarely needs two reads.
+            let chunked = left.saturating_mul(kept.spread).saturating_mul(3) / 2;
+            let want = chunked.clamp(left, MAX_CHUNK.max(left));
+            let (sql, params) =
+                part_query(source, request.sort, request.order, from.as_deref(), part, want, None);
+            let mut statement = conn.prepare_cached(&sql)?;
+            let mut result = statement.query(params_from_iter(params))?;
+            let (mut read, mut last) = (0, None);
+            while left > 0
+                && let Some(row) = result.next()?
+            {
+                read += 1;
+                let width = source.select.len();
+                let key = (width..width + request.sort.columns.len())
+                    .map(|index| row.get::<_, Value>(index))
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let Some(&Value::Integer(id)) = key.last() else {
+                    unreachable!("a sort ends with the row's ID")
+                };
+                last = Some(key.clone());
+                if (kept.keeps)(id) {
+                    rows.push((map(row)?, key));
+                    left -= 1;
+                }
+            }
+            // A short read is the end of the part; a full one continues after its last row.
+            if read < want {
+                break;
+            }
+            walked = walked.saturating_add(read);
+            if left > 0 && walked >= kept.budget {
+                return Ok(None);
+            }
+            from = last;
+        }
+    }
+    let next = if left == 0 {
+        rows.pop();
+        rows.last().map(|(_, key)| cursor::encode(&request.sort.label(request.order), key))
+    } else {
+        None
+    };
+    Ok(Some((rows.into_iter().map(|(item, _)| item).collect(), next)))
+}
+
 /// The page of `source` that `request` asks for, read a window of the index at a time if `walk`
 /// is given, and `None` if the walk read its whole budget without filling the page.
 pub(super) fn read_page<T>(
