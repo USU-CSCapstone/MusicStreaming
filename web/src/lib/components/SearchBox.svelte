@@ -45,6 +45,7 @@
 	import { listRecentSearches } from '$lib/api/client';
 	import type { RecentSearch } from '$lib/api/types';
 	import { readTab, tabParams } from '$lib/search-tabs';
+	import { FROM_PARAM, WITHIN_PARAM, containerOf, scopeParams } from '$lib/search-scope';
 	import Icon from './Icon.svelte';
 
 	let input: HTMLInputElement;
@@ -68,9 +69,18 @@
 	function search() {
 		if (!searching) returnTo = page.url.pathname + page.url.search;
 		// Results update as the user types, with no submit step (`requirements/search.md` §7).
-		// Each keystroke replaces the entry, so Back leaves search in one step. The tab stays.
-		const tab = searching ? readTab(page.url.searchParams) : null;
-		const query = new URLSearchParams({ q: text, ...tabParams(tab) });
+		// Each keystroke replaces the entry, so Back leaves search in one step. The tab stays, and
+		// so does the container the search was started from, offered or kept to
+		// (`requirements/search.md` §5).
+		const params = page.url.searchParams;
+		const tab = searching ? readTab(params) : null;
+		const from = searching ? params.get(FROM_PARAM) : containerOf(page.route.id, page.params);
+		const within = searching && params.has(WITHIN_PARAM);
+		const query = new URLSearchParams({
+			q: text,
+			...tabParams(tab),
+			...scopeParams(from, within)
+		});
 		// eslint-disable-next-line svelte/no-navigation-without-resolve -- resolve() plus a query string
 		void goto(`${resolve('/search')}?${query}`, {
 			replaceState: searching,

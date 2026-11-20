@@ -63,13 +63,13 @@ export const tagRecipe = (tagId: string): QueueRecipe =>
 
 /**
  * The songs a search finds, as the server resolves them: in its ranking, or in `sort`, as its
- * Songs tab sorts them.
+ * Songs tab sorts them; in the whole library, or `within` a container, as `album:ID`.
  */
-export const searchRecipe = (q: string, sort: ServerSort | null = null): QueueRecipe => ({
-	type: 'search',
-	q,
-	...sort
-});
+export const searchRecipe = (
+	q: string,
+	sort: ServerSort | null = null,
+	within: string | null = null
+): QueueRecipe => ({ type: 'search', q, ...(within && { within }), ...sort });
 
 /** Every song an artist is credited on in `sort`, as the server resolves them. */
 export const artistRecipe = (artistId: string, sort = BY_ALBUM): QueueRecipe => ({

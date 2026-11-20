@@ -12,6 +12,7 @@
 	import CollectionView from '$lib/components/CollectionView.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import SearchBox, { settler } from '$lib/components/SearchBox.svelte';
+	import SearchScope from '$lib/components/SearchScope.svelte';
 	import SearchTabs from '$lib/components/SearchTabs.svelte';
 	import TopResult from '$lib/components/TopResult.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
@@ -20,6 +21,7 @@
 	import { tagTypePlural } from '$lib/tags';
 	import type { Selected } from '$lib/recent';
 	import { searchRecipe, type PlayFrom } from '$lib/queue';
+	import { HELD, scopeParams } from '$lib/search-scope';
 	import { SEARCH_TABS, tabHref, tabLabel, type Tab } from '$lib/search-tabs';
 	import { currentSort, showSorted } from '$lib/sort-url';
 	import { FIELDS, serverSort } from '$lib/sorting';
@@ -66,6 +68,10 @@
 		);
 	});
 	const searched = $derived(Boolean(data.results || data.section));
+	// The container the search was started from, which every link keeps, and the one it keeps
+	// to, which what it plays keeps to as well (`requirements/search.md` §5).
+	const scope = $derived(scopeParams(data.container?.within ?? null, data.within));
+	const narrowedTo = $derived(data.within ? (data.container?.within ?? null) : null);
 	const sections = $derived(
 		paged && data.tab
 			? paged.total
@@ -108,7 +114,7 @@
 	const ranked = $derived<PlayFrom | undefined>(
 		data.q
 			? {
-					recipe: searchRecipe(data.q),
+					recipe: searchRecipe(data.q, null, narrowedTo),
 					total: sections.find((s) => s.type === 'tracks')?.total ?? songs.length
 				}
 			: undefined
@@ -119,7 +125,7 @@
 		const server = serverSort(sort);
 		if (!ranked || !sort) return ranked;
 		if (!paged || !server) return undefined;
-		return { recipe: searchRecipe(data.q, server), total: ranked.total };
+		return { recipe: searchRecipe(data.q, server, narrowedTo), total: ranked.total };
 	});
 	const context = $derived<PlayContext>({ type: 'search', query: data.q ?? '', section: 'tracks' });
 
@@ -174,7 +180,15 @@
 <div class="box"><SearchBox /></div>
 
 {#if searched && !libraryEmpty}
-	<SearchTabs q={data.q} current={data.tab} />
+	{#if data.container}
+		<SearchScope q={data.q} tab={data.tab} container={data.container} within={data.within} />
+	{/if}
+	<SearchTabs
+		q={data.q}
+		current={data.tab}
+		{scope}
+		holds={data.within && data.container ? HELD[data.container.kind] : undefined}
+	/>
 {/if}
 
 {#if !searched}
@@ -227,13 +241,13 @@
 				<!-- On All, a section leads to its tab, which holds every match (`requirements/search.md` §4). -->
 				{#if tab}
 					<!-- eslint-disable svelte/no-navigation-without-resolve -- resolved in search-tabs.ts -->
-					<h2><a href={tabHref(data.q, tab)}>{title(section)}</a></h2>
+					<h2><a href={tabHref(data.q, tab, scope)}>{title(section)}</a></h2>
 				{:else}
 					<h2>{title(section)}</h2>
 				{/if}
 				<div class="actions">
 					{#if tab && section.total > section.items.length}
-						<a class="all" href={tabHref(data.q, tab)}>Show all {section.total}</a>
+						<a class="all" href={tabHref(data.q, tab, scope)}>Show all {section.total}</a>
 						<!-- eslint-enable svelte/no-navigation-without-resolve -->
 					{/if}
 					{#if section.type === 'tracks' && everySong}<AddToPlaylistButton what={everySong} />{/if}

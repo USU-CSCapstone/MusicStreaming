@@ -67,7 +67,7 @@ export function tabParams(tab: Tab | null): Record<string, string> {
 	return { [TAB_PARAM]: tab.type, ...(tab.tagType && { [TAG_TYPE_PARAM]: tab.tagType }) };
 }
 
-/** The search for `q` on `tab`, or on All. */
-export function tabHref(q: string, tab: Tab | null): string {
-	return `${resolve('/search')}?${new URLSearchParams({ q, ...tabParams(tab) })}`;
+/** The search for `q` on `tab`, or on All, with `scope`'s parameters (`search-scope.ts`). */
+export function tabHref(q: string, tab: Tab | null, scope: Record<string, string> = {}): string {
+	return `${resolve('/search')}?${new URLSearchParams({ q, ...tabParams(tab), ...scope })}`;
 }
