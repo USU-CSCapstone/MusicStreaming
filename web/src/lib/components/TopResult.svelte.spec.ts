@@ -63,7 +63,9 @@ describe('TopResult.svelte', () => {
 	it('plays a track first of the search’s songs, and keeps the search', async () => {
 		const acted = vi.fn();
 		const song = track('5', "Say It Ain't So");
-		render(TopResult, { props: { result: { type: 'track', track: song }, context, from, onact: acted } });
+		render(TopResult, {
+			props: { result: { type: 'track', track: song }, context, from, onact: acted }
+		});
 
 		await expect.element(page.getByText('Song', { exact: true })).toBeVisible();
 		await expect.element(page.getByText("Say It Ain't So")).toBeVisible();
@@ -88,14 +90,19 @@ describe('TopResult.svelte', () => {
 		expect(fake.listed).toEqual([{ albumId: '31', sort: 'album' }]);
 		const [tracks, index, played, by] = fake.plays[0];
 		expect([tracks, index, played]).toEqual([first, 0, { type: 'album', id: '31' }]);
-		expect(by).toEqual({ recipe: expect.objectContaining({ type: 'album', albumId: '31' }), total: 10 });
+		expect(by).toEqual({
+			recipe: expect.objectContaining({ type: 'album', albumId: '31' }),
+			total: 10
+		});
 		expect(acted).toHaveBeenCalledWith({ type: 'album', id: '31' });
 	});
 
 	it('plays an artist as their page does', async () => {
 		const acted = vi.fn();
 		fake.tracks = async () => ({ items: [track('7', 'Buddy Holly')], nextCursor: null, total: 1 });
-		render(TopResult, { props: { result: { type: 'artist', artist }, context, from, onact: acted } });
+		render(TopResult, {
+			props: { result: { type: 'artist', artist }, context, from, onact: acted }
+		});
 
 		await expect.element(page.getByText('Artist', { exact: true })).toBeVisible();
 		await page.getByRole('button', { name: 'Play Weezer' }).click();
@@ -121,7 +128,11 @@ describe('TopResult.svelte', () => {
 	});
 
 	it('offers the actions for what it is', async () => {
-		render(TopResult, { props: { result: { type: 'album', album }, context, from, onact: vi.fn() } });
-		await expect.element(page.getByRole('button', { name: 'Actions for “Blue Album”' })).toBeVisible();
+		render(TopResult, {
+			props: { result: { type: 'album', album }, context, from, onact: vi.fn() }
+		});
+		await expect
+			.element(page.getByRole('button', { name: 'Actions for “Blue Album”' }))
+			.toBeVisible();
 	});
 });
