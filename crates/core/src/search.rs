@@ -35,10 +35,12 @@ mod query;
 mod rank;
 #[cfg(test)]
 mod tests;
+mod union;
 mod words;
 
 pub use build::{Finishing, IndexBuilder};
 pub use rank::Rank;
+pub use union::Union;
 pub use words::words;
 
 /// What a name names. The order is the tie-break: the more specific thing first

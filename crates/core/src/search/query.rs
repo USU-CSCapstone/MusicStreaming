@@ -29,6 +29,15 @@ fn leading_article<T>(words: &[T], is_article: impl Fn(&T) -> bool) -> usize {
     usize::from(words.len() > 1 && is_article(&words[0]))
 }
 
+/// One index's section, as [`Union`](super::Union) merges it: its best matches with their ranks and IDs, best
+/// first, and how many matched in all.
+pub(super) struct RankedSection {
+    pub(super) kind: Kind,
+    pub(super) group: Option<String>,
+    pub(super) hits: Vec<(Rank, i64)>,
+    pub(super) total: usize,
+}
+
 /// Where the matches of `kind`, and of the group with index `group`, go among `matches`' slots:
 /// one for each kind, and one for each group of tags after them.
 fn slot(kind: Kind, group: u32) -> usize {
@@ -116,15 +125,10 @@ impl Index {
         limit: usize,
         keep: impl Fn(Kind, i64) -> bool,
     ) -> SectionPage {
-        let group = match group {
-            None => 0,
-            Some(group) => match self.groups.binary_search_by(|g| g.as_str().cmp(group)) {
-                Ok(found) if found > 0 => found as u32,
-                _ => return SectionPage { ids: Vec::new(), total: 0, next: None },
-            },
+        let Some(slot) = self.slot_of(kind, group) else {
+            return SectionPage { ids: Vec::new(), total: 0, next: None };
         };
-        let mut matches = self.matches(query, &[kind], keep);
-        let mut hits = std::mem::take(&mut matches[slot(kind, group)]);
+        let mut hits = std::mem::take(&mut self.matches(query, &[kind], keep)[slot]);
         let total = hits.len();
         if let Some(after) = after {
             hits.retain(|&(score, d)| self.ranks_after(score, d, after));
@@ -133,6 +137,72 @@ impl Index {
         best(&mut hits, limit);
         let next = hits.last().filter(|_| more).map(|&(score, d)| self.rank(score, d));
         SectionPage { ids: self.hit_ids(&hits), total, next }
+    }
+
+    /// Each section's best `limit` matches for `query` of each of `kinds` that `keep` keeps,
+    /// with their ranks, best first, and how many matched in all: what [`Union`](super::Union) merges with
+    /// another index's.
+    pub(super) fn ranked_sections(
+        &self,
+        query: &str,
+        kinds: &[Kind],
+        limit: usize,
+        keep: impl Fn(Kind, i64) -> bool,
+    ) -> Vec<RankedSection> {
+        let mut sections = Vec::new();
+        for mut hits in self.matches(query, kinds, keep) {
+            let Some(&(_, d)) = hits.first() else {
+                continue;
+            };
+            let (kind, group) = (self.kinds[d as usize], self.groups_of[d as usize]);
+            let total = hits.len();
+            best(&mut hits, limit);
+            let hits = hits.iter().map(|&(score, d)| (self.rank(score, d), self.ids[d as usize]));
+            sections.push(RankedSection {
+                kind,
+                group: self.group(group),
+                hits: hits.collect(),
+                total,
+            });
+        }
+        sections
+    }
+
+    /// As [`Index::page`], with each match's rank, and up to `limit` of them: what [`Union`]
+    /// merges with another index's page.
+    pub(super) fn ranked_page(
+        &self,
+        query: &str,
+        kind: Kind,
+        group: Option<&str>,
+        after: Option<&Rank>,
+        limit: usize,
+        keep: impl Fn(Kind, i64) -> bool,
+    ) -> (Vec<(Rank, i64)>, usize) {
+        let Some(slot) = self.slot_of(kind, group) else {
+            return (Vec::new(), 0);
+        };
+        let mut hits = std::mem::take(&mut self.matches(query, &[kind], keep)[slot]);
+        let total = hits.len();
+        if let Some(after) = after {
+            hits.retain(|&(score, d)| self.ranks_after(score, d, after));
+        }
+        best(&mut hits, limit);
+        let hits = hits.iter().map(|&(score, d)| (self.rank(score, d), self.ids[d as usize]));
+        (hits.collect(), total)
+    }
+
+    /// The slot of `kind`'s section, or `group`'s of a kind that has groups, among `matches`',
+    /// if the index has such a group.
+    fn slot_of(&self, kind: Kind, group: Option<&str>) -> Option<usize> {
+        let group = match group {
+            None => 0,
+            Some(group) => match self.groups.binary_search_by(|g| g.as_str().cmp(group)) {
+                Ok(found) if found > 0 => found as u32,
+                _ => return None,
+            },
+        };
+        Some(slot(kind, group))
     }
 
     /// The IDs of every match for `query` of `kind` that `keep` keeps, in no order, for a caller
