@@ -28,7 +28,7 @@ class FakeSocket {
 
 let sockets: FakeSocket[];
 let revoked: ReturnType<typeof vi.fn<() => void>>;
-let signedIn: boolean;
+let signedIn: boolean | 'credentials_changed';
 let realtime: Realtime;
 
 /** The socket opened most recently. */
@@ -213,6 +213,76 @@ describe('Realtime', () => {
 		latest().receive({ type: 'sessionRevoked', reason: 'credentials_changed' });
 		await vi.waitFor(() => expect(revoked).toHaveBeenCalledOnce());
 		expect(order).toEqual(['wiped', 'login']);
+	});
+
+	it.each(['credentials_changed', 'logged_out'])(
+		'tells the wipe why the server signed this device out: %s',
+		async (reason) => {
+			const ended = vi.fn();
+			realtime.onSessionEnd = ended;
+			realtime.start();
+			latest().hello();
+			latest().receive({ type: 'sessionRevoked', reason });
+			await vi.waitFor(() => expect(revoked).toHaveBeenCalledOnce());
+			expect(ended).toHaveBeenCalledWith(reason);
+		}
+	);
+
+	it('ends a session the API reports over with the reason it gave', async () => {
+		const ended = vi.fn();
+		realtime.onSessionEnd = ended;
+		realtime.start();
+		latest().hello();
+		signedIn = 'credentials_changed';
+		latest().onclose?.();
+		vi.advanceTimersByTime(1000);
+		latest().onclose?.();
+		await vi.waitFor(() => expect(revoked).toHaveBeenCalledOnce());
+		expect(ended).toHaveBeenCalledWith('credentials_changed');
+	});
+
+	it('reads the reason from the 401 session_revoked Problem the server answers the check with', async () => {
+		const ended = vi.fn();
+		vi.stubGlobal('fetch', async () =>
+			Response.json(
+				{
+					type: 'about:blank',
+					title: 'Unauthorized',
+					status: 401,
+					code: 'session_revoked',
+					reason: 'credentials_changed'
+				},
+				{ status: 401 }
+			)
+		);
+		onTestFinished(() => void vi.unstubAllGlobals());
+		realtime = new Realtime({
+			url: () => 'ws://test/api/v1/realtime',
+			create: () => {
+				const socket = new FakeSocket();
+				sockets.push(socket);
+				return socket as unknown as WebSocket;
+			},
+			revoked
+		});
+		realtime.onSessionEnd = ended;
+		realtime.start();
+		latest().onclose?.();
+		await vi.waitFor(() => expect(revoked).toHaveBeenCalledOnce());
+		expect(ended).toHaveBeenCalledWith('credentials_changed');
+	});
+
+	it('ends a session found over by the API with no reason', async () => {
+		const ended = vi.fn();
+		realtime.onSessionEnd = ended;
+		realtime.start();
+		latest().hello();
+		signedIn = false;
+		latest().onclose?.();
+		vi.advanceTimersByTime(1000);
+		latest().onclose?.();
+		await vi.waitFor(() => expect(revoked).toHaveBeenCalledOnce());
+		expect(ended).toHaveBeenCalledWith(undefined);
 	});
 
 	it('goes to the login page even if the wipe fails', async () => {

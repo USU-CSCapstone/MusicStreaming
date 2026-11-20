@@ -8,7 +8,7 @@ vi.mock('$lib/connectivity.svelte', () => ({
 vi.mock('$app/paths', () => ({ base: '', resolve: (path: string) => path }));
 
 // The module ends a session once per page, as the page reloads after it: each test loads it anew.
-let { listKeptQueues, login } = await import('./client');
+let { changeMyPassword, listKeptQueues, login } = await import('./client');
 
 /** A browser storage the test can read and write; the owner is `owner`, if any. The page is at
  * `/albums`, and `assign` records where it is sent. */
@@ -25,14 +25,14 @@ function signedInAs(owner?: string) {
 const assign = vi.fn();
 
 /** A fetch answering a Problem with `code`. */
-const problem = (status: number, code: string) => async () =>
-	Response.json({ code, title: code }, { status });
+const problem = (status: number, code: string, reason?: string) => async () =>
+	Response.json({ code, title: code, reason }, { status });
 
 beforeEach(async () => {
 	catalog.signOut.mockClear();
 	assign.mockClear();
 	vi.resetModules();
-	({ listKeptQueues, login } = await import('./client'));
+	({ changeMyPassword, listKeptQueues, login } = await import('./client'));
 });
 
 describe('a request the session no longer covers', () => {
@@ -42,6 +42,17 @@ describe('a request the session no longer covers', () => {
 			signedInAs('7');
 			await expect(listKeptQueues(problem(401, code))).rejects.toMatchObject({ status: 307 });
 			expect(catalog.signOut).toHaveBeenCalledOnce();
+		}
+	);
+
+	it.each(['credentials_changed', 'logged_out'])(
+		'tells the wipe why a revoked session ended: %s',
+		async (reason) => {
+			signedInAs('7');
+			await expect(listKeptQueues(problem(401, 'session_revoked', reason))).rejects.toMatchObject({
+				status: 307
+			});
+			expect(catalog.signOut).toHaveBeenCalledWith(false, reason);
 		}
 	);
 
@@ -63,6 +74,22 @@ describe('a request the session no longer covers', () => {
 		expect(catalog.signOut).toHaveBeenCalledTimes(1);
 		expect(assign).toHaveBeenCalledTimes(1);
 	});
+
+	it.each([
+		[403, 'wrong_password'],
+		[429, 'rate_limited'],
+		[422, 'weak_password']
+	])(
+		'is no end of the session when changing the password is refused with %i %s',
+		async (status, code) => {
+			signedInAs('7');
+			await expect(
+				changeMyPassword(problem(status, code), { currentPassword: 'a', newPassword: 'b' })
+			).rejects.toMatchObject({ status, code });
+			expect(catalog.signOut).not.toHaveBeenCalled();
+			expect(assign).not.toHaveBeenCalled();
+		}
+	);
 
 	it('has nothing to wipe where no session was ever good', async () => {
 		signedInAs();

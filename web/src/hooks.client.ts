@@ -33,7 +33,7 @@ if (!dev && 'serviceWorker' in navigator) {
 }
 
 // The server ending the session wipes the device before the login page loads.
-realtime.onSessionEnd = () => catalog.signOut();
+realtime.onSessionEnd = (reason) => catalog.signOut(false, reason);
 
 // A signed-in device joins the catalog's election before the first page loads, so a launch at a
 // deep link offline finds the device's copy of the library coming rather than none. Where the

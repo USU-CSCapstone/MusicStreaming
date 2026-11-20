@@ -8,7 +8,7 @@ import { API } from '$lib/api/root';
 import { connectivity } from '$lib/connectivity.svelte';
 import { clearImageCache, tellServiceWorker } from '$lib/image-cache';
 import { clearQueueLists } from '$lib/queue/lists';
-import { deviceLibraries, forget, owner, rememberDevice } from '$lib/last-known';
+import { deviceLibraries, forget, lastPlayback, owner, rememberDevice } from '$lib/last-known';
 import type { Local } from '$lib/sync/mutation';
 import { DISCARDED, IdbPort, unsent, wipeDatabases } from '$lib/sync/store';
 import wasmUrl from '$lib/catalog-wasm/jewelcase_catalog_wasm_bg.wasm?url';
@@ -416,11 +416,12 @@ export class CatalogClient {
 	 * or a sign-in as someone else is), the unsent plays and changes the wipe deletes are counted
 	 * first and told once on the login page.
 	 */
-	signOut(chosen = false) {
+	signOut(chosen = false, reason?: 'credentials_changed' | 'logged_out') {
 		// A tab owning the catalog lets go of it first, or the wipe would wait on its own lock.
 		this.disconnect();
 		const user = owner();
-		forget();
+		// A device signed out for a changed password comes back as itself when it logs in.
+		forget(reason === 'credentials_changed' && user ? lastPlayback(user).deviceId : undefined);
 		const wiped = (async () => {
 			if (user && !chosen) await discarded(user);
 			await wipeDatabases(user ? [user] : []);

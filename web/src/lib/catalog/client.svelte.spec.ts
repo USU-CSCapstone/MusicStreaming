@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { RealtimeServerMessage } from '$lib/api/types';
 import { connectivity } from '$lib/connectivity.svelte';
-import { deviceLibraries, rememberDevice } from '$lib/last-known';
+import {
+	deviceLibraries,
+	rememberDevice,
+	rememberPlayback,
+	reclaimedDevice
+} from '$lib/last-known';
 import { toaster } from '$lib/toast.svelte';
 import { IdbPort } from '$lib/sync/store';
 import { CatalogClient } from './client.svelte';
@@ -1071,6 +1076,39 @@ describe('CatalogClient', () => {
 		localStorage.setItem('jewelcase-owner', '1');
 		await browser().tab('a').client.signOut();
 		expect(sessionStorage.getItem('jewelcase-discarded')).toBeNull();
+	});
+
+	it('a session ended by a credentials change keeps the device ID for the next login, and any other end keeps none', async () => {
+		for (const [reason, kept] of [
+			['credentials_changed', '7'],
+			['logged_out', null],
+			[undefined, null]
+		] as const) {
+			localStorage.setItem('jewelcase-owner', '1');
+			rememberPlayback('1', { deviceId: '7' });
+			await browser().tab('a').client.signOut(false, reason);
+			expect(localStorage.getItem('jewelcase-playback:1'), String(reason)).toBeNull();
+			expect(reclaimedDevice(), String(reason)).toBe(kept);
+		}
+	});
+
+	it('a second sign-out of the same session, from another tab or after the first, keeps the ID', async () => {
+		localStorage.setItem('jewelcase-owner', '1');
+		rememberPlayback('1', { deviceId: '7' });
+		await browser().tab('a').client.signOut(false, 'credentials_changed');
+		await browser().tab('b').client.signOut(false, 'credentials_changed');
+		expect(reclaimedDevice()).toBe('7');
+		await browser().tab('a').client.signOut(false);
+		expect(reclaimedDevice()).toBe('7');
+	});
+
+	it('a later session ended another way drops the ID an earlier one kept', async () => {
+		localStorage.setItem('jewelcase-owner', '1');
+		rememberPlayback('1', { deviceId: '7' });
+		await browser().tab('a').client.signOut(false, 'credentials_changed');
+		localStorage.setItem('jewelcase-owner', '1');
+		await browser().tab('a').client.signOut(true);
+		expect(reclaimedDevice()).toBeNull();
 	});
 
 	it('sign-out tells the service worker that nobody is signed in', async () => {
