@@ -33,6 +33,7 @@
 		albums: 'Albums',
 		artists: 'Artists',
 		playlists: 'Playlists',
+		tags: 'Tags',
 		lyrics: 'Lyrics'
 	};
 
