@@ -91,27 +91,46 @@ impl Players {
                 "INSERT OR REPLACE INTO player_states \
                      (user_id, item_id, position_ms) VALUES (?1, ?2, ?3)",
             )?;
+            let mut gone = Vec::new();
             for (user, item, position_ms) in rows {
                 // One account's failing, as when it is deleted while its state waits, must not
                 // keep everyone else's from being saved. SQLite undoes only the statement that failed.
                 if let Err(error) = upsert.execute(params![user, item, position_ms]) {
-                    tracing::warn!(%error, user, "cannot save an account's playback state");
+                    if exists(tx, user)? {
+                        tracing::warn!(%error, user, "cannot save an account's playback state");
+                    } else {
+                        gone.push(user);
+                    }
                 }
             }
-            Ok(())
+            Ok(gone)
         });
-        if let Err(error) = write.await {
-            tracing::warn!(%error, "cannot save playback state");
-            // Tried again at the next save, not left until each account's next change.
-            let mut accounts = self.lock();
-            for user in users {
-                if let Some(state) = accounts.get_mut(&user) {
-                    state.unsaved = true;
-                    state.saved = None;
+        match write.await {
+            // A deleted account's state can never be saved, so it is dropped, not tried again.
+            Ok(gone) => {
+                let mut accounts = self.lock();
+                for user in gone {
+                    accounts.remove(&user);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "cannot save playback state");
+                // Tried again at the next save, not left until each account's next change.
+                let mut accounts = self.lock();
+                for user in users {
+                    if let Some(state) = accounts.get_mut(&user) {
+                        state.unsaved = true;
+                        state.saved = None;
+                    }
                 }
             }
         }
     }
+}
+
+/// Whether account `user` still has its row: one deleted has none.
+fn exists(conn: &Connection, user: i64) -> rusqlite::Result<bool> {
+    conn.prepare_cached("SELECT 1 FROM users WHERE id = ?1")?.exists([user])
 }
 
 /// Each active account's saved state, by user ID.

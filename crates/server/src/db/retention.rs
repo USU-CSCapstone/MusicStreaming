@@ -26,7 +26,7 @@ use rusqlite::{Result, Transaction, params};
 
 use super::{Database, Text, feed, now_ms};
 
-mod accounts;
+pub(crate) mod accounts;
 mod catalog;
 #[cfg(test)]
 mod tests;
