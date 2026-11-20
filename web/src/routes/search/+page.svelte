@@ -11,11 +11,13 @@
 	import CollectionView from '$lib/components/CollectionView.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import SearchBox, { settler } from '$lib/components/SearchBox.svelte';
+	import SearchTabs from '$lib/components/SearchTabs.svelte';
 	import TopResult from '$lib/components/TopResult.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
 	import { tagTypePlural } from '$lib/tags';
 	import type { Selected } from '$lib/recent';
 	import { searchRecipe, type PlayFrom } from '$lib/queue';
+	import { SEARCH_TABS, tabHref } from '$lib/search-tabs';
 	import { currentSort, showSorted } from '$lib/sort-url';
 	import { FIELDS } from '$lib/sorting';
 	import { sortTracks } from '$lib/track-sort';
@@ -39,6 +41,10 @@
 	}
 
 	const sections = $derived(data.results?.sections ?? []);
+	// What nothing found on a tab is called, as the tab is.
+	const looking = $derived(
+		SEARCH_TABS.find((tab) => tab.type === data.tab)?.label.toLowerCase() ?? 'music'
+	);
 	const tagTypes = $derived(data.tagTypes ?? []);
 	// Songs come in match order; sorted, they play as shown (`requirements/conventions.md` §4.1).
 	const sort = $derived(currentSort(FIELDS));
@@ -52,8 +58,9 @@
 		];
 	});
 
-	// The songs the search finds, in its ranking, which the server resolves to the end. Unsorted, the songs shown are the first of them; sorted, they play as
-	// shown. The top result, a track, always plays first of them.
+	// The songs the search finds, in its ranking, which the server resolves to the end. Unsorted,
+	// the songs shown are the first of them; sorted, they play as shown. The top result, a track,
+	// always plays first of them.
 	const ranked = $derived<PlayFrom | undefined>(
 		data.q
 			? {
@@ -104,6 +111,10 @@
 <!-- The sidebar holds the box on wide screens; at phone width this page does. -->
 <div class="box"><SearchBox /></div>
 
+{#if data.results && !data.results.libraryEmpty}
+	<SearchTabs q={data.q} current={data.tab} />
+{/if}
+
 {#if !data.results}
 	<p class="state muted">Search songs, albums, artists, and playlists.</p>
 	<!-- Each type's tags to browse, which on a phone, without the sidebar, are only here. -->
@@ -124,7 +135,7 @@
 			<h2>You have no music yet</h2>
 			<p class="muted">Songs appear here once the library has been scanned.</p>
 		{:else}
-			<h2>No music matches “{data.q}”</h2>
+			<h2>No {looking} {looking === 'music' ? 'matches' : 'match'} “{data.q}”</h2>
 			{#if data.results.nearMisses.length}
 				<p class="muted">
 					Did you mean
@@ -139,7 +150,7 @@
 		{/if}
 	</div>
 {:else}
-	{#if data.results.top}
+	{#if !data.tab && data.results.top}
 		<TopResult
 			result={data.results.top}
 			{context}
@@ -148,11 +159,24 @@
 		/>
 	{/if}
 	{#each sections as section (section.type)}
+		{@const tab = data.tab ? undefined : SEARCH_TABS.find((t) => t.type === section.type)}
 		<section>
 			<header>
-				<h2>{titles[section.type]}</h2>
-				{#if section.type === 'tracks' && everySong}<AddToPlaylistButton what={everySong} />{/if}
-				{#if section.type !== 'tracks' && section.type !== 'lyrics'}<ViewToggle />{/if}
+				<!-- On All, a section leads to its tab, which holds every match (`requirements/search.md` §4). -->
+				{#if tab}
+					<!-- eslint-disable svelte/no-navigation-without-resolve -- resolved in search-tabs.ts -->
+					<h2><a href={tabHref(data.q, tab.type)}>{titles[section.type]}</a></h2>
+				{:else}
+					<h2>{titles[section.type]}</h2>
+				{/if}
+				<div class="actions">
+					{#if tab && section.total > section.items.length}
+						<a class="all" href={tabHref(data.q, tab.type)}>Show all {section.total}</a>
+						<!-- eslint-enable svelte/no-navigation-without-resolve -->
+					{/if}
+					{#if section.type === 'tracks' && everySong}<AddToPlaylistButton what={everySong} />{/if}
+					{#if section.type !== 'tracks' && section.type !== 'lyrics'}<ViewToggle />{/if}
+				</div>
 			</header>
 			{#if section.type === 'tracks'}
 				<TrackList
@@ -209,7 +233,31 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
+		gap: var(--space-3);
 		margin-bottom: var(--space-4);
+	}
+
+	h2 a {
+		color: inherit;
+		text-decoration: none;
+	}
+
+	h2 a:hover,
+	.all:hover {
+		text-decoration: underline;
+	}
+
+	.actions {
+		display: flex;
+		align-items: center;
+		gap: var(--space-3);
+	}
+
+	.all {
+		color: var(--text-muted);
+		font-weight: 600;
+		text-decoration: none;
+		white-space: nowrap;
 	}
 
 	h2 {

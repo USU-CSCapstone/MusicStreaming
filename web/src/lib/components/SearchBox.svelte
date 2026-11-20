@@ -44,6 +44,7 @@
 	import { page } from '$app/state';
 	import { listRecentSearches } from '$lib/api/client';
 	import type { RecentSearch } from '$lib/api/types';
+	import { TAB_PARAM, readTab } from '$lib/search-tabs';
 	import Icon from './Icon.svelte';
 
 	let input: HTMLInputElement;
@@ -67,8 +68,9 @@
 	function search() {
 		if (!searching) returnTo = page.url.pathname + page.url.search;
 		// Results update as the user types, with no submit step (`requirements/search.md` §7).
-		// Each keystroke replaces the entry, so Back leaves search in one step.
-		const query = new URLSearchParams({ q: text });
+		// Each keystroke replaces the entry, so Back leaves search in one step. The tab stays.
+		const tab = searching ? readTab(page.url.searchParams) : null;
+		const query = new URLSearchParams({ q: text, ...(tab && { [TAB_PARAM]: tab }) });
 		// eslint-disable-next-line svelte/no-navigation-without-resolve -- resolve() plus a query string
 		void goto(`${resolve('/search')}?${query}`, {
 			replaceState: searching,
