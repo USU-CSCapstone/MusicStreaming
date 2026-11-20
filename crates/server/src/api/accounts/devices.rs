@@ -87,12 +87,8 @@ async fn sign_out_of(
         if signed_out.is_empty() {
             return Ok(());
         }
-        if one {
-            for (device, _) in signed_out {
-                hub.revoke(user, device, Revoked::LoggedOut);
-            }
-        } else {
-            hub.revoke_all(user, Revoked::LoggedOut);
+        for (device, _) in signed_out {
+            hub.revoke(user, device, Revoked::LoggedOut);
         }
         devices::changed(db, hub, user);
         Ok::<_, Problem>(())
