@@ -140,3 +140,10 @@ async fn only_the_owner_reads_the_log() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(page["items"], json!([]));
 }
+
+#[tokio::test]
+async fn an_unknown_parameter_is_refused() {
+    let (_temp, app) = logged();
+    let (status, _) = call(&app, TOKEN, "GET", &format!("{LOG}?action=deleted"), None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
