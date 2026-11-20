@@ -680,7 +680,9 @@ test('a sorted Songs tab of a search plays and queues every song found in its so
 
 	await main(page).getByRole('button', { name: 'Actions for all songs found' }).click();
 	await page.getByRole('menuitem', { name: 'Queue last' }).click();
-	await expect.poll(() => sent.edits.at(-1)).toMatchObject({ type: 'add', source: { recipe: sorted } });
+	await expect
+		.poll(() => sent.edits.at(-1))
+		.toMatchObject({ type: 'add', source: { recipe: sorted } });
 	await expect.poll(async () => (await lists(server)).at(-1)).toEqual(shown);
 });
 
