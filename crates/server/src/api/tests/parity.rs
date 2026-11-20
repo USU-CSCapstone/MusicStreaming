@@ -240,6 +240,8 @@ fn searches() -> Vec<Value> {
         "idioteque",
         "rock",
         "calm",
+        "quiet",
+        "theirs",
     ] {
         searches.push(json!({ "q": q, "sectionLimit": 5 }));
     }
@@ -622,8 +624,14 @@ async fn every_list_sort_and_filter_and_every_get_give_identical_json_on_the_ser
     }
     // Each section of a few searches, walked in pages of one, and the sections and cursors a
     // section refuses.
-    for (section, q) in [("albums", "a"), ("artists", "road"), ("tracks", "come"), ("tracks", "a")]
-    {
+    for (section, q) in [
+        ("albums", "a"),
+        ("artists", "road"),
+        ("tracks", "come"),
+        ("tracks", "a"),
+        ("playlists", "road"),
+        ("playlists", "theirs"),
+    ] {
         let mut next: Option<String> = None;
         loop {
             let params = json!({ "section": section, "q": q, "limit": 1, "cursor": next });
@@ -663,7 +671,6 @@ async fn every_list_sort_and_filter_and_every_get_give_identical_json_on_the_ser
         json!({ "section": "tags", "q": "rock", "tagType": "genre" }),
         json!({ "section": "tags", "q": "calm", "tagType": "genre" }),
         json!({ "section": "tags", "q": "rock" }),
-        json!({ "section": "playlists", "q": "a" }),
         json!({ "section": "lyrics", "q": "a" }),
         json!({ "section": "songs", "q": "a" }),
         json!({ "section": "tracks", "q": "a", "cursor": cursor }),

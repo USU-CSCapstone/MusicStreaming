@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 
 use jewelcase_core::{
-    Document, Index, IndexBuilder, Kind, Rank, Section as Found, SectionPage as FoundPage,
+    Document, Index, IndexBuilder, Kind, Rank, Section as Found, SectionPage as FoundPage, Union,
 };
 use rusqlite::types::Value;
 use rusqlite::{Connection, Row, params};
@@ -23,13 +23,13 @@ use crate::hidden::{self, Losses};
 use crate::page::{
     self, Kept, Lead, Order, Page, Request, Sort, Source, Table, Total, library_number,
 };
+use crate::playlists::{self, Playlist};
 use crate::tag_filter::{LEAD_SHARE, TagFilter, Tagged, Tags};
 use crate::tags::{self, Tag};
 use crate::tracks::{self, TrackSort, TrackSummary};
 
-/// The kinds a search finds so far: playlists are not indexed yet, so their section is always
-/// empty.
-pub const SEARCHED: [Kind; 4] = [Kind::Track, Kind::Album, Kind::Artist, Kind::Tag];
+/// The kinds a search finds: the library's, and the caller's own playlists ([`mine`]).
+pub const SEARCHED: [Kind; 5] = Kind::ALL;
 
 /// The kinds of the library's own music, which a plugin sent a user's searches is told how many
 /// of each were found.
@@ -72,8 +72,6 @@ pub struct SectionPage {
 /// What a `searchSection` names: one kind's matches, or a section that has none yet.
 pub enum SectionType {
     Kind(Kind),
-    /// The caller's playlists, which the index does not hold yet: an empty page.
-    Playlists,
     /// Lyrics, which are not indexed yet: [`Invalid`].
     Lyrics,
 }
@@ -82,7 +80,6 @@ impl SectionType {
     /// The section `name` names, as the spec's `SearchSectionType` spells it, if any.
     pub fn named(name: &str) -> Option<SectionType> {
         match name {
-            "playlists" => Some(SectionType::Playlists),
             "lyrics" => Some(SectionType::Lyrics),
             name => {
                 SEARCHED.into_iter().find(|&kind| section_type(kind) == name).map(SectionType::Kind)
@@ -163,13 +160,6 @@ fn list_sort(kind: Kind, name: &str) -> Result<&'static Sort, Invalid> {
     .map_err(|_| Invalid(format!("sort must be one the {} list takes", section_type(kind))))
 }
 
-impl SectionPage {
-    /// The page of a section that has nothing in it yet, for a search for `q`.
-    pub fn empty(q: String) -> SectionPage {
-        SectionPage { query: q, items: Vec::new(), next_cursor: None, total: 0 }
-    }
-}
-
 /// A page of the section of `kind`, of `group` for a kind that has groups (a tags section is
 /// one type of tag), of a search for `q` in `library` with `index`, of what `keep`
 /// keeps, read as `reading` says, as the browse lists show it to `user`, whose hidden tracks
@@ -186,7 +176,7 @@ pub fn section(
     kind: Kind,
     group: Option<&str>,
     reading: SectionReading,
-    index: &Index,
+    index: &Union,
     keep: impl Fn(Kind, i64) -> bool,
     hid: &Hid,
 ) -> rusqlite::Result<SectionPage> {
@@ -302,7 +292,23 @@ enum SearchResult {
     Track { track: TrackSummary },
     Album { album: AlbumSummary },
     Artist { artist: ArtistSummary },
+    Playlist { playlist: Playlist },
     Tag { tag: Tag },
+}
+
+/// An index of `user`'s own playlists in `library`, Liked Songs among them, searched with the
+/// library's index ([`Union`]). A user has hundreds of playlists at most, so it is built for each
+/// search rather than kept, and no one else's playlist is ever in it (`requirements/search.md`
+/// §5).
+pub fn mine(conn: &Connection, user: i64, library: i64) -> rusqlite::Result<Index> {
+    let mut builder = IndexBuilder::default();
+    let mut rows = conn
+        .prepare_cached("SELECT id, title FROM playlists WHERE user_id = ?1 AND library_id = ?2")?;
+    let mut rows = rows.query([user, library])?;
+    while let Some(row) = rows.next()? {
+        builder.add(Document::from_playlist(row.get(0)?, row.get(1)?));
+    }
+    Ok(builder.finish())
 }
 
 /// `found`, with only the tags of `tag_type` if it names one: each type of tag is its own section,
@@ -440,20 +446,19 @@ pub fn section_limit(q: &str, section_limit: Option<usize>) -> Result<usize, Inv
     Ok(limit)
 }
 
-/// The kinds to search for the comma-separated section `types`. Playlists add none, since the
-/// index holds no playlists and an empty section is the true answer. Lyrics are [`Invalid`] until
-/// they are indexed, as a list is for a filter it does not support yet.
+/// The kinds to search for the comma-separated section `types`. Lyrics are [`Invalid`] until they
+/// are indexed, as a list is for a filter it does not support yet.
 pub fn kinds(types: &str) -> Result<Vec<Kind>, Invalid> {
     let mut kinds = Vec::new();
     for section in types.split(',') {
         match section {
-            "playlists" => {}
             "lyrics" => return Err(Invalid("lyrics cannot be searched yet".to_owned())),
             _ => {
                 let Some(kind) = SEARCHED.into_iter().find(|&kind| section_type(kind) == section)
                 else {
                     return Err(Invalid(
-                        "types must be tracks, albums, artists, playlists, or lyrics".to_owned(),
+                        "types must be tracks, albums, artists, playlists, tags, or lyrics"
+                            .to_owned(),
                     ));
                 };
                 kinds.push(kind);
@@ -599,8 +604,15 @@ fn sections(
                 tag.lose(losses);
                 Ok(SearchResult::Tag { tag })
             })?,
-            // Not searched yet ([`SEARCHED`]), so never found.
-            Kind::Playlist => Vec::new(),
+            // Only the caller's own are in the index searched ([`mine`]), so these are theirs.
+            Kind::Playlist => {
+                let lost = hidden::playlists(conn, user, library)?;
+                by_ids(conn, playlists::SELECT, "playlists p", "", library, ids, |row| {
+                    let mut playlist = playlists::playlist(row)?;
+                    playlist.lose_from(&lost);
+                    Ok(SearchResult::Playlist { playlist })
+                })?
+            }
         };
         // Gone since the index was built: nothing of it is left to show.
         if !items.is_empty() {
