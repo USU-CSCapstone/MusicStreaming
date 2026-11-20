@@ -230,6 +230,32 @@ test('a search started from a playlist keeps to its songs', async ({ page, serve
 	await expect(scope).toHaveCount(0);
 });
 
+test('a search that finds nothing offers what it nearly found, and keeps where it searched', async ({
+	page,
+	server
+}) => {
+	// A wrong first letter, which a search never allows.
+	await page.goto('/search?q=pindling');
+	await expect(
+		main(page).getByRole('heading', { name: 'No music matches “pindling”' })
+	).toBeVisible();
+	await expect(main(page).getByText(/^\s*Did you mean/)).toHaveText(/Did you mean\s+Kindling\s*\?/);
+	await main(page).getByRole('link', { name: 'Kindling' }).click();
+	await expect(page).toHaveURL(/\/search\?q=Kindling$/);
+	await expect(songTitles(page)).toHaveText(['Kindling']);
+
+	// Kept to the Ambient tag, only its songs are near, and the suggestion keeps to it too.
+	const ambient = `tag%3A${server.ids.tags.Ambient}`;
+	await page.goto(`/search?q=pignal%20part&from=${ambient}&within=${ambient}`);
+	const offered = main(page).getByRole('link', { name: /^Signal Part/ });
+	await expect(offered).toHaveText(['Signal Part 1', 'Signal Part 2']);
+	await offered.first().click();
+	await expect(page).toHaveURL(
+		new RegExp(`q=Signal\\+Part\\+1&from=${ambient}&within=${ambient}$`)
+	);
+	await expect(songTitles(page)).toHaveText(['Signal Part 1']);
+});
+
 test.describe('on a server of its own, with many songs', () => {
 	test.use({ loggedIn: false });
 

@@ -854,3 +854,63 @@ async fn a_container_out_of_reach_is_not_found() {
     let section = "/api/v1/libraries/1/search/tracks?q=lullaby&within=album:105";
     assert_eq!(send(app.clone(), "GET", section).await.0, StatusCode::NOT_FOUND);
 }
+
+/// What a search for `q` by the holder of `token` in library `library` nearly found, having found
+/// nothing.
+async fn near_misses(app: &Router, token: &str, library: i64, q: &str) -> Vec<String> {
+    let uri = format!("/api/v1/libraries/{library}/search?q={}", q.replace(' ', "%20"));
+    let (status, body) = call(app, token, "GET", &uri, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let misses = body["nearMisses"].as_array().unwrap();
+    if !misses.is_empty() {
+        assert_eq!(body["sections"], json!([]), "{q}: only when nothing was found");
+    }
+    misses.iter().map(|miss| miss.as_str().unwrap().to_owned()).collect()
+}
+
+#[tokio::test]
+async fn a_search_that_finds_nothing_offers_what_it_nearly_found() {
+    let (_temp, _db, app) = app_with_catalog().await;
+    // A wrong first letter, and a word the name lacks.
+    assert_eq!(near_misses(&app, TOKEN, 1, "bome together").await, ["Come Together"]);
+    assert_eq!(near_misses(&app, TOKEN, 1, "abbey road live").await, ["Abbey Road"]);
+    // Found, there is nothing to offer.
+    assert_eq!(near_misses(&app, TOKEN, 1, "come together").await, Vec::<String>::new());
+    // Nothing near anything, and a library with no music, offer nothing.
+    assert_eq!(near_misses(&app, TOKEN, 1, "qqqqqqqq").await, Vec::<String>::new());
+    assert_eq!(near_misses(&app, TOKEN, 3, "bome together").await, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_near_miss_is_only_what_the_search_could_have_found() {
+    let (temp, _db, app) = app_with_catalog().await;
+    {
+        let conn = conn(&temp);
+        add_user(&conn, 2, "user");
+        add_device(&conn, 2, 2, "user-token");
+        access(&conn, 2, 1).unwrap();
+    }
+    let body = json!({ "title": "Road Trip" });
+    let (status, _) = call(&app, TOKEN, "POST", "/api/v1/libraries/1/playlists", Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(near_misses(&app, TOKEN, 1, "boad trip").await, ["Road Trip"]);
+    let theirs = near_misses(&app, "user-token", 1, "boad trip").await;
+    assert!(!theirs.contains(&"Road Trip".to_owned()), "another's playlist: {theirs:?}");
+
+    // Narrowed to Kid A, which Come Together is not on.
+    let uri = "/api/v1/libraries/1/search?q=bome%20together&within=album:102";
+    let (_, body) = json(&app, uri).await;
+    assert_eq!(body["nearMisses"], json!([]));
+    // A type of tag keeps to that type: Rock is a genre.
+    let (_, body) = json(&app, "/api/v1/libraries/1/search?q=bock&types=tags&tagType=mood").await;
+    assert!(!body["nearMisses"].as_array().unwrap().contains(&json!("Rock")), "{body}");
+    let (_, body) = json(&app, "/api/v1/libraries/1/search?q=bock&types=tags&tagType=genre").await;
+    assert_eq!(body["nearMisses"], json!(["Rock"]));
+
+    // Hidden, Come Together is no longer near anything.
+    let hide = "/api/v1/libraries/1/tracks/1001/hidden";
+    assert_eq!(send(app.clone(), "PUT", hide).await.0, StatusCode::NO_CONTENT);
+    assert!(
+        !near_misses(&app, TOKEN, 1, "bome together").await.contains(&"Come Together".to_owned())
+    );
+}
