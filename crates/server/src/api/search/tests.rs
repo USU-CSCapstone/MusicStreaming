@@ -6,7 +6,7 @@ use super::super::testing::{
     TOKEN, add_device, add_user, call, catalog, conn, eventually, json, send,
 };
 use super::*;
-use crate::db::testing::{Album, Artist, Track, access, library};
+use crate::db::testing::{Album, Artist, Track, access, album_artist, library, track_artist};
 
 /// [`catalog::app`], plus an empty library 3.
 async fn app_with_catalog() -> (tempfile::TempDir, Arc<Database>, Router) {
@@ -721,4 +721,136 @@ async fn the_playlists_section_pages_through_the_callers_playlists() {
     assert_eq!(found["items"][0]["playlist"]["id"], json!(liked));
     let (status, _, _) = send(app.clone(), "GET", &format!("{base}&sort=name")).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "playlists have no sorts here");
+}
+
+/// [`app_with_lullabies`], plus the album Lullabies (105), owned by artist 11, of Lullaby F and G
+/// (1106, 1107) by them; Rock on Lullaby A and F; and the owner's playlist of Lullaby B and G,
+/// whose ID it gives, once the index holds the new names.
+async fn app_with_containers() -> (tempfile::TempDir, Arc<Database>, Router, String) {
+    let (temp, db, app) = app_with_lullabies().await;
+    db.write(|tx| {
+        Album { title: Some("Lullabies".into()), ..Album::new(105, 1) }.insert(tx)?;
+        album_artist(tx, 1, 105, 11)?;
+        for (id, letter) in [(1106, "F"), (1107, "G")] {
+            Track { album: 105, ..titled(id, &format!("Lullaby {letter}")) }.insert(tx)?;
+            track_artist(tx, 1, id, 0, 11, "Radiohead")?;
+        }
+        tx.execute_batch(
+            "INSERT INTO track_tags (library_id, track_id, tag_id, tag_name)
+             VALUES (1, 1101, 30, 'Rock'), (1, 1106, 30, 'Rock');",
+        )
+    })
+    .await
+    .unwrap();
+    let body = json!({ "title": "Night", "items": [
+        { "type": "track", "id": "1102" }, { "type": "track", "id": "1107" }
+    ] });
+    let (status, made) =
+        call(&app, TOKEN, "POST", "/api/v1/libraries/1/playlists", Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED, "{made}");
+    eventually("the index holds the new names", async || {
+        let (_, body) = json(&app, "/api/v1/libraries/1/search?q=lullaby%20g").await;
+        (sections(&body).first().is_some_and(|(_, ids)| ids == &["1107"])).then_some(())
+    })
+    .await;
+    (temp, db, app, made["id"].as_str().unwrap().to_owned())
+}
+
+/// Each section of a search for `q` within `within`, as its type and IDs.
+async fn within(app: &Router, q: &str, within: &str) -> Vec<(String, Vec<String>)> {
+    let uri = format!("/api/v1/libraries/1/search?q={q}&within={within}&sectionLimit=50");
+    let (status, body) = json(app, &uri).await;
+    assert_eq!(status, StatusCode::OK, "{within}: {body}");
+    sections(&body)
+}
+
+/// Owned IDs, for comparing with [`sections`].
+fn strings(ids: &[&str]) -> Vec<String> {
+    ids.iter().map(|&id| id.to_owned()).collect()
+}
+
+#[tokio::test]
+async fn a_search_narrows_to_what_a_container_holds() {
+    let (_temp, _db, app, night) = app_with_containers().await;
+    let tracks = |ids: &[&str]| ("tracks".to_owned(), strings(ids));
+    let albums = |ids: &[&str]| ("albums".to_owned(), strings(ids));
+    // Unnarrowed, the album Lullabies is found as well as every lullaby.
+    let (_, body) = json(&app, "/api/v1/libraries/1/search?q=lullaby&sectionLimit=50").await;
+    assert!(sections(&body).contains(&albums(&["105"])), "{body}");
+
+    // An album holds only its tracks, so not even itself is found.
+    assert_eq!(
+        within(&app, "lullaby", "album:101").await,
+        [tracks(&["1101", "1102", "1103", "1104", "1105"])]
+    );
+    assert_eq!(within(&app, "lullaby", "album:105").await, [tracks(&["1106", "1107"])]);
+    // An artist holds the tracks and albums credited to them.
+    assert_eq!(
+        within(&app, "lullaby", "artist:11").await,
+        [tracks(&["1106", "1107"]), albums(&["105"])]
+    );
+    // A playlist holds its tracks.
+    let playlist = format!("playlist:{night}");
+    assert_eq!(within(&app, "lullaby", &playlist).await, [tracks(&["1102", "1107"])]);
+    // A tag holds the tracks, albums and artists that carry it.
+    assert_eq!(
+        within(&app, "lullaby", "tag:30").await,
+        [tracks(&["1101", "1106"]), albums(&["105"])]
+    );
+    // Narrowing composes with the type and the tags.
+    let (_, body) =
+        json(&app, "/api/v1/libraries/1/search?q=lullaby&within=artist:11&types=albums").await;
+    assert_eq!(sections(&body), [albums(&["105"])]);
+    let (_, body) =
+        json(&app, "/api/v1/libraries/1/search?q=lullaby&within=album:105&tagAny=30").await;
+    assert_eq!(sections(&body), [tracks(&["1106"])]);
+}
+
+#[tokio::test]
+async fn a_section_narrows_to_a_container_a_page_at_a_time() {
+    let (_temp, _db, app, _) = app_with_containers().await;
+    let base = "/api/v1/libraries/1/search/tracks?q=lullaby&within=album:101";
+    let (_, first) = json(&app, &format!("{base}&limit=2")).await;
+    assert_eq!((track_ids(&first), &first["total"]), (strings(&["1101", "1102"]), &json!(5)));
+    let (_, sorted) = json(&app, &format!("{base}&sort=name&order=desc&limit=2")).await;
+    assert_eq!(track_ids(&sorted), ["1105", "1104"]);
+    let (_, tags) =
+        json(&app, "/api/v1/libraries/1/search/tags?q=rock&tagType=genre&within=album:101").await;
+    assert_eq!(tags["total"], 0, "an album holds no tags");
+}
+
+#[tokio::test]
+async fn a_container_out_of_reach_is_not_found() {
+    let (temp, _db, app, night) = app_with_containers().await;
+    {
+        let conn = conn(&temp);
+        add_user(&conn, 2, "user");
+        add_device(&conn, 2, 2, "user-token");
+        access(&conn, 2, 1).unwrap();
+    }
+    let search = |token: &'static str, within: String| {
+        let app = app.clone();
+        async move {
+            let uri = format!("/api/v1/libraries/1/search?q=lullaby&within={within}");
+            call(&app, token, "GET", &uri, None).await.0
+        }
+    };
+    // Another account's playlist, and things the library does not hold.
+    assert_eq!(search("user-token", format!("playlist:{night}")).await, StatusCode::NOT_FOUND);
+    for missing in ["album:999", "artist:999", "tag:999", "playlist:999", "album:201", "album:nope"]
+    {
+        assert_eq!(search(TOKEN, missing.to_owned()).await, StatusCode::NOT_FOUND, "{missing}");
+    }
+    for malformed in ["song:1101", "album", "1101"] {
+        let status = search(TOKEN, malformed.to_owned()).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{malformed}");
+    }
+    // An album every track of which the caller hid is out of their reach.
+    for track in [1106, 1107] {
+        let uri = format!("/api/v1/libraries/1/tracks/{track}/hidden");
+        assert_eq!(send(app.clone(), "PUT", &uri).await.0, StatusCode::NO_CONTENT);
+    }
+    assert_eq!(search(TOKEN, "album:105".to_owned()).await, StatusCode::NOT_FOUND);
+    let section = "/api/v1/libraries/1/search/tracks?q=lullaby&within=album:105";
+    assert_eq!(send(app.clone(), "GET", section).await.0, StatusCode::NOT_FOUND);
 }

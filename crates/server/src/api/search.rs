@@ -3,6 +3,7 @@
 
 mod indexes;
 mod tagged;
+mod within;
 
 use std::sync::Arc;
 
@@ -13,10 +14,12 @@ use jewelcase_catalog::search::{
     self, Hid, MUSIC, SEARCHED, SearchResponse, SectionPage, SectionReading, SectionType, kinds,
     response, section_limit,
 };
+use jewelcase_catalog::within::Within;
 use jewelcase_core::{Index, Kind, Union};
 use serde::Deserialize;
 
 pub use indexes::Indexes;
+use tagged::Sets;
 
 use super::extract::{Path, Query};
 use super::scope::Scope;
@@ -33,6 +36,7 @@ pub struct SearchQuery {
     types: Option<String>,
     /// Only tags of this type, of the tags sections.
     tag_type: Option<String>,
+    within: Option<String>,
     tag_all: Option<String>,
     tag_any: Option<String>,
     section_limit: Option<usize>,
@@ -48,6 +52,7 @@ pub async fn search(
 ) -> Result<Json<SearchResponse>, Problem> {
     let limit = section_limit(&query.q, query.section_limit)?;
     let kinds = query.types.as_deref().map_or_else(|| Ok(SEARCHED.to_vec()), kinds)?;
+    let within = container(query.within.as_deref())?;
 
     let filter = TagFilter::new(query.tag_all.as_deref(), query.tag_any.as_deref())?;
     let tagged = indexes.tagged.get(&db, library, &filter, &kinds).await?;
@@ -56,15 +61,19 @@ pub async fn search(
     // And the caller's own playlists, which no one else's search finds.
     let tags = filter.clone();
     let wants = kinds.contains(&Kind::Playlist);
+    // Narrowed to a container, only what it holds, kept as a tag filter's rows are.
+    let held = held(&db, &indexes, user, library, within).await?;
     let (hid, mine) = db
         .read(move |conn| {
             let mine = if wants { search::mine(conn, user, library)? } else { Index::default() };
             Ok::<_, rusqlite::Error>((Hid::read(conn, user, library, &tags)?, mine))
         })
         .await?;
+    let held = reached(within, held, &hid)?;
     let found = Union(&[&index, &mine]).search_within(&query.q, &kinds, limit, |kind, id| {
         !hid.contains(kind, id)
             && tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
+            && held.as_ref().is_none_or(|held| held[kind as usize].contains(&id))
     });
     let found = search::of_tag_type(found, query.tag_type.as_deref());
     let response = db.read(move |conn| response(conn, user, library, query.q, found, &hid)).await?;
@@ -78,6 +87,7 @@ pub struct SectionQuery {
     q: String,
     /// The type of tag of the tags section.
     tag_type: Option<String>,
+    within: Option<String>,
     sort: Option<String>,
     order: Option<Order>,
     cursor: Option<String>,
@@ -104,7 +114,8 @@ pub async fn section(
         SectionType::Kind(kind) => kind,
         SectionType::Lyrics => return Err(Problem::invalid("lyrics cannot be searched yet")),
     };
-    let SectionQuery { q, tag_type, sort, order, cursor, limit, tag_all, tag_any } = query;
+    let SectionQuery { q, tag_type, within, sort, order, cursor, limit, tag_all, tag_any } = query;
+    let within = container(within.as_deref())?;
     // Each type of tag is a section of its own, so the tags section is one type.
     let group = match kind {
         Kind::Tag => Some(tag_type.ok_or_else(|| Problem::invalid("tags need a tagType"))?),
@@ -115,12 +126,16 @@ pub async fn section(
     let filter = TagFilter::new(tag_all.as_deref(), tag_any.as_deref())?;
     let tagged = indexes.tagged.get(&db, library, &filter, &[kind]).await?;
     let index = indexes.index(&db, library).await?;
+    let held = held(&db, &indexes, user, library, within).await?;
     let page = db
         .read(move |conn| {
             let hid = Hid::read(conn, user, library, &filter)?;
+            // Narrowed to a container, only what it holds; one out of reach is not found.
+            let Ok(held) = reached(within, held, &hid) else { return Ok(None) };
             let keep = |kind: Kind, id| {
                 !hid.contains(kind, id)
                     && tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
+                    && held.as_ref().is_none_or(|held| held[kind as usize].contains(&id))
             };
             let mine = if kind == Kind::Playlist {
                 search::mine(conn, user, library)?
@@ -130,9 +145,47 @@ pub async fn section(
             let both = Union(&[&index, &mine]);
             let group = group.as_deref();
             search::section(conn, user, library, q, kind, group, reading, &both, keep, &hid)
+                .map(Some)
         })
         .await?;
-    Ok(Json(page))
+    page.map(Json).ok_or_else(Problem::not_found)
+}
+
+/// The container `within` names, if any: one that names nothing there could be is `404`, as one
+/// out of the caller's reach is.
+fn container(within: Option<&str>) -> Result<Option<Within>, Problem> {
+    within.map(|within| Within::parse(within)?.ok_or_else(Problem::not_found)).transpose()
+}
+
+/// What the container `within` holds in `library` as `user` reaches it, if a search is narrowed
+/// to one, kept while the library stays as it is ([`Containers`](within::Containers)).
+async fn held(
+    db: &Database,
+    indexes: &Indexes,
+    user: i64,
+    library: i64,
+    within: Option<Within>,
+) -> Result<Option<Option<Sets>>, Problem> {
+    match within {
+        Some(within) => Ok(Some(indexes.containers.get(db, user, library, within).await?)),
+        None => Ok(None),
+    }
+}
+
+/// What a container holds, if the search is narrowed to one: `404` where it is out of reach, as
+/// one not there is, or one the caller hid whole, as `hid` says (`requirements/users.md` §10).
+fn reached(
+    within: Option<Within>,
+    held: Option<Option<Sets>>,
+    hid: &Hid,
+) -> Result<Option<Sets>, Problem> {
+    match (within, held) {
+        (Some(within), Some(Some(held))) if !hid.contains(within.kind(), within.id()) => {
+            Ok(Some(held))
+        }
+        (Some(_), _) => Err(Problem::not_found()),
+        (None, _) => Ok(None),
+    }
 }
 
 /// How many of `library`'s tracks, albums, and artists match `q`, as a search counts them, in
