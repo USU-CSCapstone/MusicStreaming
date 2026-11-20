@@ -3,8 +3,8 @@ type AdminPage<T> = { items: T[]; nextCursor: string | null };
 
 /**
  * A list an admin page shows, read page by page from the server: the rows loaded so far, whether
- * more follow, and the means to read the next page, start over, or replace a row with the
- * server's newer answer.
+ * more follow, and the means to read the next page, start over, replace a row with the
+ * server's newer answer, or drop one.
  */
 export class AdminList<T> {
 	#items = $state.raw<T[]>([]);
@@ -51,5 +51,10 @@ export class AdminList<T> {
 	/** Puts `item` where the row `is` true of is, as the server now has it. */
 	replace(item: T, is: (row: T) => boolean): void {
 		this.#items = this.#items.map((row) => (is(row) ? item : row));
+	}
+
+	/** Drops the rows `is` is true of, keeping every page loaded and where the next one starts. */
+	remove(is: (row: T) => boolean): void {
+		this.#items = this.#items.filter((row) => !is(row));
 	}
 }
