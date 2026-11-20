@@ -113,6 +113,11 @@ impl Queues {
             let Some(pending) = self.take(user) else { continue };
             match write_account(tx, user, &pending) {
                 Ok(()) => saved.push(pending.saved(user)),
+                // A deleted account's queues can never be saved, so they are dropped, not tried
+                // again. If whether it is gone cannot be read, it is tried again.
+                Err(_) if !account_exists(tx, user).unwrap_or(true) => {
+                    self.lock().remove(&user);
+                }
                 Err(error) => {
                     tracing::warn!(%error, user, "cannot save an account's queue");
                     if let Some(account) = self.lock().get_mut(&user) {
@@ -347,4 +352,9 @@ fn write_uses(tx: &Transaction, user: i64, queue: &QueueRow) -> rusqlite::Result
         uses.execute(params![user, queue.queue_id, hash])?;
     }
     Ok(())
+}
+
+/// Whether account `user` still has its row: one deleted has none.
+fn account_exists(tx: &Transaction, user: i64) -> rusqlite::Result<bool> {
+    tx.prepare_cached("SELECT 1 FROM users WHERE id = ?1")?.exists([user])
 }

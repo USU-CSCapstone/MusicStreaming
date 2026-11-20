@@ -2511,6 +2511,49 @@ paths:
         '429': { $ref: '#/components/responses/RateLimited' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /admin/users/{userId}/delete:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Admin]
+      summary: Delete an account
+      description: |
+        Deletes the account for good. At once it can no longer sign in, and its password and
+        every token answer exactly as an unknown account's would; its name is free for a new
+        account; it is in no list; its password reset link is cleared and the invites it made
+        that are still pending are revoked; then its realtime connections are sent
+        `sessionRevoked` and closed. Everything it owns (playlists, plays, queues, devices and
+        the rest) is then removed in the background, a little at a time. Audio files, metadata
+        and artwork are never touched. What plugins already received from the account is not
+        recalled: they are not asked to forget it.
+
+        `password` is the caller's own current password, checked as `changeMyPassword` checks
+        it: a wrong one is `403 wrong_password`, and past the sign-in limits the request is
+        `429`. An admin deletes a user; the owner an admin or a user. No one deletes the owner
+        or themselves: `403`. An account that does not exist or is already being deleted is
+        `404`. Recorded in the audit log as `deleted`, with the account's name as it was.
+      operationId: adminDeleteUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DeleteUserRequest' }
+      responses:
+        '204': { description: Deleted. }
+        '403':
+          description: |
+            `wrong_password` — `password` is not the caller's current password, or it changed
+            while the request was handled. `forbidden` — the rank rule does not let the caller
+            act on this account; `detail` says why.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Problem' }
+
   # ───────────────────────────── Admin: audit log ─────────────────────────────
   /admin/audit-log:
     get:
@@ -3441,6 +3484,12 @@ components:
         newPassword: { type: string, format: password }
 
     IssuePasswordResetRequest:
+      type: object
+      required: [password]
+      properties:
+        password: { type: string, format: password, description: "The caller's own current password." }
+
+    DeleteUserRequest:
       type: object
       required: [password]
       properties:

@@ -4,8 +4,9 @@
 //! frees its name. Its rows then go here, table by table, a chunk per write, so the writer is
 //! never held for more than a chunk: one cascading delete of an account with 300,000 plays held
 //! it for seconds. Its `users` row goes last, and its cascade takes only the few rows of the
-//! tables left to it. The hourly sweep runs this for every account still `deleting`, so a run cut
-//! short, by a failed chunk or a stopped server, is finished later.
+//! tables left to it. The deletion request starts this as soon as its write commits, and the
+//! hourly sweep runs it for every account still `deleting`, so a run cut short, by a failed chunk
+//! or a stopped server, is finished later.
 
 use rusqlite::{OptionalExtension, Result, Transaction, params};
 use tracing::warn;

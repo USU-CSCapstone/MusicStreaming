@@ -127,3 +127,21 @@ async fn one_accounts_place_failing_to_save_keeps_no_one_elses_from_saving() {
     players.save(&db).await;
     assert_eq!(restarted(&db).await["positionMs"], json!(1000));
 }
+
+/// A deleted account's state can never be saved, so the first save that finds its row gone drops
+/// it rather than trying it again every save; a playing one would otherwise stay unsaved.
+#[tokio::test]
+async fn a_deleted_accounts_place_is_dropped_at_its_first_failed_save() {
+    let (temp, db, _app) = app_with_tracks().await;
+    let conn = conn(&temp);
+    add_user(&conn, 2, "user");
+    let players = Players::default();
+    let caller = Caller { user: 2, device: 2, admin: false, owner: false };
+    let changes = json!({ "itemId": item(0), "positionMs": 1000, "start": true });
+    let report = serde_json::from_value(progress_report("playing", changes));
+    players.report(&Hub::default(), caller, 8, report.unwrap()).unwrap();
+    assert!(players.position(2).is_some());
+    db.write(|tx| tx.execute("DELETE FROM users WHERE id = 2", [])).await.unwrap();
+    players.save(&db).await;
+    assert!(players.position(2).is_none());
+}
