@@ -149,7 +149,9 @@ test('the caller’s playlists are found by their titles, and play from where th
 
 	await tabs(page).getByRole('link', { name: 'Playlists' }).click();
 	await expect(page).toHaveURL(/type=playlists$/);
-	await main(page).getByRole('link', { name: /^Road Trip/ }).click();
+	await main(page)
+		.getByRole('link', { name: /^Road Trip/ })
+		.click();
 	await expect(page.getByRole('heading', { level: 1, name: 'Road Trip' })).toBeVisible();
 });
 
