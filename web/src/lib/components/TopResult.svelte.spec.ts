@@ -176,7 +176,9 @@ describe('TopResult.svelte', () => {
 			nextCursor: null,
 			total: 3
 		});
-		render(TopResult, { props: { result: { type: 'playlist', playlist }, context, from, onact: acted } });
+		render(TopResult, {
+			props: { result: { type: 'playlist', playlist }, context, from, onact: acted }
+		});
 
 		await expect.element(page.getByText('Playlist', { exact: true })).toBeVisible();
 		await page.getByRole('button', { name: 'Play Road Trip' }).click();
