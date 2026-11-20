@@ -25,6 +25,9 @@
 	{:else if page.error?.code === 'unavailable_offline'}
 		<h1>Unavailable offline</h1>
 		<p class="muted">This page needs the server, which this device can't reach right now.</p>
+	{:else if page.error?.code === 'forbidden'}
+		<h1>Admins only</h1>
+		<p class="muted">This page is for the admins of this server.</p>
 	{:else if page.status === 404}
 		<h1>Not found</h1>
 		<p class="muted">This page doesn't exist, or isn't in your library.</p>
