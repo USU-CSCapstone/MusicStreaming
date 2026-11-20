@@ -80,21 +80,25 @@ describe('DeviceList sign-out controls', () => {
 
 	it("drops a signed-out device only when the server's new list arrives", async () => {
 		render(DeviceList, { signOut: true });
-		await page.getByRole('button', { name: 'Sign out Desk' }).click();
+		const button = page.getByRole('button', { name: 'Sign out Desk' });
+		(button.element() as HTMLElement).focus();
+		await userEvent.keyboard('{Enter}');
 		await vi.waitFor(() => expect(fake.signedOut).toEqual(['1']));
 		// The request is answered, but the list is the server's to change.
 		await expect.element(page.getByText('Desk', { exact: true })).toBeVisible();
 		fake.playback.devices = [device('2', 'Phone'), device('3', 'Old', false)];
 		await expect.element(page.getByText('Desk', { exact: true })).not.toBeInTheDocument();
+		// Its button is gone with the row, and focus goes to the list rather than the page.
+		await vi.waitFor(() =>
+			expect(document.activeElement).toBe(page.getByRole('list', { name: 'Devices' }).element())
+		);
 	});
 
 	it("shows the server's reason when a sign-out is refused, and keeps the device", async () => {
-		fake.failure = new ApiError(404, 'not_found', 'That device is already signed out.');
+		fake.failure = new ApiError(404, undefined, 'Not Found');
 		render(DeviceList, { signOut: true });
 		await page.getByRole('button', { name: 'Sign out Desk' }).click();
-		await expect
-			.element(page.getByRole('alert'))
-			.toHaveTextContent('That device is already signed out.');
+		await expect.element(page.getByRole('alert')).toHaveTextContent(/^Not Found$/);
 		await expect.element(page.getByText('Desk', { exact: true })).toBeVisible();
 	});
 

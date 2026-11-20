@@ -321,12 +321,12 @@ it('asks before signing out all other devices, and signs them out only on yes', 
 
 it("shows the server's reason in the dialog when signing out the others fails", async () => {
 	playback.devices = [device('2', 'Phone'), device('1', 'Desk')];
-	fake.failure = new ApiError(500, 'internal', 'The server could not do that.');
+	fake.failure = new ApiError(500, undefined, 'Internal Server Error');
 	render(Account, { data: { connectable: [] } } as never);
 	await page.getByRole('button', { name: 'Sign out all other devices' }).click();
 	await page
 		.getByRole('dialog')
 		.getByRole('button', { name: 'Sign out all other devices' })
 		.click();
-	await expect.element(page.getByRole('alert')).toHaveTextContent('The server could not do that.');
+	await expect.element(page.getByRole('alert')).toHaveTextContent(/^Internal Server Error$/);
 });
