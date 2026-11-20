@@ -11,7 +11,7 @@ mod tests;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 
 use super::{confirm, hash_new};
@@ -25,7 +25,7 @@ use crate::api::realtime::Revoked;
 use crate::api::session::{new_token, token_hash};
 use crate::api::time::serialize_rfc3339;
 use crate::api::{AppState, Caller, Id, Problem};
-use crate::db::now_ms;
+use crate::db::{Database, now_ms};
 
 /// How long a link lasts once issued: a day, as NIST SP 800-63B allows at most.
 const LIFETIME_MS: i64 = 86_400_000;
@@ -70,16 +70,38 @@ pub async fn issue(
         .try_write(move |tx| {
             confirmed.check(tx)?;
             authorize(tx, actor, target)?;
-            let expires_at = now_ms() + LIFETIME_MS;
-            tx.prepare_cached(
-                "UPDATE users SET reset_hash = ?2, reset_expires_at = ?3 WHERE id = ?1",
-            )?
-            .execute(params![target, hash, expires_at])?;
-            audit::record(tx, Action::PasswordResetIssued, Some(actor), target)?;
-            Ok::<_, Problem>(expires_at)
+            Ok::<_, Problem>(set(tx, Some(actor), target, hash)?)
         })
         .await?;
     Ok((StatusCode::CREATED, Json(Issued { code, expires_at })))
+}
+
+/// Gives account `target` a link that lasts [`LIFETIME_MS`] from now, whose code hashes to
+/// `hash`, replacing any earlier one, and records that `actor` (none for the host) issued it.
+/// Answers when it expires.
+fn set(tx: &Transaction, actor: Option<i64>, target: i64, hash: [u8; 32]) -> rusqlite::Result<i64> {
+    let expires_at = now_ms() + LIFETIME_MS;
+    tx.prepare_cached("UPDATE users SET reset_hash = ?2, reset_expires_at = ?3 WHERE id = ?1")?
+        .execute(params![target, hash, expires_at])?;
+    audit::record(tx, Action::PasswordResetIssued, actor, target)?;
+    Ok(expires_at)
+}
+
+/// Gives the owner a link as `adminIssuePasswordReset` would, done by no one, for an owner who
+/// cannot sign in and whose host asked for it. Answers its code, or `None` before setup, when
+/// there is no owner. Nothing else about the owner changes.
+pub(crate) async fn issue_for_owner(db: &Database) -> anyhow::Result<Option<String>> {
+    let code = new_token().map_err(|_| anyhow::anyhow!("cannot make a reset code"))?;
+    let hash = token_hash(&code);
+    let owner = db
+        .write(move |tx| {
+            let owner = tx
+                .query_row("SELECT id FROM users WHERE role = 'owner'", [], |row| row.get(0))
+                .optional()?;
+            owner.map(|owner| set(tx, None, owner, hash)).transpose()
+        })
+        .await?;
+    Ok(owner.map(|_| code))
 }
 
 /// The spec's `CheckPasswordResetRequest`.
