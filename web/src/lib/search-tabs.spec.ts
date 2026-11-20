@@ -3,7 +3,12 @@ import { SEARCH_TABS, readTab, tabHref } from './search-tabs';
 
 describe('search tabs', () => {
 	it('come in the sidebar’s order, named as it names them', () => {
-		expect(SEARCH_TABS.map((tab) => tab.label)).toEqual(['Albums', 'Artists', 'Playlists', 'Songs']);
+		expect(SEARCH_TABS.map((tab) => tab.label)).toEqual([
+			'Albums',
+			'Artists',
+			'Playlists',
+			'Songs'
+		]);
 	});
 
 	it('are read from the URL, anything else being All', () => {
