@@ -1,4 +1,5 @@
-//! `adminSetUserLibraries`: which libraries an account is granted (`requirements/users.md` §5).
+//! `adminSetUserLibraries` and `adminChangeLibraryAccess`: which libraries an account is
+//! granted, one account at a time or many at once (`requirements/users.md` §5).
 
 #[cfg(test)]
 mod tests;
@@ -15,7 +16,7 @@ use super::{AdminUser, admin_user, authorize};
 use crate::api::audit::{self, Action};
 use crate::api::extract::{self, Path};
 use crate::api::realtime::ServerMessage;
-use crate::api::{Caller, Hub, Id, Problem};
+use crate::api::{Caller, Hub, Id, Problem, playlists};
 use crate::db::{Database, liked_songs, now_ms};
 use rusqlite::Connection;
 
@@ -40,24 +41,28 @@ pub async fn set(
     extract::Json(request): extract::Json<Libraries>,
 ) -> Result<Json<AdminUser>, Problem> {
     let wanted: BTreeSet<i64> = request.library_ids.into_iter().map(|Id(id)| id).collect();
-    let (account, changed) = db
-        .try_write(move |tx| {
-            authorize(tx, actor, target)?;
-            libraries_exist(tx, &wanted)?;
-            let held = held(tx, target)?;
-            let granted: Vec<i64> = wanted.difference(&held).copied().collect();
-            let revoked: Vec<i64> = held.difference(&wanted).copied().collect();
-            let grants = !granted.is_empty();
-            let changed = apply(tx, actor, target, granted, revoked)?;
-            if grants {
-                liked_songs::ensure(tx)?;
-            }
-            Ok::<_, Problem>((admin_user(tx, target)?, changed))
-        })
-        .await?;
-    if changed {
-        hub.broadcast(target, &ServerMessage::AccessChanged);
-    }
+    let account = playlists::settle(async move {
+        let (account, changed) = db
+            .try_write(move |tx| {
+                authorize(tx, actor, target)?;
+                libraries_exist(tx, &wanted)?;
+                let held = held(tx, target)?;
+                let granted: Vec<i64> = wanted.difference(&held).copied().collect();
+                let revoked: Vec<i64> = held.difference(&wanted).copied().collect();
+                let grants = !granted.is_empty();
+                let changed = apply(tx, actor, target, granted, revoked)?;
+                if grants {
+                    liked_songs::ensure(tx)?;
+                }
+                Ok::<_, Problem>((admin_user(tx, target)?, changed))
+            })
+            .await?;
+        if changed {
+            hub.broadcast(target, &ServerMessage::AccessChanged);
+        }
+        Ok(account)
+    })
+    .await?;
     Ok(Json(account))
 }
 
@@ -143,35 +148,41 @@ pub async fn change(
     let users: BTreeSet<i64> = request.user_ids.into_iter().map(|Id(id)| id).collect();
     let libraries: BTreeSet<i64> = request.library_ids.into_iter().map(|Id(id)| id).collect();
     let action = request.action;
-    let changed = db
-        .try_write(move |tx| {
-            for &user in &users {
-                authorize(tx, actor, user)?;
-            }
-            libraries_exist(tx, &libraries)?;
-            let mut granted_any = false;
-            let mut changed = Vec::new();
-            for &user in &users {
-                let held = held(tx, user)?;
-                let (granted, revoked): (Vec<i64>, Vec<i64>) = match action {
-                    Change::Grant => (libraries.difference(&held).copied().collect(), Vec::new()),
-                    Change::Revoke => {
-                        (Vec::new(), libraries.intersection(&held).copied().collect())
-                    }
-                };
-                granted_any |= !granted.is_empty();
-                if apply(tx, actor, user, granted, revoked)? {
-                    changed.push(user);
+    playlists::settle(async move {
+        let changed = db
+            .try_write(move |tx| {
+                for &user in &users {
+                    authorize(tx, actor, user)?;
                 }
-            }
-            if granted_any {
-                liked_songs::ensure(tx)?;
-            }
-            Ok::<_, Problem>(changed)
-        })
-        .await?;
-    for user in changed {
-        hub.broadcast(user, &ServerMessage::AccessChanged);
-    }
+                libraries_exist(tx, &libraries)?;
+                let mut granted_any = false;
+                let mut changed = Vec::new();
+                for &user in &users {
+                    let held = held(tx, user)?;
+                    let (granted, revoked): (Vec<i64>, Vec<i64>) = match action {
+                        Change::Grant => {
+                            (libraries.difference(&held).copied().collect(), Vec::new())
+                        }
+                        Change::Revoke => {
+                            (Vec::new(), libraries.intersection(&held).copied().collect())
+                        }
+                    };
+                    granted_any |= !granted.is_empty();
+                    if apply(tx, actor, user, granted, revoked)? {
+                        changed.push(user);
+                    }
+                }
+                if granted_any {
+                    liked_songs::ensure(tx)?;
+                }
+                Ok::<_, Problem>(changed)
+            })
+            .await?;
+        for user in changed {
+            hub.broadcast(user, &ServerMessage::AccessChanged);
+        }
+        Ok(())
+    })
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }

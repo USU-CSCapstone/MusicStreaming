@@ -1,21 +1,26 @@
 //! Setting an account's libraries.
 
+use std::sync::{Arc, Mutex, mpsc};
+
 use axum::Router;
 use axum::http::StatusCode;
 use futures_util::SinkExt;
 use rusqlite::Connection;
+use rusqlite::functions::FunctionFlags;
 use serde_json::{Value, json};
+use tokio::sync::oneshot;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::api::testing::socket::{Socket, connect_with, next, next_of, serve};
 use crate::api::testing::{TOKEN, add_device, add_user, app, call, conn};
+use crate::db::Database;
 use crate::db::testing::{access, library, mark_deleting};
 
 /// The API with libraries 1 to 3; the owner (user 1, [`TOKEN`]); admins 2 (`admin-token`) and
 /// 3; users 4 (`user-token`), holding libraries 1 and 2, and 5 (`other-token`); and user 6,
 /// being deleted.
-fn accounts() -> (tempfile::TempDir, Router) {
-    let (temp, _db, app) = app("");
+fn accounts() -> (tempfile::TempDir, Arc<Database>, Router) {
+    let (temp, db, app) = app("");
     let conn = conn(&temp);
     for id in 1..=3 {
         library(&conn, id, &format!("Library {id}"), temp.path().join(format!("music{id}")))
@@ -30,7 +35,7 @@ fn accounts() -> (tempfile::TempDir, Router) {
     access(&conn, 4, 1).unwrap();
     access(&conn, 4, 2).unwrap();
     mark_deleting(&conn, 6).unwrap();
-    (temp, app)
+    (temp, db, app)
 }
 
 /// `adminSetUserLibraries` on account `user` as `token`, setting `libraries`.
@@ -76,7 +81,7 @@ async fn hears_no_change(socket: &mut Socket) {
 
 #[tokio::test]
 async fn setting_grants_replaces_them_records_what_changed_and_answers_the_account() {
-    let (temp, app) = accounts();
+    let (temp, _, app) = accounts();
     let (status, account) = set(&app, TOKEN, 4, &["3", "2", "3"]).await;
     assert_eq!(status, StatusCode::OK, "{account}");
     assert_eq!((&account["id"], &account["username"]), (&json!("4"), &json!("user4")));
@@ -99,7 +104,7 @@ async fn setting_grants_replaces_them_records_what_changed_and_answers_the_accou
 
 #[tokio::test]
 async fn a_newly_granted_library_has_the_accounts_liked_songs() {
-    let (temp, app) = accounts();
+    let (temp, _, app) = accounts();
     let conn = conn(&temp);
     let liked = |library: i64| -> i64 {
         conn.query_row(
@@ -118,7 +123,7 @@ async fn a_newly_granted_library_has_the_accounts_liked_songs() {
 
 #[tokio::test]
 async fn the_account_alone_hears_access_changed_and_only_when_something_changed() {
-    let (temp, app) = accounts();
+    let (temp, _, app) = accounts();
     let address = serve(app.clone()).await;
     let mut target = connect_with(address, "user-token").await;
     let mut other = connect_with(address, "other-token").await;
@@ -137,7 +142,7 @@ async fn the_account_alone_hears_access_changed_and_only_when_something_changed(
 
 #[tokio::test]
 async fn an_unknown_library_changes_nothing() {
-    let (temp, app) = accounts();
+    let (temp, _, app) = accounts();
     let (status, problem) = set(&app, TOKEN, 4, &["3", "99"]).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(problem["detail"], "libraryIds names a library that does not exist");
@@ -148,7 +153,7 @@ async fn an_unknown_library_changes_nothing() {
 
 #[tokio::test]
 async fn only_an_account_the_caller_outranks_can_be_set() {
-    let (temp, app) = accounts();
+    let (temp, _, app) = accounts();
     for (token, user, status) in [
         ("user-token", 5, StatusCode::FORBIDDEN),
         ("admin-token", 3, StatusCode::FORBIDDEN),
@@ -190,7 +195,7 @@ async fn change(
 
 #[tokio::test]
 async fn a_bulk_grant_and_revoke_apply_to_every_account_and_record_each_alone() {
-    let (temp, app) = accounts();
+    let (temp, _, app) = accounts();
     let conn = conn(&temp);
     access(&conn, 5, 3).unwrap();
     let address = serve(app.clone()).await;
@@ -237,7 +242,7 @@ async fn a_bulk_grant_and_revoke_apply_to_every_account_and_record_each_alone() 
 
 #[tokio::test]
 async fn a_bulk_grant_gives_each_account_liked_songs_for_the_new_library() {
-    let (temp, app) = accounts();
+    let (temp, _, app) = accounts();
     let (status, _) = change(&app, TOKEN, &["4", "5"], &["3"], "grant").await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     let count: i64 = conn(&temp)
@@ -253,7 +258,7 @@ async fn a_bulk_grant_gives_each_account_liked_songs_for_the_new_library() {
 
 #[tokio::test]
 async fn one_refused_or_unknown_account_or_library_changes_nothing() {
-    let (temp, app) = accounts();
+    let (temp, _, app) = accounts();
     let conn = conn(&temp);
     let wrong = [
         ("admin-token", "3", StatusCode::FORBIDDEN),
@@ -285,7 +290,7 @@ async fn one_refused_or_unknown_account_or_library_changes_nothing() {
 
 #[tokio::test]
 async fn a_non_admin_cannot_change_access_in_bulk() {
-    let (temp, app) = accounts();
+    let (temp, _, app) = accounts();
     let (status, _) = change(&app, "user-token", &["5"], &["1"], "grant").await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert!(grants(&conn(&temp), 5).is_empty());
@@ -293,7 +298,7 @@ async fn a_non_admin_cannot_change_access_in_bulk() {
 
 #[tokio::test]
 async fn naming_no_account_or_over_a_thousand_is_refused() {
-    let (temp, app) = accounts();
+    let (temp, _, app) = accounts();
     let (status, problem) = change(&app, TOKEN, &[], &["1"], "grant").await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(problem["detail"], "userIds must name at least one account");
@@ -309,7 +314,7 @@ async fn naming_no_account_or_over_a_thousand_is_refused() {
 /// Exactly 1,000 accounts is the most a request may name, and each gets its own record.
 #[tokio::test]
 async fn a_grant_to_a_thousand_accounts_is_accepted() {
-    let (temp, app) = accounts();
+    let (temp, _, app) = accounts();
     let conn = conn(&temp);
     for id in 100..1100 {
         add_user(&conn, id, "user");
@@ -319,4 +324,56 @@ async fn a_grant_to_a_thousand_accounts_is_accepted() {
     let (status, _) = change(&app, TOKEN, &ids, &["1", "2", "3"], "grant").await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     assert_eq!(audit(&conn).len(), 1000);
+}
+
+/// Holds the writer inside the next write that records an admin action, until the sender this
+/// answers sends or is dropped. The receiver hears once the write is held there.
+async fn hold_next_record(db: &Database) -> (oneshot::Receiver<()>, mpsc::Sender<()>) {
+    let (entered, held) = oneshot::channel();
+    let (release, released) = mpsc::channel();
+    let hold = Mutex::new(Some((entered, released)));
+    db.write(move |tx| {
+        tx.create_scalar_function("hold", 0, FunctionFlags::SQLITE_UTF8, move |_| {
+            if let Some((entered, released)) = hold.lock().unwrap().take() {
+                entered.send(()).unwrap();
+                let _ = released.recv();
+            }
+            Ok(0)
+        })?;
+        tx.execute_batch(
+            "CREATE TEMP TRIGGER IF NOT EXISTS hold AFTER INSERT ON admin_actions BEGIN SELECT hold(); END",
+        )
+    })
+    .await
+    .unwrap();
+    (held, release)
+}
+
+#[tokio::test]
+async fn a_change_whose_request_is_dropped_mid_write_is_still_announced() {
+    let (_temp, db, app) = accounts();
+    let address = serve(app.clone()).await;
+    let mut target = connect_with(address, "user-token").await;
+
+    let (held, release) = hold_next_record(&db).await;
+    let request = tokio::spawn({
+        let app = app.clone();
+        async move { set(&app, TOKEN, 4, &["1", "2", "3"]).await }
+    });
+    held.await.unwrap();
+    request.abort();
+    assert!(request.await.unwrap_err().is_cancelled());
+    drop(release);
+    assert_eq!(next_of(&mut target, "accessChanged").await, json!({ "type": "accessChanged" }));
+
+    let (held, release) = hold_next_record(&db).await;
+    let request = tokio::spawn({
+        let app = app.clone();
+        async move { change(&app, TOKEN, &["4"], &["3"], "revoke").await }
+    });
+    held.await.unwrap();
+    request.abort();
+    assert!(request.await.unwrap_err().is_cancelled());
+    drop(release);
+    assert_eq!(next_of(&mut target, "accessChanged").await, json!({ "type": "accessChanged" }));
 }
