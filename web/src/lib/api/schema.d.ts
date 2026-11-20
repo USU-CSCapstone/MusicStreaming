@@ -1065,12 +1065,13 @@ export interface paths {
         };
         /**
          * Page through one section of a search
-         * @description Every match of one of `search`'s sections, in the same ranking, cursor-paged as the
-         *     browse lists are (`requirements/search.md` §4). A page continues after the last match of
-         *     the one before, so a library that changes between pages neither repeats a match nor passes
-         *     over one still there. What the caller hid is left out as `search` leaves it out. The
-         *     `playlists` section is empty until playlists are searched, and `lyrics` answers `422`
-         *     until they are indexed. A section that is none of these is `404`.
+         * @description Every match of one of `search`'s sections, cursor-paged as the browse lists are
+         *     (`requirements/search.md` §4): in the same ranking, or by `sort` as the section's own
+         *     list sorts it. A ranked page continues after the last match of the one before, so a
+         *     library that changes between pages neither repeats a match nor passes over one still
+         *     there. What the caller hid is left out as `search` leaves it out. The `playlists`
+         *     section is empty until playlists are searched, and `lyrics` answers `422` until they are
+         *     indexed. A section that is none of these is `404`.
          */
         get: operations["searchSection"];
         put?: never;
@@ -6055,6 +6056,14 @@ export interface operations {
             query: {
                 /** @description Search text, from the first character typed. */
                 q: components["parameters"]["Query"];
+                /**
+                 * @description One of the sorts the section's list takes, as it takes them: `listTracks`' for
+                 *     `tracks`, `listAlbums`' for `albums`, and `listArtists`' for `artists`, the planned
+                 *     ones answering `422` as there. Left out, the matches come in the search's ranking,
+                 *     which has no `order`.
+                 */
+                sort?: string;
+                order?: components["parameters"]["Order"];
                 cursor?: components["parameters"]["Cursor"];
                 limit?: components["parameters"]["Limit"];
                 /**
