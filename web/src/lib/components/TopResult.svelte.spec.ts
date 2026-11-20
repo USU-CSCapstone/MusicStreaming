@@ -110,7 +110,12 @@ describe('TopResult.svelte', () => {
 	it('shows a lyric with its line, and plays its song among the lyric matches', async () => {
 		const acted = vi.fn();
 		const [before, song] = [track('4', 'Buddy Holly'), track('5', "Say It Ain't So")];
-		const lyric = { track: song, line: { text: "Say it ain't so", startMs: 1200 }, before: [], after: [] };
+		const lyric = {
+			track: song,
+			line: { text: "Say it ain't so", startMs: 1200 },
+			before: [],
+			after: []
+		};
 		const lyricContext: PlayContext = { type: 'search', query: 'say it', section: 'lyrics' };
 		const lyrics = { tracks: [before, song], context: lyricContext };
 		render(TopResult, {

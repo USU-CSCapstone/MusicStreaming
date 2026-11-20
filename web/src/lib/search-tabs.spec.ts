@@ -27,7 +27,11 @@ describe('search tabs', () => {
 			'Decade',
 			'Lyrics'
 		]);
-		expect(searchTabs([]).map(({ label }) => label).slice(-2)).toEqual(['Songs', 'Lyrics']);
+		expect(
+			searchTabs([])
+				.map(({ label }) => label)
+				.slice(-2)
+		).toEqual(['Songs', 'Lyrics']);
 	});
 
 	it('are read from the URL, anything else being All', () => {
