@@ -4,7 +4,7 @@
 //! Rows go once they are older than [`WINDOW_MS`]: finished scans, but each library's last
 //! that ran and last completed; login attempts; ended plays' events for the `played` hook;
 //! recent searches and what the `searched` hook noted of them; invites redeemed, revoked or
-//! expired that long ago; kept queues parked that long
+//! expired that long ago; admin actions after a year; kept queues parked that long
 //! ago, with the lists no queue uses after them; and tracks missing that long,
 //! with whatever of the catalog goes with them. A request to forget searches (`stopped`) is
 //! kept until it is delivered instead, however old it is. Art and biographies that nothing
@@ -44,6 +44,9 @@ const EVERY: Duration = Duration::from_secs(3600);
 /// How long an idempotency key is kept: 8 days, longer than the 7 a device keeps a change to send.
 const IDEMPOTENCY_MS: i64 = 8 * 24 * 60 * 60 * 1000;
 
+/// How long an admin action is kept: a year (`requirements/users.md` §8).
+const ADMIN_ACTIONS_MS: i64 = 365 * 24 * 60 * 60 * 1000;
+
 /// The most rows one statement of the sweep deletes or looks at, so a write stays short.
 /// Tracks go in smaller chunks ([`catalog::tracks`]).
 const CHUNK: usize = 100;
@@ -54,7 +57,7 @@ type Stage = fn(&Transaction<'_>, i64, &mut i64) -> Result<bool>;
 
 /// Every kind of row, in order: missing tracks before the art and biographies they leave
 /// unreferenced.
-const STAGES: [Stage; 14] = [
+const STAGES: [Stage; 15] = [
     scans,
     login_attempts,
     play_ends,
@@ -64,6 +67,7 @@ const STAGES: [Stage; 14] = [
     forgets_delivered,
     idempotency_keys,
     invites,
+    admin_actions,
     kept_queues,
     unused_queue_lists,
     catalog::tracks,
@@ -239,6 +243,19 @@ fn invites(tx: &Transaction<'_>, now: i64, _: &mut i64) -> Result<bool> {
         "DELETE FROM invites WHERE id IN (SELECT id FROM invites \
          WHERE coalesce(redeemed_at, revoked_at, expires_at) < ?1 LIMIT ?2)",
     )
+}
+
+/// Deletes the admin actions older than `?1` among the oldest `?2`. No index serves `at`, but
+/// IDs rise with it, so the inner query reads at most `?2` rows in ID order and a newer row ends
+/// the sweep, however many follow it.
+const ADMIN_ACTIONS_SQL: &str = "DELETE FROM admin_actions WHERE id IN \
+     (SELECT id FROM (SELECT id, at FROM admin_actions ORDER BY id LIMIT ?2) WHERE at < ?1)";
+
+/// Admin actions older than [`ADMIN_ACTIONS_MS`], whatever the window.
+fn admin_actions(tx: &Transaction<'_>, now: i64, _: &mut i64) -> Result<bool> {
+    let deleted =
+        tx.prepare_cached(ADMIN_ACTIONS_SQL)?.execute(params![now - ADMIN_ACTIONS_MS, CHUNK])?;
+    Ok(deleted < CHUNK)
 }
 
 /// Kept queues parked more than the window ago. A queue parked and not yet saved is still

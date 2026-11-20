@@ -7,7 +7,10 @@ use std::time::Duration;
 use rusqlite::{Connection, Result, params};
 
 use super::catalog::{self, MISSING, TRACK_CHUNK};
-use super::{CHUNK, IDEMPOTENCY_MS, WINDOW_MS, idempotency_keys, scans, start};
+use super::{
+    ADMIN_ACTIONS_MS, ADMIN_ACTIONS_SQL, CHUNK, IDEMPOTENCY_MS, WINDOW_MS, admin_actions,
+    idempotency_keys, scans, start,
+};
 use crate::db::Database;
 use crate::db::testing::{self, Album, Artist, Image, Track, User, library, sweep};
 
@@ -133,6 +136,66 @@ fn dead_invites_age_out_with_their_library_links() {
         column(&db, "SELECT invite_id FROM invite_libraries ORDER BY invite_id"),
         [4, 5, 6, 7, 8]
     );
+}
+
+/// Inserts admin action `id` at `at`.
+fn action(conn: &Connection, id: i64, at: i64) -> Result<()> {
+    conn.execute(
+        "INSERT INTO admin_actions (id, at, action, target_id, target_name, detail) \
+         VALUES (?1, ?2, 'suspended', 2, 'guest', '{}')",
+        [id, at],
+    )
+    .map(drop)
+}
+
+/// Admin actions older than a year go a chunk at a time, oldest first, and those newer stay,
+/// down to one just inside the year; the sweep takes the rest.
+#[test]
+fn admin_actions_age_out_after_a_year_a_chunk_at_a_time() {
+    let old = NOW - 365 * DAY - 1;
+    let n = i64::try_from(CHUNK).unwrap() * 2 + 20;
+    let (_temp, db) = open(move |conn| {
+        for id in 1..=n {
+            action(conn, id, old)?;
+        }
+        action(conn, n + 1, NOW - 365 * DAY)?;
+        action(conn, n + 2, NOW - 364 * DAY)?;
+        action(conn, n + 3, NOW)
+    });
+    let writes = (0..2)
+        .map(|_| {
+            let before = column(&db, "SELECT count(*) FROM admin_actions")[0];
+            let done = db.write_blocking(|tx| admin_actions(tx, NOW, &mut 0)).unwrap();
+            let after = column(&db, "SELECT count(*) FROM admin_actions")[0];
+            (done, before - after)
+        })
+        .collect::<Vec<_>>();
+    let chunk = i64::try_from(CHUNK).unwrap();
+    assert_eq!(writes, [(false, chunk), (false, chunk)]);
+    sweep(&db, NOW);
+    assert_eq!(column(&db, "SELECT id FROM admin_actions ORDER BY id"), [n + 1, n + 2, n + 3]);
+}
+
+/// A sweep with nothing to delete reads a chunk of the oldest rows, however many newer rows
+/// there are: no index serves `at`, so a filter on it would read the whole table.
+#[test]
+fn an_admin_actions_sweep_with_nothing_to_delete_does_not_read_the_table() {
+    let steps = |rows: i64| {
+        let (_temp, db) = open(move |conn| {
+            for id in 1..=rows {
+                action(conn, id, NOW)?;
+            }
+            Ok(())
+        });
+        db.write_blocking(|tx| {
+            let mut stmt = tx.prepare(ADMIN_ACTIONS_SQL)?;
+            let deleted = stmt.execute(params![NOW - ADMIN_ACTIONS_MS, CHUNK])?;
+            assert_eq!(deleted, 0);
+            Ok(stmt.get_status(rusqlite::StatementStatus::VmStep))
+        })
+        .unwrap()
+    };
+    assert_eq!(steps(500), steps(5000));
 }
 
 /// The `played` hook's ends age out, and the plays themselves stay.
