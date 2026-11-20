@@ -607,6 +607,13 @@ export const adminIssuePasswordReset = (f: Fetch, userId: string, request: { pas
 		request
 	);
 
+/**
+ * Deletes the account for good, its playlists, history, likes and devices with it; the admin
+ * confirms with their own password.
+ */
+export const adminDeleteUser = (f: Fetch, userId: string, request: { password: string }) =>
+	send<void>(f, 'POST', `/admin/users/${encodeURIComponent(userId)}/delete`, request);
+
 const adminUser = (userId: string) => `/admin/users/${encodeURIComponent(userId)}`;
 
 /** Replaces the account's library grants with exactly `libraryIds`, and answers the account. */

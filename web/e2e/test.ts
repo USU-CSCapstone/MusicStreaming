@@ -42,11 +42,14 @@ export async function createPlaylist(server: Server, title: string, trackTitles:
 
 /**
  * Creates a user who reaches `libraryIds`, through an invite the owner makes and redeems as the
- * person sent it would, and returns their ID and login.
+ * person sent it would, and returns their ID and login. `username` picks the username.
  */
-export async function createUser(server: Server, libraryIds: string[]) {
+export async function createUser(
+	server: Server,
+	libraryIds: string[],
+	username = `e2e-${randomUUID().slice(0, 8)}`
+) {
 	const { code } = await server.api('/admin/invites', { method: 'POST', body: { libraryIds } });
-	const username = `e2e-${randomUUID().slice(0, 8)}`;
 	const password = `e2e-${randomUUID()}`;
 	const res = await fetch(`${server.url}/api/v1/auth/invites/redeem`, {
 		method: 'POST',
