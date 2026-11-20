@@ -1,13 +1,13 @@
-// Albums, artists, and playlists as the one shape collection views render.
+// Albums, artists, playlists, and tags as the one shape collection views render.
 
 import { resolve } from '$app/paths';
-import type { AlbumSummary, ArtistSummary, ImageRef, Playlist } from './api/types';
+import type { AlbumSummary, ArtistSummary, ImageRef, Playlist, Tag } from './api/types';
 import type { IconName } from './components/Icon.svelte';
 import { albumTitle, artistName, plural, releaseYear } from './format';
 
 export type Card = {
 	/** What it is, and how many songs it holds, for queueing and dragging it. */
-	type: 'album' | 'artist' | 'playlist';
+	type: 'album' | 'artist' | 'playlist' | 'tag';
 	count: number;
 	id: string;
 	href: string;
@@ -62,6 +62,21 @@ export function artistCard(a: ArtistSummary): Card {
 		image: a.image,
 		icon: 'artist',
 		round: true
+	};
+}
+
+/** The card for a tag, which leads to its page, with its song count for queueing and dragging. */
+export function tagCard(t: Tag): Card {
+	return {
+		type: 'tag',
+		count: t.trackCount,
+		id: t.id,
+		href: resolve('/tags/[id]', { id: t.id }),
+		title: t.name,
+		subtitle: plural(t.trackCount, 'song'),
+		image: null,
+		icon: 'tag',
+		round: false
 	};
 }
 

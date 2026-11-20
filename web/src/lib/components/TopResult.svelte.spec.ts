@@ -1,13 +1,23 @@
 import { page } from 'vitest/browser';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
-import type { AlbumSummary, ArtistSummary, PlayContext, TrackSummary } from '$lib/api/types';
+import type {
+	AlbumSummary,
+	ArtistSummary,
+	PlayContext,
+	Playlist,
+	Tag,
+	TrackSummary
+} from '$lib/api/types';
 
-vi.mock('$app/state', () => ({ page: { data: { library: { id: '1' } } } }));
+vi.mock('$app/state', () => ({
+	page: { data: { library: { id: '1' }, tagTypes: [{ key: 'genre', tagCount: 3 }] } }
+}));
 const fake = vi.hoisted(() => ({
 	plays: [] as unknown[][],
 	listed: [] as Record<string, unknown>[],
-	tracks: (async () => ({ items: [], nextCursor: null, total: 0 })) as () => Promise<unknown>
+	tracks: (async () => ({ items: [], nextCursor: null, total: 0 })) as () => Promise<unknown>,
+	items: (async () => ({ items: [], nextCursor: null, total: 0 })) as () => Promise<unknown>
 }));
 vi.mock('$lib/player.svelte', () => ({
 	player: { play: (...args: unknown[]) => void fake.plays.push(args) }
@@ -17,6 +27,10 @@ vi.mock('$lib/api/client', async (actual) => ({
 	listTracks: (_f: unknown, _l: string, query: Record<string, unknown>) => {
 		fake.listed.push(query);
 		return fake.tracks();
+	},
+	listPlaylistItems: (_f: unknown, _l: string, id: string) => {
+		fake.listed.push({ playlistId: id });
+		return fake.items();
 	}
 }));
 
@@ -55,9 +69,26 @@ beforeEach(() => {
 	fake.plays.length = 0;
 	fake.listed.length = 0;
 	fake.tracks = async () => ({ items: [], nextCursor: null, total: 0 });
+	fake.items = async () => ({ items: [], nextCursor: null, total: 0 });
 });
 
 afterEach(() => toaster.dismiss());
+
+const playlist = {
+	id: '61',
+	kind: 'saved',
+	title: 'Road Trip',
+	image: null,
+	trackCount: 3
+} as unknown as Playlist;
+const tag = {
+	id: '30',
+	type: 'genre',
+	name: 'Rock',
+	trackCount: 12,
+	albumCount: 2,
+	artistCount: 1
+} as unknown as Tag;
 
 describe('TopResult.svelte', () => {
 	it('plays a track first of the search’s songs, and keeps the search', async () => {
@@ -134,5 +165,50 @@ describe('TopResult.svelte', () => {
 		await expect
 			.element(page.getByRole('button', { name: 'Actions for “Blue Album”' }))
 			.toBeVisible();
+	});
+
+	it('plays a playlist from its first song, leaving out what was hidden, and keeps the search', async () => {
+		const acted = vi.fn();
+		const [one, hidden, two] = [track('7', 'One'), track('8', 'Gone'), track('9', 'Two')];
+		(hidden as { hidden?: true }).hidden = true;
+		fake.items = async () => ({
+			items: [{ track: one }, { track: hidden }, { track: two }],
+			nextCursor: null,
+			total: 3
+		});
+		render(TopResult, {
+			props: { result: { type: 'playlist', playlist }, context, from, onact: acted }
+		});
+
+		await expect.element(page.getByText('Playlist', { exact: true })).toBeVisible();
+		await page.getByRole('button', { name: 'Play Road Trip' }).click();
+
+		await vi.waitFor(() => expect(fake.plays).toHaveLength(1));
+		const [tracks, index, played, by] = fake.plays[0];
+		expect([tracks, index, played]).toEqual([[one, two], 0, { type: 'playlist', id: '61' }]);
+		expect(by).toEqual({ recipe: { type: 'playlist', playlistId: '61' }, total: 3 });
+		// A recent search names a song, an album or an artist, so it is kept with none.
+		expect(acted).toHaveBeenCalledWith(undefined);
+	});
+
+	it('plays a tag’s songs album by album, named for its type', async () => {
+		const acted = vi.fn();
+		fake.tracks = async () => ({ items: [track('7', 'Buddy Holly')], nextCursor: null, total: 12 });
+		render(TopResult, { props: { result: { type: 'tag', tag }, context, from, onact: acted } });
+
+		await expect.element(page.getByText('Genre', { exact: true })).toBeVisible();
+		await expect.element(page.getByRole('link', { name: 'Rock' })).toBeVisible();
+		await page.getByRole('button', { name: 'Play Rock' }).click();
+
+		await vi.waitFor(() => expect(fake.plays).toHaveLength(1));
+		expect(fake.listed).toEqual([{ tagAll: '30', sort: 'album' }]);
+		expect(fake.plays[0].slice(2)).toEqual([
+			{ type: 'tag', id: '30' },
+			{
+				recipe: { type: 'library', filters: { tagAll: ['30'] }, sort: 'album', order: 'asc' },
+				total: 12
+			}
+		]);
+		expect(acted).toHaveBeenCalledWith(undefined);
 	});
 });
