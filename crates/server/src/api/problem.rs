@@ -25,6 +25,7 @@ pub enum Code {
     MethodNotAllowed,
     ValidationFailed,
     WeakPassword,
+    WrongPassword,
     PluginInvalid,
     PluginSettingsInvalid,
     PluginExists,
@@ -52,7 +53,7 @@ impl Code {
                 StatusCode::UNAUTHORIZED
             }
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
-            Self::Forbidden => StatusCode::FORBIDDEN,
+            Self::Forbidden | Self::WrongPassword => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Self::ValidationFailed

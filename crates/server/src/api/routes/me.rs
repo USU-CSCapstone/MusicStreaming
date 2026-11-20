@@ -1,4 +1,4 @@
-//! The routes under `/me`: the caller's account, devices, playback, plays, and plugin
+//! The routes under `/me`: the caller's account, password, devices, playback, plays, and plugin
 //! connections.
 
 use axum::Router;
@@ -6,7 +6,9 @@ use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, post, put};
 use tower_http::compression::CompressionLayer;
 
-use crate::api::{AppState, account_changes, connections, devices, me, player, plays, queue};
+use crate::api::{
+    AppState, account_changes, connections, devices, me, password, player, plays, queue,
+};
 
 /// Every route under `/me`.
 pub fn router() -> Router<AppState> {
@@ -16,6 +18,7 @@ pub fn router() -> Router<AppState> {
         .route("/me/changes", get(account_changes::list).layer(CompressionLayer::new()))
         .route("/me/devices", get(devices::list).delete(devices::sign_out_mine_others))
         .route("/me/devices/{device_id}", delete(devices::sign_out_mine))
+        .route("/me/password", put(password::change::change))
         .route("/me/player", get(player::get))
         .route("/me/player/commands", post(player::send_command))
         .route(

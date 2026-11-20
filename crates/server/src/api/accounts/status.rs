@@ -47,7 +47,12 @@ pub async fn set(
                              reset_expires_at = NULL WHERE id = ?1",
                         )?
                         .execute([target])?;
-                        devices::sign_out(tx, target, Which::All { keep: None })?;
+                        devices::sign_out(
+                            tx,
+                            target,
+                            Which::All { keep: None },
+                            Revoked::LoggedOut,
+                        )?;
                         invites::revoke_pending_of(tx, target, now_ms())?;
                         audit::record(tx, Action::Suspended, Some(actor), target)?;
                         true

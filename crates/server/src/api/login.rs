@@ -24,9 +24,8 @@ pub struct LoginRequest {
     username: String,
     password: String,
     device: DeviceRegistration,
-    // `deviceId` is ignored: it reclaims a device logged out by a password change, and no route
-    // changes a password, so every login registers a new device, as the spec says for an ID
-    // that is not one.
+    // `deviceId`, which reclaims a device logged out by a password change, is ignored: every
+    // login registers a new device, as the spec says for an ID that is not one.
 }
 
 /// Logs `username` in on a new device, answering as [`session::Session::respond`] does, or
