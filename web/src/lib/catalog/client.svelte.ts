@@ -13,7 +13,7 @@ import type { Local } from '$lib/sync/mutation';
 import { DISCARDED, IdbPort, unsent, wipeDatabases } from '$lib/sync/store';
 import wasmUrl from '$lib/catalog-wasm/jewelcase_catalog_wasm_bg.wasm?url';
 import type { RealtimeServerMessage } from '$lib/api/types';
-import type { Realtime } from '$lib/realtime.svelte';
+import type { Realtime, Revoked } from '$lib/realtime.svelte';
 import { toast } from '$lib/toast.svelte';
 import type { Kind } from './kinds';
 import {
@@ -416,7 +416,7 @@ export class CatalogClient {
 	 * or a sign-in as someone else is), the unsent plays and changes the wipe deletes are counted
 	 * first and told once on the login page.
 	 */
-	signOut(chosen = false, reason?: 'credentials_changed' | 'logged_out') {
+	signOut(chosen = false, reason?: Revoked) {
 		// A tab owning the catalog lets go of it first, or the wipe would wait on its own lock.
 		this.disconnect();
 		const user = owner();
