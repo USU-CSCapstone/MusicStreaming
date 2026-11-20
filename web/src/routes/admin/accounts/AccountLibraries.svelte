@@ -100,12 +100,6 @@
 	}
 
 	.error {
-		color: #dc2626;
-	}
-
-	@media (prefers-color-scheme: dark) {
-		.error {
-			color: #f87171;
-		}
+		color: var(--danger);
 	}
 </style>

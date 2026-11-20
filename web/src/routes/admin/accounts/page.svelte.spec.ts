@@ -439,11 +439,11 @@ it('shows the server’s reason when the devices cannot be read or signed out', 
 
 it('shows why a refused device sign-out failed, and keeps the device listed', async () => {
 	fake.devices = [device('d1', 'Kitchen laptop')];
-	fake.fail = new ApiError(404, 'not_found', 'Not found.');
+	fake.fail = new ApiError(404, undefined, 'Not Found');
 	render(Accounts, open([account('3', 'bob')], as('admin')) as never);
 	await rowOf('bob').getByRole('button', { name: 'Devices' }).click();
 	await page.getByRole('button', { name: 'Sign out Kitchen laptop' }).click();
-	await expect.element(page.getByRole('alert')).toHaveTextContent(/Not found/);
+	await expect.element(page.getByRole('alert')).toHaveTextContent(/^Not Found$/);
 	await expect.element(page.getByText('Kitchen laptop')).toBeVisible();
 });
 
