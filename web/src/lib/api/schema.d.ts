@@ -1803,6 +1803,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/users/{userId}/role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Make an account an admin or a user
+         * @description Gives the account the role, and answers it. The owner's alone: an admin is `403`
+         *     whatever the account. `password` is the owner's own current password, checked as
+         *     `changeMyPassword` checks it: a wrong one is `403 wrong_password`, and past the sign-in
+         *     limits the request is `429`.
+         *
+         *     The change clears the account's password reset link. Making an admin a user also revokes
+         *     the invites they made that are still pending. The libraries the account has been granted
+         *     are kept either way: an admin reaches every library, and one made a user again reaches
+         *     exactly those. The account's realtime connections are sent `accessChanged`. Recorded in
+         *     the audit log as `role_changed`; giving the role the account already has changes nothing
+         *     and records nothing.
+         *
+         *     No one changes their own role this way, so the owner's cannot be (`403`); ownership
+         *     moves only by a transfer, so `owner` is not a role this accepts (`422`). A suspended
+         *     account must be restored first (`422`). An account that does not exist or is being
+         *     deleted is `404`.
+         */
+        put: operations["adminSetUserRole"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/users/{userId}/devices": {
         parameters: {
             query?: never;
@@ -2515,6 +2552,18 @@ export interface components {
              * @enum {string}
              */
             status: "active" | "suspended";
+        };
+        UserRoleChange: {
+            /**
+             * @description The role to give. Ownership moves only by a transfer.
+             * @enum {string}
+             */
+            role: "admin" | "user";
+            /**
+             * Format: password
+             * @description The owner's own current password.
+             */
+            password: string;
         };
         LibraryAccessChange: {
             userIds: components["schemas"]["Id"][];
@@ -6872,6 +6921,59 @@ export interface operations {
                     "application/json": components["schemas"]["AdminUser"];
                 };
             };
+            default: components["responses"]["Problem"];
+        };
+    };
+    adminSetUserRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserRoleChange"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUser"];
+                };
+            };
+            /**
+             * @description `wrong_password` — `password` is not the caller's current password, or it changed
+             *     while the request was handled. `forbidden` — the caller is not the owner, or the
+             *     account is their own; `detail` says why.
+             */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /**
+             * @description `validation_failed` — the role is not `admin` or `user`, or the account is suspended;
+             *     `detail` says why.
+             */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
             default: components["responses"]["Problem"];
         };
     };

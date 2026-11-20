@@ -10,15 +10,22 @@ use crate::api::{Code, Problem};
 
 /// The account an action may go ahead on.
 pub struct Target {
+    /// Its role: `admin` or `user`, since no one acts on the owner.
+    pub role: String,
     /// Whether it is suspended.
     pub suspended: bool,
 }
 
+/// The owner's rank.
+pub const OWNER: u8 = 2;
+/// An admin's rank.
+pub const ADMIN: u8 = 1;
+
 /// How far a role reaches: an account manages only those whose role ranks strictly below.
 fn rank(role: &str) -> u8 {
     match role {
-        "owner" => 2,
-        "admin" => 1,
+        "owner" => OWNER,
+        "admin" => ADMIN,
         _ => 0,
     }
 }
@@ -61,6 +68,6 @@ pub fn authorize(conn: &Connection, actor: i64, target: i64) -> Result<Target, P
     } else if actor_rank <= rank(&target_role) {
         Err(forbidden("Only the owner can do this to an admin's account."))
     } else {
-        Ok(Target { suspended: target_status == "suspended" })
+        Ok(Target { role: target_role, suspended: target_status == "suspended" })
     }
 }
