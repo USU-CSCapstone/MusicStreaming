@@ -103,7 +103,7 @@ type Page = { changes: Change[]; next: number; head: number; epoch: string };
 /** The messages of the realtime connection that make the worker pull. */
 type Heard = Extract<
 	RealtimeServerMessage,
-	{ type: 'hello' | 'libraryChanged' | 'accountChanged' }
+	{ type: 'hello' | 'libraryChanged' | 'accountChanged' | 'accessChanged' }
 >;
 
 /** A file's synchronous handle, which only a worker has (the DOM typings leave it out). */
@@ -367,8 +367,9 @@ export class CatalogSync {
 	}
 
 	/**
-	 * Hears the realtime connection: pulls on `hello`, and on a hint of a feed ahead of this
-	 * device. A hint that lands during a pull makes it run once more, so none is lost.
+	 * Hears the realtime connection: pulls on `hello`, on a hint of a feed ahead of this device,
+	 * and on a change of the libraries the account reaches. A hint that lands during a pull makes
+	 * it run once more, so none is lost.
 	 */
 	message(message: RealtimeServerMessage) {
 		const heard = message as Heard;
@@ -385,7 +386,7 @@ export class CatalogSync {
 					void this.#pullLibrary(heard.libraryId, true);
 				}
 			});
-		} else if (heard.type === 'accountChanged') {
+		} else if (heard.type === 'accountChanged' || heard.type === 'accessChanged') {
 			void this.#run(ACCOUNT, () => this.#pullAccount(), true);
 		}
 	}

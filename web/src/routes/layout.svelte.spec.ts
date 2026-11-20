@@ -17,10 +17,38 @@ const queue = vi.hoisted(() => ({
 }));
 vi.mock('$lib/catalog/client.svelte', () => ({ catalog }));
 // The real connection would reach for a server that is not there, and its own timers and failures
-// would move the connectivity state under a test that runs the clock by hand.
+// would move the connectivity state under a test that runs the clock by hand. A test hears a
+// message through `hear`.
+const listeners = vi.hoisted(() => new Set<(message: { type: string }) => void>());
+const hear = (message: { type: string }) => listeners.forEach((listener) => listener(message));
 vi.mock('$lib/realtime.svelte', async (original) => ({
 	...(await original<typeof import('$lib/realtime.svelte')>()),
-	realtime: { start: vi.fn(), stop: vi.fn(), on: vi.fn(() => () => {}) }
+	realtime: {
+		start: vi.fn(),
+		stop: vi.fn(),
+		on: vi.fn((listener) => {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		})
+	}
+}));
+const navigation = vi.hoisted(() => ({
+	invalidateAll: vi.fn(async () => {}),
+	goto: vi.fn(async () => {}),
+	beforeNavigate: vi.fn()
+}));
+vi.mock('$app/navigation', () => navigation);
+// The account and its libraries as the server now gives them.
+const server = vi.hoisted(() => ({
+	me: { id: '1', role: 'user' },
+	libraries: [{ id: '7' }] as { id: string }[],
+	getMe: vi.fn(async () => server.me),
+	listLibraries: vi.fn(async () => ({ items: server.libraries }))
+}));
+vi.mock('$lib/api/client', async (original) => ({
+	...(await original<typeof import('$lib/api/client')>()),
+	getMe: server.getMe,
+	listLibraries: server.listLibraries
 }));
 const player = vi.hoisted(() => ({ libraryId: '', stopStreaming: vi.fn() }));
 vi.mock('$lib/queue/client.svelte', () => ({ queue }));
@@ -132,6 +160,27 @@ describe('the app layout', () => {
 		expect(catalog.connect).not.toHaveBeenCalled();
 	});
 
+	it('keeps the realtime connection when the load runs again for the same account', async () => {
+		route.id = '/';
+		const { realtime } = await import('$lib/realtime.svelte');
+		const shown = await render(Layout, {
+			data: { me: { id: '1' }, library: { id: '7' }, tagTypes: [] },
+			children
+		} as never);
+		await vi.waitFor(() => expect(realtime.start).toHaveBeenCalled());
+		vi.mocked(realtime.start).mockClear();
+		vi.mocked(realtime.stop).mockClear();
+
+		// As `invalidateAll` does, which a connection saying hello may run: a new connection each
+		// time would say hello again.
+		await shown.rerender({
+			data: { me: { id: '1' }, library: { id: '7' }, tagTypes: [] }
+		} as never);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(realtime.stop).not.toHaveBeenCalled();
+		expect(realtime.start).not.toHaveBeenCalled();
+	});
+
 	it('shows the playback kept for the account without starting its workers over', async () => {
 		route.id = '/';
 		localStorage.setItem(
@@ -222,6 +271,62 @@ describe('the app layout', () => {
 			network.mockRestore();
 			window.dispatchEvent(new Event('online'));
 			connectivity.reach();
+		}
+	});
+
+	it('runs the root load again once when the account’s access changes', async () => {
+		route.id = '/';
+		await render(Layout, {
+			data: { me: { id: '1' }, library: { id: '7' }, tagTypes: [] },
+			children
+		} as never);
+		await vi.waitFor(() => expect(catalog.connect).toHaveBeenCalled());
+		navigation.invalidateAll.mockClear();
+
+		hear({ type: 'accessChanged' });
+		hear({ type: 'devices' });
+		expect(navigation.invalidateAll).toHaveBeenCalledOnce();
+	});
+
+	it('keeps the page as loaded at a connection that finds the account and its library as they were', async () => {
+		route.id = '/';
+		await render(Layout, {
+			data: { me: { id: '1', role: 'user' }, library: { id: '7' }, tagTypes: [] },
+			children
+		} as never);
+		await vi.waitFor(() => expect(catalog.connect).toHaveBeenCalled());
+		navigation.invalidateAll.mockClear();
+		server.getMe.mockClear();
+
+		// The first, and a later one, as after the phone wakes or the server restarts: running the
+		// load again would build every list the page made from it over, from its first page.
+		hear({ type: 'hello' });
+		hear({ type: 'hello' });
+		await vi.waitFor(() => expect(server.getMe).toHaveBeenCalledTimes(2));
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(navigation.invalidateAll).not.toHaveBeenCalled();
+	});
+
+	it('runs the root load again at a connection that finds the role or the library changed', async () => {
+		route.id = '/';
+		await render(Layout, {
+			data: { me: { id: '1', role: 'user' }, library: { id: '7' }, tagTypes: [] },
+			children
+		} as never);
+		await vi.waitFor(() => expect(catalog.connect).toHaveBeenCalled());
+		navigation.invalidateAll.mockClear();
+		try {
+			server.me = { id: '1', role: 'admin' };
+			hear({ type: 'hello' });
+			await vi.waitFor(() => expect(navigation.invalidateAll).toHaveBeenCalledOnce());
+
+			server.me = { id: '1', role: 'user' };
+			server.libraries = [];
+			hear({ type: 'hello' });
+			await vi.waitFor(() => expect(navigation.invalidateAll).toHaveBeenCalledTimes(2));
+		} finally {
+			server.me = { id: '1', role: 'user' };
+			server.libraries = [{ id: '7' }];
 		}
 	});
 });

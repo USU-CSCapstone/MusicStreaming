@@ -36,7 +36,7 @@ import {
 } from './router';
 
 /** The realtime messages that make the worker pull. */
-const PULLING = new Set(['hello', 'libraryChanged', 'accountChanged']);
+const PULLING = new Set(['hello', 'libraryChanged', 'accountChanged', 'accessChanged']);
 /** How long the owner waits for its worker to release the pool before stopping it anyway. */
 const PAUSE_MS = 3000;
 /** Tries at a sign-out another tab's owner has to answer. */

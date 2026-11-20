@@ -527,6 +527,24 @@ describe('catalog sync', () => {
 		expect(await dbs()).toHaveLength(2);
 	});
 
+	it('a change of access reads the library list once, deleting the library lost and downloading the one gained', async () => {
+		await started('1', '2');
+		const listed = () =>
+			h.api.asked('/libraries').then((paths) => paths.filter((path) => path === '/libraries'));
+		const before = (await listed()).length;
+		await h.api.setLibraries(['1', '3']);
+		await h.api.setPosition('3', 7);
+		await h.api.setFeed('3', [], 7);
+		await h.message({ type: 'accessChanged' });
+		await h.idle();
+
+		expect(await listed()).toHaveLength(before + 1);
+		expect(await h.libraries()).toEqual(['1', '3']);
+		expect(await h.lost()).toEqual(['2']);
+		expect(await h.cursor('3', 'library')).toBe(7);
+		expect(await dbs()).toHaveLength(2);
+	});
+
 	it('a file runs with the journalling the pool needs: a kept lock and journal, memory for temporaries, FULL syncs', async () => {
 		await started('1');
 		expect(await h.pragmas('1')).toEqual({
