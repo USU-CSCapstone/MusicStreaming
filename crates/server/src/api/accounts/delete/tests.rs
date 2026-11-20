@@ -534,9 +534,9 @@ fn new_queue() -> NewQueue {
     }
 }
 
-/// Neither the player's nor the queues' memory keeps the account once it is deleted, so neither
-/// tries to save it again: not what it held when the request came, nor what a request already
-/// past the gate gave it while the task ran.
+/// Neither the player's nor the queues' memory keeps what the account held when the request
+/// came, and what a request already past the gate gives it once the account's row is gone is
+/// dropped at the first save, so neither tries to save it again.
 #[tokio::test]
 async fn nothing_in_memory_is_kept_for_a_deleted_account() {
     let (temp, state, app) = accounts().await;
