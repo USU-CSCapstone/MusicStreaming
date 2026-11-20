@@ -29,8 +29,8 @@ describe('search scope', () => {
 	});
 
 	it('knows what each kind of container holds', () => {
-		expect(HELD.album).toEqual(['tracks']);
-		expect(HELD.tag).toEqual(['albums', 'artists', 'tracks']);
+		expect(HELD.album).toEqual(['tracks', 'lyrics']);
+		expect(HELD.tag).toEqual(['albums', 'artists', 'tracks', 'lyrics']);
 		expect(kindOf('artist:21')).toBe('artist');
 		expect(kindOf('song:1')).toBeNull();
 	});

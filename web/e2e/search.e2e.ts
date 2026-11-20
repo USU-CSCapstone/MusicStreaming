@@ -98,7 +98,8 @@ test('a genre or a mood is found by its name, in a section and a tab of its type
 	const top = page.getByRole('region', { name: 'Top result' });
 	await expect(top.getByText('Genre', { exact: true })).toBeVisible();
 	await expect(top.getByRole('link', { name: 'Ambient' })).toBeVisible();
-	// A tab for each type of tag the library has, after the rest, as the sidebar lists them.
+	// A tab for each type of tag the library has, after the rest, as the sidebar lists them, and
+	// Lyrics last.
 	await expect(tabs(page).getByRole('link')).toHaveText([
 		'All',
 		'Albums',
@@ -106,7 +107,8 @@ test('a genre or a mood is found by its name, in a section and a tab of its type
 		'Playlists',
 		'Songs',
 		'Genres',
-		'Moods'
+		'Moods',
+		'Lyrics'
 	]);
 
 	// Played, the genre plays its songs album by album, and the search is kept, naming nothing.
@@ -184,7 +186,13 @@ test('a search started from a tag’s page keeps to it when asked, and plays wit
 	await expect(page).toHaveURL(new RegExp(`from=${ambient}&within=${ambient}$`));
 	await expect(songTitles(page)).toHaveText(['Signal Part 1', 'Signal Part 2']);
 	// A tag holds songs, albums and artists, so there are no tabs for playlists or tags.
-	await expect(tabs(page).getByRole('link')).toHaveText(['All', 'Albums', 'Artists', 'Songs']);
+	await expect(tabs(page).getByRole('link')).toHaveText([
+		'All',
+		'Albums',
+		'Artists',
+		'Songs',
+		'Lyrics'
+	]);
 	// Kept through a reload, and through typing.
 	await page.reload();
 	await expect(songTitles(page)).toHaveText(['Signal Part 1', 'Signal Part 2']);
@@ -222,7 +230,7 @@ test('a search started from a playlist keeps to its songs', async ({ page, serve
 	const scope = page.getByRole('navigation', { name: 'Where to search' });
 	await scope.getByRole('link', { name: 'In Road Trip' }).click();
 	await expect(songTitles(page)).toHaveText(['Signal Remix']);
-	await expect(tabs(page).getByRole('link')).toHaveText(['All', 'Songs']);
+	await expect(tabs(page).getByRole('link')).toHaveText(['All', 'Songs', 'Lyrics']);
 	// A search started anywhere else offers nothing to keep to.
 	await page.goto('/albums');
 	await searchBox(page).pressSequentially('signal');
