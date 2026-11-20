@@ -2,7 +2,15 @@ import { ApiError } from '$lib/api/client';
 import { page, userEvent } from 'vitest/browser';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
-import type { AdminUser, User } from '$lib/api/types';
+import type { AdminUser, Device, Library, User } from '$lib/api/types';
+
+const LIBRARIES = vi.hoisted(
+	() =>
+		[
+			{ id: 'lib-a', name: 'Alpha' },
+			{ id: 'lib-b', name: 'Beta' }
+		] as Library[]
+);
 
 const fake = vi.hoisted(() => ({
 	more: null as unknown,
@@ -10,7 +18,14 @@ const fake = vi.hoisted(() => ({
 	set: [] as [string, string][],
 	answer: null as unknown,
 	fail: null as Error | null,
-	went: [] as string[]
+	went: [] as string[],
+	libraries: [] as [string, string[]][],
+	changes: [] as unknown[],
+	devices: [] as Device[],
+	devicesAsked: [] as string[],
+	out: [] as [string, string][],
+	outAll: [] as string[],
+	failDevices: null as Error | null
 }));
 
 vi.mock('$app/paths', () => ({
@@ -41,6 +56,31 @@ vi.mock('$lib/api/client', async (original) => ({
 		fake.set.push([id, status]);
 		if (fake.fail) throw fake.fail;
 		return fake.answer;
+	},
+	listLibraries: async () => ({ items: LIBRARIES }),
+	adminSetUserLibraries: async (_f: unknown, id: string, libraryIds: string[]) => {
+		fake.libraries.push([id, libraryIds]);
+		if (fake.fail) throw fake.fail;
+		return fake.answer;
+	},
+	adminChangeLibraryAccess: async (_f: unknown, change: unknown) => {
+		fake.changes.push(change);
+		if (fake.fail) throw fake.fail;
+	},
+	adminListUserDevices: async (_f: unknown, id: string) => {
+		fake.devicesAsked.push(id);
+		if (fake.failDevices) throw fake.failDevices;
+		return { items: fake.devices };
+	},
+	adminSignOutDevice: async (_f: unknown, user: string, device: string) => {
+		fake.out.push([user, device]);
+		if (fake.fail) throw fake.fail;
+		fake.devices = fake.devices.filter((d) => d.id !== device);
+	},
+	adminSignOutDevices: async (_f: unknown, user: string) => {
+		fake.outAll.push(user);
+		if (fake.fail) throw fake.fail;
+		fake.devices = [];
 	}
 }));
 
@@ -67,8 +107,21 @@ const as = (role: User['role']) =>
 	({ id: 'me', username: 'me', displayName: 'Me', role, hasAvatar: false }) as User;
 
 const open = (items: AdminUser[], me: User, q = '', nextCursor: string | null = null) => ({
-	data: { users: { items, nextCursor, total: items.length }, me, q }
+	data: { users: { items, nextCursor, total: items.length }, me, q, libraries: LIBRARIES }
 });
+
+/** A signed-in device named `name`. */
+const device = (id: string, name: string, connected = false) =>
+	({
+		id,
+		name,
+		type: 'desktop',
+		firstSeenAt: '2026-11-01T10:00:00Z',
+		lastSeenAt: '2026-11-02T10:00:00Z',
+		connected
+	}) as Device;
+
+const rowOf = (name: string) => page.getByRole('listitem').filter({ hasText: `${name} Display` });
 
 const buttonsOn = (name: string) =>
 	[...document.querySelectorAll('li')]
@@ -80,6 +133,13 @@ beforeEach(() => {
 	fake.asked = [];
 	fake.fail = null;
 	fake.went = [];
+	fake.libraries = [];
+	fake.changes = [];
+	fake.devices = [];
+	fake.devicesAsked = [];
+	fake.out = [];
+	fake.outAll = [];
+	fake.failDevices = null;
 });
 
 it('lists accounts with their role, suspension and pending reset, and pages on Load more', async () => {
@@ -136,14 +196,14 @@ it('offers actions only on accounts the viewer outranks', async () => {
 	expect(buttonsOn('olga')).toBe(0);
 	expect(buttonsOn('ada')).toBe(0);
 	expect(buttonsOn('me Display')).toBe(0);
-	expect(buttonsOn('bob')).toBe(1);
+	expect(buttonsOn('bob')).toBe(3);
 	await admin.unmount();
 
 	render(Accounts, open([...rows.slice(0, 1), ...rows.slice(1)], as('owner')) as never);
 	await expect.element(page.getByText('bob Display')).toBeVisible();
 	expect(buttonsOn('olga')).toBe(0);
-	expect(buttonsOn('ada')).toBe(1);
-	expect(buttonsOn('bob')).toBe(1);
+	expect(buttonsOn('ada')).toBe(3);
+	expect(buttonsOn('bob')).toBe(3);
 });
 
 it('offers no action to a user', async () => {
@@ -197,7 +257,7 @@ it('reads the first page of a search from the server', async () => {
 	const url = new URL('http://x/admin/accounts?q=bo');
 	const loaded = await load({ fetch, url } as never);
 	expect(fake.asked).toEqual([{ q: 'bo' }]);
-	expect(loaded).toMatchObject({ q: 'bo' });
+	expect(loaded).toMatchObject({ q: 'bo', libraries: LIBRARIES });
 });
 
 it('shows why a refused Restore failed, on the account’s row', async () => {
@@ -206,4 +266,212 @@ it('shows why a refused Restore failed, on the account’s row', async () => {
 	await page.getByRole('button', { name: 'Restore' }).click();
 	await expect.element(page.getByRole('alert')).toHaveTextContent(/Only the owner/);
 	await expect.element(page.getByRole('button', { name: 'Restore' })).toBeEnabled();
+});
+
+it('sets one account’s libraries from the checkboxes, and shows the row the server answers', async () => {
+	fake.answer = account('3', 'bob', { libraryIds: ['lib-b'] });
+	render(Accounts, open([account('3', 'bob', { libraryIds: ['lib-a'] })], as('admin')) as never);
+	await rowOf('bob').getByRole('button', { name: 'Libraries' }).click();
+	const alpha = page.getByRole('checkbox', { name: 'Alpha' });
+	const beta = page.getByRole('checkbox', { name: 'Beta' });
+	await expect.element(alpha).toBeChecked();
+	await expect.element(beta).not.toBeChecked();
+
+	await alpha.click();
+	await beta.click();
+	expect(fake.libraries).toEqual([]);
+	await page.getByRole('button', { name: 'Save libraries' }).click();
+	await vi.waitFor(() => expect(fake.libraries).toEqual([['3', ['lib-b']]]));
+	await expect.element(page.getByRole('checkbox', { name: 'Beta' })).toBeChecked();
+	await expect.element(page.getByRole('checkbox', { name: 'Alpha' })).not.toBeChecked();
+});
+
+it('shows the server’s reason when setting libraries is refused', async () => {
+	fake.fail = new ApiError(
+		422,
+		'validation_failed',
+		'libraryIds names a library that does not exist'
+	);
+	render(Accounts, open([account('3', 'bob')], as('admin')) as never);
+	await rowOf('bob').getByRole('button', { name: 'Libraries' }).click();
+	await page.getByRole('button', { name: 'Save libraries' }).click();
+	await expect.element(page.getByRole('alert')).toHaveTextContent(/names a library that does not/);
+});
+
+it('grants a library to the selected accounts, then reads the rows again and clears the selection', async () => {
+	render(
+		Accounts,
+		open(
+			[
+				account('2', 'ada', { role: 'admin' }),
+				account('3', 'bob'),
+				account('4', 'cy'),
+				account('5', 'di')
+			],
+			as('admin')
+		) as never
+	);
+	// An admin has no checkbox on an admin's row.
+	await expect.element(page.getByRole('checkbox', { name: 'Select ada' })).not.toBeInTheDocument();
+	await expect
+		.element(page.getByRole('combobox', { name: 'Library for the selection' }))
+		.not.toBeInTheDocument();
+
+	await page.getByRole('checkbox', { name: 'Select bob' }).click();
+	await page.getByRole('checkbox', { name: 'Select di' }).click();
+	await expect.element(page.getByText('2 selected')).toBeVisible();
+	await page.getByRole('combobox', { name: 'Library for the selection' }).selectOptions('lib-b');
+
+	fake.more = {
+		items: [account('3', 'bob', { libraryIds: ['lib-b'] }), account('4', 'cy')],
+		nextCursor: null,
+		total: 2
+	};
+	await page.getByRole('button', { name: 'Grant' }).click();
+	await vi.waitFor(() =>
+		expect(fake.changes).toEqual([{ userIds: ['3', '5'], libraryIds: ['lib-b'], action: 'grant' }])
+	);
+	// The selected rows are read again: the list is read from its first page.
+	await vi.waitFor(() => expect(fake.asked).toEqual([{ q: '' }]));
+	await expect.element(page.getByText('selected')).not.toBeInTheDocument();
+	await expect.element(page.getByRole('checkbox', { name: 'Select bob' })).not.toBeChecked();
+});
+
+it('revokes a library for the selected accounts', async () => {
+	fake.more = { items: [account('3', 'bob')], nextCursor: null, total: 1 };
+	render(Accounts, open([account('3', 'bob', { libraryIds: ['lib-a'] })], as('owner')) as never);
+	await page.getByRole('checkbox', { name: 'Select bob' }).click();
+	await page.getByRole('combobox', { name: 'Library for the selection' }).selectOptions('lib-a');
+	await page.getByRole('button', { name: 'Revoke' }).click();
+	await vi.waitFor(() =>
+		expect(fake.changes).toEqual([{ userIds: ['3'], libraryIds: ['lib-a'], action: 'revoke' }])
+	);
+});
+
+it('asks for a library before granting or revoking, and keeps the selection when the server refuses', async () => {
+	fake.fail = new ApiError(403, 'forbidden', 'Only the owner can do this to an admin’s account.');
+	render(Accounts, open([account('3', 'bob')], as('admin')) as never);
+	await page.getByRole('checkbox', { name: 'Select bob' }).click();
+	await expect.element(page.getByRole('button', { name: 'Grant' })).toBeDisabled();
+	await expect.element(page.getByRole('button', { name: 'Revoke' })).toBeDisabled();
+
+	await page.getByRole('combobox', { name: 'Library for the selection' }).selectOptions('lib-a');
+	await page.getByRole('button', { name: 'Grant' }).click();
+	await expect.element(page.getByRole('alert')).toHaveTextContent(/Only the owner/);
+	await expect.element(page.getByRole('checkbox', { name: 'Select bob' })).toBeChecked();
+	await expect.element(page.getByText('1 selected')).toBeVisible();
+});
+
+it('keeps the selection when the list is loaded again, and acts only on what was chosen', async () => {
+	const rows = [account('3', 'bob'), account('4', 'cy')];
+	const view = render(Accounts, open(rows, as('admin')) as never);
+	await page.getByRole('checkbox', { name: 'Select cy' }).click();
+	await view.rerender(open(rows, as('admin')) as never);
+	await expect.element(page.getByRole('checkbox', { name: 'Select cy' })).toBeChecked();
+	await expect.element(page.getByRole('checkbox', { name: 'Select bob' })).not.toBeChecked();
+	await page.getByRole('combobox', { name: 'Library for the selection' }).selectOptions('lib-a');
+	fake.more = { items: rows, nextCursor: null, total: 2 };
+	await page.getByRole('button', { name: 'Grant' }).click();
+	await vi.waitFor(() =>
+		expect(fake.changes).toEqual([{ userIds: ['4'], libraryIds: ['lib-a'], action: 'grant' }])
+	);
+});
+
+it('does not send a selection of more than 1,000 accounts', async () => {
+	const rows = Array.from({ length: 1001 }, (_, i) => account(`u${i}`, `user${i}`));
+	render(Accounts, open(rows, as('admin')) as never);
+	const boxes = document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+	for (const box of boxes) box.click();
+	await expect.element(page.getByText('1001 selected')).toBeVisible();
+	await page.getByRole('combobox', { name: 'Library for the selection' }).selectOptions('lib-a');
+	await expect.element(page.getByRole('button', { name: 'Grant' })).toBeDisabled();
+	await expect.element(page.getByText(/at most 1,000/)).toBeVisible();
+});
+
+it('lists an account’s devices when they are opened, not before', async () => {
+	fake.devices = [device('d1', 'Kitchen laptop', true), device('d2', 'Old phone')];
+	render(Accounts, open([account('3', 'bob'), account('4', 'cy')], as('admin')) as never);
+	expect(fake.devicesAsked).toEqual([]);
+	await rowOf('bob').getByRole('button', { name: 'Devices' }).click();
+	await expect.element(page.getByText('Kitchen laptop')).toBeVisible();
+	await expect.element(page.getByText('Old phone')).toBeVisible();
+	expect(fake.devicesAsked).toEqual(['3']);
+});
+
+it('signs out one device and reads the list again', async () => {
+	fake.devices = [device('d1', 'Kitchen laptop', true), device('d2', 'Old phone')];
+	render(Accounts, open([account('3', 'bob')], as('admin')) as never);
+	await rowOf('bob').getByRole('button', { name: 'Devices' }).click();
+	await page.getByRole('button', { name: 'Sign out Old phone' }).click();
+	await expect.element(page.getByText('Old phone')).not.toBeInTheDocument();
+	expect(fake.out).toEqual([['3', 'd2']]);
+	expect(fake.devicesAsked).toEqual(['3', '3']);
+	await expect.element(page.getByText('Kitchen laptop')).toBeVisible();
+});
+
+it('signs out every device only after asking', async () => {
+	fake.devices = [device('d1', 'Kitchen laptop', true), device('d2', 'Old phone')];
+	render(Accounts, open([account('3', 'bob')], as('admin')) as never);
+	await rowOf('bob').getByRole('button', { name: 'Devices' }).click();
+	await page.getByRole('button', { name: 'Sign out all' }).click();
+	await expect
+		.element(page.getByRole('dialog', { name: 'Sign out bob everywhere?' }))
+		.toBeVisible();
+	expect(fake.outAll).toEqual([]);
+
+	await page.getByRole('dialog').getByRole('button', { name: 'Sign out all' }).click();
+	await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
+	expect(fake.outAll).toEqual(['3']);
+	await expect.element(page.getByText('No signed-in devices.')).toBeVisible();
+	expect(fake.devicesAsked).toEqual(['3', '3']);
+});
+
+it('shows the server’s reason when the devices cannot be read or signed out', async () => {
+	fake.failDevices = new ApiError(
+		403,
+		'forbidden',
+		'Only the owner can do this to an admin’s account.'
+	);
+	render(Accounts, open([account('3', 'bob')], as('owner')) as never);
+	await rowOf('bob').getByRole('button', { name: 'Devices' }).click();
+	await expect.element(page.getByRole('alert')).toHaveTextContent(/Only the owner/);
+});
+
+it('shows why a refused device sign-out failed, and keeps the device listed', async () => {
+	fake.devices = [device('d1', 'Kitchen laptop')];
+	fake.fail = new ApiError(404, 'not_found', 'Not found.');
+	render(Accounts, open([account('3', 'bob')], as('admin')) as never);
+	await rowOf('bob').getByRole('button', { name: 'Devices' }).click();
+	await page.getByRole('button', { name: 'Sign out Kitchen laptop' }).click();
+	await expect.element(page.getByRole('alert')).toHaveTextContent(/Not found/);
+	await expect.element(page.getByText('Kitchen laptop')).toBeVisible();
+});
+
+it('shows the account as the server answers a save, not as it was ticked', async () => {
+	fake.answer = account('3', 'bob', { libraryIds: ['lib-b'] });
+	render(Accounts, open([account('3', 'bob', { libraryIds: ['lib-a'] })], as('admin')) as never);
+	await rowOf('bob').getByRole('button', { name: 'Libraries' }).click();
+	await page.getByRole('checkbox', { name: 'Beta' }).click();
+	await page.getByRole('button', { name: 'Save libraries' }).click();
+	await vi.waitFor(() => expect(fake.libraries).toEqual([['3', ['lib-a', 'lib-b']]]));
+	await expect.element(page.getByRole('checkbox', { name: 'Alpha' })).not.toBeChecked();
+	await expect.element(page.getByRole('checkbox', { name: 'Beta' })).toBeChecked();
+});
+
+it('shows the grants a bulk change just made in an open Libraries panel, so Save keeps them', async () => {
+	fake.answer = account('3', 'bob', { libraryIds: ['lib-a', 'lib-b'] });
+	render(Accounts, open([account('3', 'bob', { libraryIds: ['lib-a'] })], as('admin')) as never);
+	await rowOf('bob').getByRole('button', { name: 'Libraries' }).click();
+	await page.getByRole('checkbox', { name: 'Select bob' }).click();
+	await page.getByRole('combobox', { name: 'Library for the selection' }).selectOptions('lib-b');
+	fake.more = {
+		items: [account('3', 'bob', { libraryIds: ['lib-a', 'lib-b'] })],
+		nextCursor: null,
+		total: 1
+	};
+	await page.getByRole('button', { name: 'Grant' }).click();
+	await vi.waitFor(() => expect(fake.asked).toEqual([{ q: '' }]));
+	await expect.element(page.getByRole('checkbox', { name: 'Beta' })).toBeChecked();
+	await page.getByRole('button', { name: 'Save libraries' }).click();
+	await vi.waitFor(() => expect(fake.libraries).toEqual([['3', ['lib-a', 'lib-b']]]));
 });
