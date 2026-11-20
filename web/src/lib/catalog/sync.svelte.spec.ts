@@ -206,6 +206,18 @@ const tagName = async (id: string) =>
 /** The golden library's tracks the account sees: its six, less the two it hid. */
 const SHOWN = 4;
 
+/**
+ * The device's answer to the query `name` of library `library` with `params`, or `{ error }` where
+ * it refuses, as the parity test writes a refusal in the golden files.
+ */
+async function answer(library: string, name: string, params: object) {
+	try {
+		return await h.query(library, name, params);
+	} catch (error) {
+		return { error: (error as Error).message };
+	}
+}
+
 /** The total of the device's catalog answer to the list query `name`. */
 const total = async (name: string) =>
 	((await h.query('1', name, { limit: 1 })) as { total: number }).total;
@@ -1684,8 +1696,10 @@ describe('catalog sync', () => {
 			...searchCases
 		];
 		expect(searches.length).toBeGreaterThan(10);
-		for (const { query, params, answer } of searches)
-			expect(await h.query('1', query, params), JSON.stringify(params)).toEqual(answer);
+		for (const golden of searches)
+			expect(await answer('1', golden.query, golden.params), JSON.stringify(golden.params)).toEqual(
+				golden.answer
+			);
 	});
 
 	it('a read of another library during an index build waits at most one slice, and the worker says it is busy throughout', async () => {
@@ -1703,8 +1717,10 @@ describe('catalog sync', () => {
 	it('an index built a few documents at a time answers as the golden server does', async () => {
 		await started('1');
 		await h.sliceIndexBy(1);
-		for (const { query, params, answer } of searchCases)
-			expect(await h.query('1', query, params), JSON.stringify(params)).toEqual(answer);
+		for (const golden of searchCases)
+			expect(await answer('1', golden.query, golden.params), JSON.stringify(golden.params)).toEqual(
+				golden.answer
+			);
 		expect((await h.builds()).steps).toBeGreaterThan(10);
 	});
 
