@@ -11,6 +11,7 @@ use serde::Deserialize;
 
 use super::{AdminUser, Status, admin_user, authorize};
 use crate::api::audit::{self, Action};
+use crate::api::devices::{self, Which};
 use crate::api::extract::{self, Path};
 use crate::api::realtime::Revoked;
 use crate::api::{Caller, Code, Hub, Id, Problem, invites};
@@ -46,11 +47,7 @@ pub async fn set(
                              reset_expires_at = NULL WHERE id = ?1",
                         )?
                         .execute([target])?;
-                        tx.prepare_cached(
-                            "UPDATE devices SET revoked_reason = 'logged_out' \
-                             WHERE user_id = ?1 AND revoked_reason IS NULL",
-                        )?
-                        .execute([target])?;
+                        devices::sign_out(tx, target, Which::All { keep: None })?;
                         invites::revoke_pending_of(tx, target, now_ms())?;
                         audit::record(tx, Action::Suspended, Some(actor), target)?;
                         true
