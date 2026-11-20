@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 use crate::api::session::token_hash;
 use crate::api::testing::socket::{connect_with, next_of, serve};
 use crate::api::testing::{
-    TOKEN, add_device, add_signed_out_device, add_user, app_with_tracks, call, conn, router_over,
-    state,
+    TOKEN, add_device, add_signed_out_device, add_user, app_with_tracks, audit, call, conn,
+    router_over, state,
 };
 use crate::db::testing::{Device, mark_deleting};
 
@@ -53,19 +53,6 @@ fn devices(conn: &Connection, user: i64) -> Vec<(i64, Option<String>)> {
     conn.prepare("SELECT id, revoked_reason FROM devices WHERE user_id = ?1 ORDER BY id")
         .unwrap()
         .query_map([user], |row| Ok((row.get(0)?, row.get(1)?)))
-        .unwrap()
-        .collect::<rusqlite::Result<_>>()
-        .unwrap()
-}
-
-/// Every audit row, as (action, actor, target, detail).
-fn audit(conn: &Connection) -> Vec<(String, i64, i64, Value)> {
-    conn.prepare("SELECT action, actor_id, target_id, detail FROM admin_actions ORDER BY id")
-        .unwrap()
-        .query_map([], |row| {
-            let detail: String = row.get(3)?;
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, serde_json::from_str(&detail).unwrap()))
-        })
         .unwrap()
         .collect::<rusqlite::Result<_>>()
         .unwrap()

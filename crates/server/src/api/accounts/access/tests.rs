@@ -12,7 +12,7 @@ use tokio::sync::oneshot;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::api::testing::socket::{Socket, connect_with, next, next_of, serve};
-use crate::api::testing::{TOKEN, add_device, add_user, app, call, conn};
+use crate::api::testing::{TOKEN, add_device, add_user, app, audit, call, conn};
 use crate::db::Database;
 use crate::db::testing::{access, library, mark_deleting};
 
@@ -49,19 +49,6 @@ fn grants(conn: &Connection, user: i64) -> Vec<(i64, i64)> {
     conn.prepare("SELECT library_id, granted_at FROM library_access WHERE user_id = ?1 ORDER BY 1")
         .unwrap()
         .query_map([user], |row| Ok((row.get(0)?, row.get(1)?)))
-        .unwrap()
-        .collect::<rusqlite::Result<_>>()
-        .unwrap()
-}
-
-/// Every audit row, as (action, actor, target, detail).
-fn audit(conn: &Connection) -> Vec<(String, i64, i64, Value)> {
-    conn.prepare("SELECT action, actor_id, target_id, detail FROM admin_actions ORDER BY id")
-        .unwrap()
-        .query_map([], |row| {
-            let detail: String = row.get(3)?;
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, serde_json::from_str(&detail).unwrap()))
-        })
         .unwrap()
         .collect::<rusqlite::Result<_>>()
         .unwrap()

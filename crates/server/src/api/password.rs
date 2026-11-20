@@ -3,6 +3,7 @@
 //! (`requirements/users.md` §3, `design/database.md`).
 
 pub(super) mod change;
+pub(super) mod reset;
 
 use std::sync::LazyLock;
 use std::thread;
@@ -62,6 +63,8 @@ fn check_strength(password: &str, inputs: &[&str]) -> Result<(), Problem> {
 /// crate's defaults, which are OWASP's, returning the PHC string to store. Both are CPU-bound,
 /// so they run off the async threads.
 pub async fn hash_new(password: String, inputs: Vec<String>) -> Result<String, Problem> {
+    #[cfg(test)]
+    ASKED.lock().expect("no test panics holding it").push(password.clone());
     off_thread(move || {
         let inputs: Vec<&str> = inputs.iter().map(String::as_str).collect();
         check_strength(&password, &inputs)?;
@@ -173,6 +176,17 @@ pub async fn confirm(
 /// A `403 wrong_password`: the password given is not the account's current one.
 fn wrong_password() -> Problem {
     Problem::new(Code::WrongPassword).detail("Your current password is not correct.")
+}
+
+/// Every new password [`hash_new`] has been asked to hash, so a test can tell that its own
+/// request got that far, whatever other tests are hashing.
+#[cfg(test)]
+static ASKED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Whether [`hash_new`] has been asked to hash `password`.
+#[cfg(test)]
+pub fn asked_to_hash(password: &str) -> bool {
+    ASKED.lock().expect("no test panics holding it").iter().any(|asked| asked == password)
 }
 
 /// Takes every [`HASHING`] permit, waiting for checks already running, so a check started

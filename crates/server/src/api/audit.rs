@@ -50,6 +50,10 @@ pub enum Action {
     Restored,
     /// An account's devices were signed out: the one `(id, name)`, or all of them if none.
     DevicesSignedOut { device: Option<(i64, String)> },
+    /// A password reset link was issued for an account.
+    PasswordResetIssued,
+    /// An account's password was set with its reset link.
+    PasswordResetUsed,
 }
 
 impl Action {
@@ -61,6 +65,8 @@ impl Action {
             Self::Suspended => "suspended",
             Self::Restored => "restored",
             Self::DevicesSignedOut { .. } => "devices_signed_out",
+            Self::PasswordResetIssued => "password_reset_issued",
+            Self::PasswordResetUsed => "password_reset_used",
         }
     }
 
@@ -76,7 +82,10 @@ impl Action {
                 "granted": ids(granted),
                 "revoked": ids(revoked),
             }),
-            Self::Suspended | Self::Restored => json!({}),
+            Self::Suspended
+            | Self::Restored
+            | Self::PasswordResetIssued
+            | Self::PasswordResetUsed => json!({}),
             Self::DevicesSignedOut { device: Some((id, name)) } => {
                 json!({ "deviceId": id.to_string(), "deviceName": name })
             }
