@@ -53,7 +53,8 @@ impl Union<'_> {
                 hits.truncate(limit);
                 let ids = hits.iter().map(|&(_, id)| id).collect();
                 let best = hits.swap_remove(0).0;
-                (best, Section { kind, group, ids, total })
+                let score = best.score;
+                (best, Section { kind, group, ids, total, best: score })
             })
             .collect();
         sections.sort_by(|(a, x), (b, y)| {

@@ -6,7 +6,8 @@
 use std::collections::HashSet;
 
 use jewelcase_core::{
-    Document, Index, IndexBuilder, Kind, Rank, Section as Found, SectionPage as FoundPage, Union,
+    Document, Index, IndexBuilder, Kind, LyricHit, Rank, Section as Found,
+    SectionPage as FoundPage, Union, lyrics_place,
 };
 use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -188,7 +189,7 @@ pub fn section(
                 found.next.map(|rank| cursor::encode(&label, &[Value::Blob(rank.to_bytes())]));
             let FoundPage { ids, total, .. } = found;
             let group = group.map(str::to_owned);
-            let found = vec![Found { kind, group, ids, total }];
+            let found = vec![Matched { kind, group, ids, total }];
             let items = sections(conn, user, library, found, &hid.losses)?
                 .pop()
                 .map_or_else(Vec::new, |section| section.items);
@@ -227,7 +228,7 @@ fn sorted(
         }
     };
     let page = read_matches(conn, library, table, id, request, ids)?;
-    let found = Found { kind, group: None, ids: page.items, total: ids.len() };
+    let found = Matched { kind, group: None, ids: page.items, total: ids.len() };
     let items = sections(conn, user, library, vec![found], losses)?.pop();
     let items = items.map_or_else(Vec::new, |section| section.items);
     Ok(Page { items, next_cursor: page.next_cursor, total: page.total })
@@ -294,6 +295,77 @@ enum SearchResult {
     Artist { artist: ArtistSummary },
     Playlist { playlist: Playlist },
     Tag { tag: Tag },
+    Lyric { lyric: LyricMatch },
+}
+
+/// The spec's `LyricMatch`: a track found by a line of its lyrics, shown with that line and the
+/// line of lyrics on either side. Only the server searches lyrics, so a device's search has none
+/// (`design/search.md` §2.6).
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LyricMatch {
+    track: TrackSummary,
+    line: Line,
+    before: Vec<String>,
+    after: Vec<String>,
+}
+
+/// The spec's `LyricMatch.line`.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Line {
+    text: String,
+    start_ms: Option<u64>,
+}
+
+impl LyricMatch {
+    /// `track`, found by its line `text`, which starts at `start_ms` if its lyrics are timed,
+    /// between the lines `before` and `after` it, each one line or none.
+    pub fn new(
+        track: TrackSummary,
+        text: String,
+        start_ms: Option<u64>,
+        before: Vec<String>,
+        after: Vec<String>,
+    ) -> LyricMatch {
+        LyricMatch { track, line: Line { text, start_ms }, before, after }
+    }
+}
+
+/// The best of a search's lyric matches, how many there are in all, and the first as the index
+/// found it: a section [`response`] places among the rest by it ([`lyrics_place`]).
+pub struct Lyrics {
+    pub matches: Vec<LyricMatch>,
+    pub total: usize,
+    pub first: LyricHit,
+}
+
+/// One section's matches, as the index found them, to read as [`sections`] shows them.
+struct Matched {
+    kind: Kind,
+    group: Option<String>,
+    ids: Vec<i64>,
+    total: usize,
+}
+
+impl From<Found> for Matched {
+    fn from(Found { kind, group, ids, total, .. }: Found) -> Matched {
+        Matched { kind, group, ids, total }
+    }
+}
+
+impl SectionPage {
+    /// A page of the lyrics section of a search for `q`: `matches`, of `total`, and the cursor to
+    /// the next.
+    pub fn lyrics(
+        q: String,
+        matches: Vec<LyricMatch>,
+        next_cursor: Option<String>,
+        total: usize,
+    ) -> SectionPage {
+        let items = matches.into_iter().map(|lyric| SearchResult::Lyric { lyric }).collect();
+        SectionPage { query: q, items, next_cursor, total }
+    }
 }
 
 /// An index of `user`'s own playlists in `library`, Liked Songs among them, searched with the
@@ -560,8 +632,22 @@ pub fn response(
     hid: &Hid,
     misses: &[(Kind, i64)],
     tag_type: Option<&str>,
+    lyrics: Option<Lyrics>,
 ) -> rusqlite::Result<SearchResponse> {
-    let sections = sections(conn, user, library, found, &hid.losses)?;
+    // Lyrics go among the names by how well their first line matched, never before a name
+    // matched exactly (`design/search.md` §2.3), so they lead, and give the top result, only when
+    // they match better than any name.
+    let mut found = found;
+    let place = lyrics.as_ref().map_or(found.len(), |lyrics| lyrics_place(&found, &lyrics.first));
+    let after: Vec<Matched> = found.split_off(place).into_iter().map(Matched::from).collect();
+    let before: Vec<Matched> = found.into_iter().map(Matched::from).collect();
+    let mut sections = self::sections(conn, user, library, before, &hid.losses)?;
+    if let Some(Lyrics { matches, total, .. }) = lyrics.filter(|lyrics| !lyrics.matches.is_empty())
+    {
+        let items = matches.into_iter().map(|lyric| SearchResult::Lyric { lyric }).collect();
+        sections.push(Section { kind: "lyrics", tag_type: None, items, total });
+    }
+    sections.extend(self::sections(conn, user, library, after, &hid.losses)?);
     let library_empty = library_number(conn, library, "track_count")? == 0;
     // Nothing found in a library with music: what was nearly found (`requirements/search.md` §8).
     let near_misses = if sections.is_empty() && !library_empty {
@@ -646,7 +732,7 @@ fn sections(
     conn: &Connection,
     user: i64,
     library: i64,
-    found: Vec<Found>,
+    found: Vec<Matched>,
     losses: &Losses,
 ) -> rusqlite::Result<Vec<Section>> {
     let mut sections = Vec::with_capacity(found.len());

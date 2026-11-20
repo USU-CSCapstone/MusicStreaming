@@ -893,6 +893,13 @@ export interface paths {
          *     tag every track of which they hid (`requirements/conventions.md` §8); a tag's counts are
          *     of what they see, as `listTags` gives them.
          *
+         *     Lyrics too, in the `lyrics` section (`design/search.md` §2): a track whose lyrics have a
+         *     line holding every word of `q`, in any order and as names forgive typos, by its best line,
+         *     a track once. Lines holding the words in order and together come first, of the best 200.
+         *     A query of fewer than three characters, not counting spaces and punctuation, searches no
+         *     lyrics: its section is left out. A lyric match is kept as its track is, by what the
+         *     caller hid, `within`, and the tags.
+         *
          *     Search is not filtered by year or listening data, and the shipped apps do not filter it by
          *     tag either: they find tags by name, and narrow to one by searching within it
          *     (`requirements/search.md` §5). `tagAll` and `tagAny` stay for clients that narrow a
@@ -925,7 +932,8 @@ export interface paths {
          *     library that changes between pages neither repeats a match nor passes over one still
          *     there. What the caller hid is left out as `search` leaves it out. The `tags` section is
          *     one type of tag, which `tagType` names; without it, `422`. The `playlists` section is the
-         *     caller's own playlists. `lyrics` answers `422` until lyrics are indexed. A section that is
+         *     caller's own playlists. `lyrics` comes in the search's ranking only, so `sort` and `order`
+         *     are `422`, and a `q` of fewer than three characters finds none of it. A section that is
          *     none of these is `404`.
          */
         get: operations["searchSection"];
@@ -2362,14 +2370,24 @@ export interface components {
         };
         /** @enum {string} */
         SearchSectionType: "tracks" | "albums" | "artists" | "playlists" | "tags" | "lyrics";
+        /**
+         * @description A track found by a line of its lyrics: its best line for the query, and the line of lyrics
+         *     on either side, as `getLyrics` gives the lines. Playing it plays the track from its
+         *     start (`design/search.md` §2.4).
+         */
         LyricMatch: {
             track: components["schemas"]["TrackSummary"];
             line: {
                 text: string;
+                /** @description When a timed line starts; `null` for plain lyrics. */
                 startMs: number | null;
             };
-            /** @description Lines of context before the match. */
+            /**
+             * @description The line before the match, if there is one: blank lines and section labels such as
+             *     `[Chorus]` are passed over. Empty or one line.
+             */
             before: string[];
+            /** @description The line after the match, as `before` is found. */
             after: string[];
         };
         SearchResult: {
@@ -2385,12 +2403,18 @@ export interface components {
         SearchResponse: {
             /** @description Echo of `q`, so a client can discard responses for text no longer in the box (`requirements/search.md` §7). */
             query: string;
-            /** @description The single best match, also present in its section (`requirements/search.md` §4). */
+            /**
+             * @description The single best match, also present in its section (`requirements/search.md` §4): the
+             *     first of the first section, so a lyric only when the `lyrics` section leads.
+             */
             top: components["schemas"]["SearchResult"] | null;
             /**
              * @description Ordered by how well each matches; ties break tracks, then albums, then artists, then
              *     playlists, then tags (`requirements/search.md` §4). Each type of tag is a section of
-             *     its own, ties between them by `tagType`. A section with no match is left out.
+             *     its own, ties between them by `tagType`. `lyrics` goes among them by its first line
+             *     as though that were never a name matched exactly, so it never comes before a section
+             *     whose best is exact, and after the sections it ties (`design/search.md` §2.3). A
+             *     section with no match is left out.
              */
             sections: {
                 type: components["schemas"]["SearchSectionType"];
@@ -3779,7 +3803,7 @@ export interface components {
         MinPlayCount: number;
         /** @description Search text, from the first character typed. */
         Query: string;
-        /** @description Sections to include. Defaults to all but `lyrics`, which is planned. */
+        /** @description Sections to include. Defaults to all of them. */
         SearchTypes: components["schemas"]["SearchSectionType"][];
         /**
          * @description With the `tags` section, only tags of this type (`TagType.key`), such as `genre`. A type
@@ -5074,7 +5098,7 @@ export interface operations {
             query: {
                 /** @description Search text, from the first character typed. */
                 q: components["parameters"]["Query"];
-                /** @description Sections to include. Defaults to all but `lyrics`, which is planned. */
+                /** @description Sections to include. Defaults to all of them. */
                 types?: components["parameters"]["SearchTypes"];
                 /**
                  * @description With the `tags` section, only tags of this type (`TagType.key`), such as `genre`. A type

@@ -27,6 +27,12 @@ pub fn plain_lines(plain: &str) -> impl Iterator<Item = &str> {
     plain.lines()
 }
 
+/// Whether `line` is a line of lyrics, as the index and what shows a match count them: not blank,
+/// nor a section label alone on its line.
+pub fn is_lyric_line(line: &str) -> bool {
+    !is_label(line) && !words(line).is_empty()
+}
+
 /// Whether `line` is a section label alone on its line, such as `[Chorus]` or `[Verse 2]`.
 pub(super) fn is_label(line: &str) -> bool {
     let line = line.trim();
@@ -343,6 +349,13 @@ mod tests {
         }
         assert_eq!(Varints(&bytes).collect::<Vec<_>>(), numbers);
         assert_eq!(bytes.len(), 1 + 1 + 1 + 2 + 2 + 2 + 3 + 5);
+    }
+
+    #[test]
+    fn blanks_and_labels_are_not_lines() {
+        assert!(is_lyric_line("Say it ain't so") && is_lyric_line("[Chorus] la la"));
+        assert!(!is_lyric_line("") && !is_lyric_line("  ") && !is_lyric_line("?!"));
+        assert!(!is_lyric_line("[Chorus]") && !is_lyric_line(" [Verse 2] "));
     }
 
     #[test]
