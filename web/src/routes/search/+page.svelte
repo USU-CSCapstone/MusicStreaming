@@ -15,6 +15,7 @@
 	import SearchTabs from '$lib/components/SearchTabs.svelte';
 	import TopResult from '$lib/components/TopResult.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
+	import { DEPENDS } from '$lib/live.svelte';
 	import { Paged } from '$lib/paged.svelte';
 	import { tagTypePlural } from '$lib/tags';
 	import type { Selected } from '$lib/recent';
@@ -42,12 +43,18 @@
 		return [];
 	}
 
-	// A tab's matches, a page at a time as the list scrolls.
+	// A tab's matches, a page at a time as the list scrolls, read again when the library changes
+	// what its type would find.
 	const paged = $derived.by(() => {
 		const { tab, section } = data;
 		if (!tab || !section) return null;
-		return new Paged(section.first, (cursor) =>
-			searchSection(fetch, data.lib, tab, data.q, { ...section.query, cursor })
+		return new Paged(
+			section.first,
+			(cursor, limit) =>
+				searchSection(fetch, data.lib, tab, data.q, { ...section.query, cursor, limit }),
+			data.lib,
+			DEPENDS[tab],
+			data.since
 		);
 	});
 	const searched = $derived(Boolean(data.results || data.section));
