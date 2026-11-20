@@ -660,6 +660,32 @@ test('queues every song a search finds', async ({ page, server }) => {
 	await expect.poll(async () => (await lists(server)).at(-1)).toEqual(ids(server, ...found));
 });
 
+test('a sorted Songs tab of a search plays and queues every song found in its sort', async ({
+	page,
+	server
+}) => {
+	const sent = observe(page);
+	// Sorted by the server, so the rows are the first of every song found in that order.
+	await page.goto('/search?q=signal&type=tracks&sort=title&order=desc');
+	await expect(shownTitles(page)).toHaveText(['Signal Remix', 'Signal Part 2', 'Signal Part 1']);
+	await page.getByRole('button', { name: 'Signal Part 2', exact: true }).click();
+	await expect(player(page).getByText('Signal Part 2')).toBeVisible();
+	await expect.poll(() => sent.starts.length).toBe(1);
+	const sorted = { type: 'search', q: 'signal', sort: 'name', order: 'desc' };
+	expect(sent.starts.at(-1)?.source.recipe).toEqual(sorted);
+	expect(sent.starts.at(-1)).toMatchObject({ start: 1 });
+	// The server resolves it to the rows shown, in their order.
+	const shown = ids(server, 'Signal Remix', 'Signal Part 2', 'Signal Part 1');
+	await expect.poll(async () => (await lists(server)).at(-1)).toEqual(shown);
+
+	await main(page).getByRole('button', { name: 'Actions for all songs found' }).click();
+	await page.getByRole('menuitem', { name: 'Queue last' }).click();
+	await expect
+		.poll(() => sent.edits.at(-1))
+		.toMatchObject({ type: 'add', source: { recipe: sorted } });
+	await expect.poll(async () => (await lists(server)).at(-1)).toEqual(shown);
+});
+
 test.describe('on a server of its own, with no queue', () => {
 	test.use({ loggedIn: false });
 

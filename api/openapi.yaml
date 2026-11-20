@@ -4691,7 +4691,9 @@ components:
     QueueSearchRecipe:
       type: object
       required: [type, q]
-      description: A search's tracks, all of them, in the search's ranking.
+      description: |
+        A search's tracks, all of them: in the search's ranking, or with `sort` and `order` in
+        that sort, as `searchSection`'s `tracks` pages them to the end.
       properties:
         type: { const: search }
         q: { type: string, minLength: 1 }
@@ -4703,6 +4705,16 @@ components:
             tracks it finds under it. Left out for none. Any other filter of `BrowseFilter` is
             `422` on a start, as are more than 100 tags together; a tag the library lacks matches
             no track.
+        sort:
+          allOf:
+            - $ref: '#/components/schemas/QueueTrackSort'
+          description: |
+            A sort of `listTracks`, as `searchSection` takes it for `tracks`; the planned ones are
+            `422` as there. Left out, with `order`, for the search's ranking.
+        order:
+          allOf:
+            - $ref: '#/components/schemas/QueueTrackOrder'
+          description: The direction of `sort`. Sent with `sort` and only with it; either alone is `422`.
 
     QueuePlaylistRecipe:
       type: object
