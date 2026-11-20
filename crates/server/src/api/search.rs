@@ -117,12 +117,13 @@ pub async fn search(
         .read(move |conn| {
             let tag_type = tag_type.as_deref();
             let lyrics = match lyrics {
-                Some(Ranked { mut hits, .. }) => {
-                    let total = hits.len();
+                Some(Ranked { mut hits, .. }) if !hits.is_empty() => {
+                    let (total, first) = (hits.len(), hits[0].clone());
                     hits.truncate(limit);
-                    Some(Lyrics { matches: lyrics::matches(conn, user, library, &hits)?, total })
+                    let matches = lyrics::matches(conn, user, library, &hits)?;
+                    Some(Lyrics { matches, total, first })
                 }
-                None => None,
+                _ => None,
             };
             response(conn, user, library, query.q, found, &hid, &misses, tag_type, lyrics)
         })

@@ -13,8 +13,11 @@
 //! tracks with a line that holds the query as a phrase are lifted afterwards, from their text
 //! ([`lift_phrases`]).
 
+use super::Section;
 use super::lyrics::{LyricIndex, is_label};
-use super::query::{MAX_QUERY_WORDS, Quality, leading_article, matching_words, word_quality};
+use super::query::{
+    MAX_QUERY_WORDS, Quality, Score, leading_article, matching_words, word_quality,
+};
 use super::words;
 use crate::fold::ARTICLES;
 
@@ -206,6 +209,16 @@ fn quality_from(lines: &[(u32, Quality)], cursor: &mut usize, line: u32) -> Opti
     }
     *cursor += rest[..(step + 1).min(rest.len())].partition_point(|&(l, _)| l < line);
     lines.get(*cursor).filter(|&&(l, _)| l == line).map(|&(_, quality)| quality)
+}
+
+/// Where a section of lyrics whose first match is `first` goes among the sections of names
+/// `sections`, in the order a search gave them (`design/search.md` §2.3): as though its best were
+/// never a name matched exactly, so that a section whose best is exact comes first, and against
+/// names matched otherwise as they compare among themselves; after them, when as good.
+pub fn lyrics_place(sections: &[Section], first: &LyricHit) -> usize {
+    let LyricScore { typos, skipped, prefixes, extra_words } = first.score;
+    let lyric = Score { inexact: true, typos, skipped, prefixes, extra_words };
+    sections.partition_point(|section| section.best <= lyric)
 }
 
 /// How many of the best tracks step two reads back to lift those that hold the query as a phrase.
@@ -493,6 +506,32 @@ mod tests {
         lift_phrases("the ain't", &mut hits, |_| -> Option<Vec<&str>> { panic!("an article") });
         lift_phrases("say ain't", &mut hits, |_| None::<Vec<&str>>);
         assert_eq!(hits, before);
+    }
+
+    /// Where the lyrics section for `query` goes among the sections of `names`, the albums with
+    /// those titles, when its first match is in `line`.
+    fn placed(names: &[&str], line: &str, query: &str) -> usize {
+        use crate::search::{Document, Index, Kind};
+        let documents = (0..)
+            .zip(names)
+            .filter_map(|(id, name)| Document::from_album(id, Some((*name).to_owned())));
+        let sections = Index::build(documents.collect::<Vec<_>>()).search(query, &Kind::ALL, 5);
+        let first = &LyricIndex::build([(1, vec![line])]).search(query, |_| true)[0];
+        lyrics_place(&sections, first)
+    }
+
+    #[test]
+    fn lyrics_never_outrank_an_exact_name_and_otherwise_compare_as_names_do() {
+        // A name matched exactly comes first, even before a line that is the query exactly.
+        assert_eq!(placed(&["Other Side"], "other side", "other side"), 1);
+        assert_eq!(placed(&["The Other Side"], "other side", "other side"), 1, "an article aside");
+        // Otherwise as names compare: a shorter line before a longer name, and a line with no
+        // typo before a name with one.
+        assert_eq!(placed(&["Other Side of the Moon"], "the other side", "other side"), 0);
+        assert_eq!(placed(&["Other Sid Now"], "other side now go", "other side now"), 0);
+        // When as good, after the names.
+        assert_eq!(placed(&["Other Side Now"], "other side now", "other side"), 1);
+        assert_eq!(placed(&[], "other side", "other side"), 0);
     }
 
     #[test]

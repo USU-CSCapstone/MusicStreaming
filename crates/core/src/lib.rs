@@ -23,8 +23,8 @@ pub use queue::{
 };
 pub use search::{
     Document, Finishing, Index, IndexBuilder, Kind, LyricHit, LyricIndex, LyricIndexBuilder,
-    PHRASE_TRACKS, Rank, Section, SectionPage, Union, is_lyric_line, lift_phrases, plain_lines,
-    wants_phrases, words,
+    PHRASE_TRACKS, Rank, Section, SectionPage, Union, is_lyric_line, lift_phrases, lyrics_place,
+    plain_lines, wants_phrases, words,
 };
 pub use sort::{SortField, SortRow, sort_key, sort_rows, tag_sort_key};
 pub use waveform::{shape_waveform, waveform_level};
