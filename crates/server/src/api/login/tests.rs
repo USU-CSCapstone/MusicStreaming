@@ -12,6 +12,7 @@ use crate::db::Database;
 use crate::db::testing::User;
 
 mod known_origins;
+mod reclaim;
 
 const PASSWORD: &str = "correct horse battery staple";
 

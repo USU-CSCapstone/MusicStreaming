@@ -55,7 +55,7 @@ Built: first-run owner setup, and login and logout with argon2 and zxcvbn. Sessi
 
 **Still open from this stage:**
 1. ~~`session_revoked` can't be sent over HTTP.~~ **Decided, built:** a signed-out device keeps its token hash and answers `401 session_revoked`.
-2. ~~Nothing reclaims a `deviceId` after `credentials_changed`.~~ **Decided:** login honours `deviceId` for a `credentials_changed` device of the same account (Stage 7).
+2. ~~Nothing reclaims a `deviceId` after `credentials_changed`.~~ **Decided, built:** login honours `deviceId` for a `credentials_changed` device of the same account (Stage 7).
 3. `login_attempts` is never pruned.
 
 **End goal (reached):** Only the owner can exist, and every request is scoped to what the caller may reach. [`users.md` §2.1, §3, §10](requirements/users.md) and [`libraries.md` §4](requirements/libraries.md#4-isolation) are met.

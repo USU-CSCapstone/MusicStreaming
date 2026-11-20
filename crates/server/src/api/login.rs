@@ -20,15 +20,18 @@ use crate::db::now_ms;
 
 /// The spec's `LoginRequest`.
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LoginRequest {
     username: String,
     password: String,
     device: DeviceRegistration,
-    // `deviceId`, which reclaims a device logged out by a password change, is ignored: every
-    // login registers a new device, as the spec says for an ID that is not one.
+    /// The ID of a device a password change signed out, to be signed in again as itself.
+    /// Anything that is not one is ignored.
+    device_id: Option<String>,
 }
 
-/// Logs `username` in on a new device, answering as [`session::Session::respond`] does, or
+/// Logs `username` in on a new device, or on the one `deviceId` names if a password change
+/// signed it out, answering as [`session::Session::respond`] does, or
 /// refuses as the module docs describe.
 pub async fn login(
     State(state): State<AppState>,
@@ -36,7 +39,8 @@ pub async fn login(
     headers: HeaderMap,
     extract::Json(request): extract::Json<LoginRequest>,
 ) -> Result<Response, Problem> {
-    let LoginRequest { username, password, device } = request;
+    let LoginRequest { username, password, device, device_id } = request;
+    let reclaim = device_id.and_then(|id| id.parse::<i64>().ok());
     // No account can have another name, and this keeps megabyte names out of the records.
     me::check_username(&username)?;
     device.validate()?;
@@ -61,8 +65,8 @@ pub async fn login(
         Some((user, stored, active)) => (Some(user), Some(stored), active),
         None => (None, None, false),
     };
-    let matches = password::verify(password, stored).await?;
-    let Some(user) = user.filter(|_| matches && active) else {
+    let matches = password::verify(password, stored.clone()).await?;
+    let (Some(user), Some(stored)) = (user.filter(|_| matches && active), stored) else {
         return Err(Problem::new(Code::InvalidCredentials));
     };
 
@@ -71,13 +75,13 @@ pub async fn login(
     let session = state
         .db
         .try_write(move |tx| {
-            // A suspension committed while the password was checked has signed out every
-            // device it found, so this one must not be added after it.
-            if !may_sign_in(tx, user)? {
+            // A suspension or a password change committed while the password was checked has
+            // signed out every device it found, so this one must not be added after it.
+            if !may_sign_in(tx, user, &stored)? {
                 return Err(Problem::new(Code::InvalidCredentials));
             }
             limits::succeeded(tx, attempt)?;
-            Ok(session::register(tx, user, &device, &hash)?)
+            Ok(session::register_or_reclaim(tx, user, &device, &hash, reclaim)?)
         })
         .await?;
     devices::changed(state.db.clone(), state.hub.clone(), user);
@@ -91,10 +95,10 @@ fn account(conn: &Connection, username: &str) -> rusqlite::Result<Option<(i64, S
         .optional()
 }
 
-/// Whether account `user` still exists and is active.
-fn may_sign_in(conn: &Connection, user: i64) -> rusqlite::Result<bool> {
-    conn.prepare_cached("SELECT status = 'active' FROM users WHERE id = ?1")?
-        .query_row([user], |row| row.get(0))
+/// Whether account `user` still exists, is active, and has the password `stored` that was checked.
+fn may_sign_in(conn: &Connection, user: i64, stored: &str) -> rusqlite::Result<bool> {
+    conn.prepare_cached("SELECT status = 'active' AND password = ?2 FROM users WHERE id = ?1")?
+        .query_row(rusqlite::params![user, stored], |row| row.get(0))
         .optional()
         .map(|active| active.unwrap_or(false))
 }

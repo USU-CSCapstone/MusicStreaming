@@ -111,6 +111,29 @@ pub fn register(
     get(tx, id)
 }
 
+/// Signs device `id` in again as `user`'s with the token whose hash is `token_hash`, if it is
+/// `user`'s and was signed out by a password change, and returns it. Its type and platform
+/// become `device`'s; its ID, name and first-seen time stay. `None` for any other device,
+/// which is left as it is.
+pub fn reclaim(
+    tx: &Transaction,
+    user: i64,
+    id: i64,
+    device: &DeviceRegistration,
+    token_hash: &[u8; 32],
+) -> rusqlite::Result<Option<Device>> {
+    let changed = tx.execute(
+        "UPDATE devices SET token_hash = ?3, revoked_reason = NULL, type = ?4, platform = ?5, \
+         last_seen_at = ?6 \
+         WHERE id = ?1 AND user_id = ?2 AND revoked_reason = 'credentials_changed'",
+        params![id, user, token_hash, device.kind, device.platform, now_ms()],
+    )?;
+    if changed == 0 {
+        return Ok(None);
+    }
+    get(tx, id).map(Some)
+}
+
 /// `user`'s signed-in devices, most recently seen first, none of them `connected` yet.
 pub(super) fn signed_in(conn: &Connection, user: i64) -> rusqlite::Result<Vec<Device>> {
     conn.prepare_cached(&format!(
