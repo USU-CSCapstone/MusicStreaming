@@ -99,7 +99,10 @@
 		if (track && result.lyric) {
 			// From its start, then the matches after it, as its section plays it.
 			const tracks = lyrics?.tracks.length ? lyrics.tracks : [track];
-			const at = Math.max(0, tracks.findIndex((t) => t.id === track.id));
+			const at = Math.max(
+				0,
+				tracks.findIndex((t) => t.id === track.id)
+			);
 			player.play(tracks, at, lyrics?.context ?? context);
 			onact({ type: 'track', id: track.id });
 			return;

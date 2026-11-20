@@ -277,9 +277,11 @@ test('a line of a song’s lyrics finds it, shown among its words, and plays it'
 	await expect(top.getByText('Signal Part 1')).toBeVisible();
 	await expect(top.getByText('“Second line of the song”')).toBeVisible();
 	// In its section, between the lines around it.
-	const lyrics = main(page).locator('section').filter({
-		has: page.getByRole('heading', { name: 'Lyrics' })
-	});
+	const lyrics = main(page)
+		.locator('section')
+		.filter({
+			has: page.getByRole('heading', { name: 'Lyrics' })
+		});
 	await expect(lyrics.getByRole('listitem')).toHaveCount(1);
 	await expect(lyrics.getByRole('listitem')).toHaveText(
 		/Signal Part 1\s*Aurora Lane\s*First line of the song\s*Second line of the song/

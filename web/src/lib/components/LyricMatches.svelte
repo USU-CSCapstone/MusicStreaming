@@ -38,7 +38,12 @@
 		{@const track = match.track}
 		<li>
 			<button type="button" class="play" aria-label="Play {track.title}" onclick={() => play(i)}>
-				<Artwork image={track.album?.image ?? null} seed={track.album?.id ?? track.id} size={56} icon="song" />
+				<Artwork
+					image={track.album?.image ?? null}
+					seed={track.album?.id ?? track.id}
+					size={56}
+					icon="song"
+				/>
 				<span class="overlay"><Icon name="play" size={20} /></span>
 			</button>
 			<div class="text">
