@@ -15,8 +15,8 @@ use crate::api::scope::Caller;
 use crate::api::testing::player::{start_playing, start_queue};
 use crate::api::testing::socket::{Socket, connect_with, next, next_of, serve};
 use crate::api::testing::{
-    TOKEN, add_device, add_signed_out_device, add_user, app_with_tracks, call, conn, eventually,
-    router_over, send_json, state,
+    TOKEN, add_device, add_signed_out_device, add_user, app_with_tracks, audit, call, conn,
+    eventually, router_over, send_json, state,
 };
 use crate::api::{AppState, session::token_hash};
 use crate::db::now_ms;
@@ -53,19 +53,6 @@ async fn accounts() -> (tempfile::TempDir, AppState, Router) {
 async fn set(app: &Router, token: &str, user: i64, status: &str) -> (StatusCode, Value) {
     let body = json!({ "status": status });
     call(app, token, "PUT", &format!("/api/v1/admin/users/{user}/status"), Some(body)).await
-}
-
-/// Every audit row, as (action, actor, target, detail).
-fn audit(conn: &Connection) -> Vec<(String, i64, i64, Value)> {
-    conn.prepare("SELECT action, actor_id, target_id, detail FROM admin_actions ORDER BY id")
-        .unwrap()
-        .query_map([], |row| {
-            let detail: String = row.get(3)?;
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, serde_json::from_str(&detail).unwrap()))
-        })
-        .unwrap()
-        .collect::<rusqlite::Result<_>>()
-        .unwrap()
 }
 
 /// Account `user`'s devices, each with why it was signed out.

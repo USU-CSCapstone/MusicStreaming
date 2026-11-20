@@ -1,7 +1,7 @@
 //! Helpers for the API's tests: a server over a fresh database, and requests to it.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use axum::Router;
@@ -9,7 +9,9 @@ use axum::body::{Body, to_bytes};
 use axum::extract::connect_info::MockConnectInfo;
 use axum::http::{HeaderMap, Request, StatusCode, header, request};
 use jewelcase_ffmpeg::Config;
+use rusqlite::functions::FunctionFlags;
 use serde_json::Value;
+use tokio::sync::oneshot;
 use tower::ServiceExt;
 
 use super::session::token_hash;
@@ -240,4 +242,41 @@ pub fn saved_only(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
          WHERE entity_id IN (SELECT id FROM playlists WHERE kind = 'liked'); \
          DELETE FROM playlists WHERE kind = 'liked';",
     )
+}
+
+/// Every audit row, as (action, actor, target, detail).
+pub fn audit(conn: &rusqlite::Connection) -> Vec<(String, i64, i64, Value)> {
+    conn.prepare("SELECT action, actor_id, target_id, detail FROM admin_actions ORDER BY id")
+        .unwrap()
+        .query_map([], |row| {
+            let detail: String = row.get(3)?;
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, serde_json::from_str(&detail).unwrap()))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+}
+
+/// Holds the writer inside the next write that changes a password, until the sender is
+/// dropped; the receiver hears when it is held.
+pub async fn hold_next_password_write(db: &Database) -> (oneshot::Receiver<()>, mpsc::Sender<()>) {
+    let (entered, held) = oneshot::channel();
+    let (release, released) = mpsc::channel();
+    let hold = Mutex::new(Some((entered, released)));
+    db.write(move |tx| {
+        tx.create_scalar_function("hold", 0, FunctionFlags::SQLITE_UTF8, move |_| {
+            if let Some((entered, released)) = hold.lock().unwrap().take() {
+                entered.send(()).unwrap();
+                let _ = released.recv();
+            }
+            Ok(0)
+        })?;
+        tx.execute_batch(
+            "CREATE TEMP TRIGGER IF NOT EXISTS hold AFTER UPDATE OF password ON users \
+             BEGIN SELECT hold(); END",
+        )
+    })
+    .await
+    .unwrap();
+    (held, release)
 }

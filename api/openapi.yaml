@@ -318,6 +318,67 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /auth/password-resets/check:
+    post:
+      tags: [Auth]
+      summary: Check a password reset link's code
+      description: |
+        Whose password a reset link's code can still set (`requirements/users.md` §3). The code
+        travels in the body, never in a URL. A code that is unknown, already used, replaced or
+        expired, or whose account is suspended, is `404`, the same answer for each.
+      operationId: checkPasswordReset
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CheckPasswordResetRequest' }
+      responses:
+        '200':
+          description: The code is live.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PasswordResetAccount' }
+        '404':
+          description: '`not_found` — the code is unknown, used, replaced or expired, or its account is suspended.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /auth/password-resets/redeem:
+    post:
+      tags: [Auth]
+      summary: Set a password with a reset link
+      description: |
+        Sets the account's password and uses up the link (`requirements/users.md` §3). Every
+        device of the account is signed out: each later request with its token is `401
+        session_revoked` with `credentials_changed`, and its realtime connections are sent
+        `sessionRevoked` and closed. No one is signed in, and no session cookie is set: the
+        person then logs in with the new password. A code that is not live is `404`, as
+        `checkPasswordReset` answers, before the password is looked at. One code sets one
+        password, however many redeem it at once. Recorded in the audit log, with no actor.
+      operationId: redeemPasswordReset
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RedeemPasswordResetRequest' }
+      responses:
+        '204': { description: The password is set. }
+        '404':
+          description: '`not_found` — the code is unknown, used, replaced or expired, or its account is suspended.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: '`weak_password` — the password is too easy to guess; `detail` says why. The link stays live.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
   # ───────────────────────────── Account ─────────────────────────────
   /me:
     get:
@@ -2403,6 +2464,53 @@ paths:
         '204': { description: No Content }
         default: { $ref: '#/components/responses/Problem' }
 
+  /admin/users/{userId}/password-reset:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Admin]
+      summary: Issue a password reset link
+      description: |
+        Gives the account a password reset link that lasts 24 hours, replacing any earlier one,
+        and answers its `code`, shown this once: only a hash of it is kept, and no later answer
+        repeats it. The client builds the link with the code in its fragment, `/reset#<code>`.
+        Nothing else changes: the account's password and devices keep working until the link
+        is used (`redeemPasswordReset`), and the admin never learns or sets the password. A
+        suspended account may be given a link, which cannot be used while it is suspended;
+        suspending an account clears its link.
+
+        `password` is the caller's own current password, checked as `changeMyPassword` checks
+        it: a wrong one is `403 wrong_password`, and past the sign-in limits the request is
+        `429`. An admin issues a link for a user; the owner for an admin or a user. No one
+        issues one for the owner or themselves: `403`. An account that does not exist or is
+        being deleted is `404`. Recorded in the audit log as `password_reset_issued`. This
+        operation ignores `Idempotency-Key`, since replaying its answer would keep the code.
+      operationId: adminIssuePasswordReset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IssuePasswordResetRequest' }
+      responses:
+        '201':
+          description: Issued.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IssuedPasswordReset' }
+        '403':
+          description: |
+            `wrong_password` — `password` is not the caller's current password, or it changed
+            while the request was handled. `forbidden` — the rank rule does not let the caller
+            act on this account; `detail` says why.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Problem' }
+
   # ───────────────────────────── Admin: audit log ─────────────────────────────
   /admin/audit-log:
     get:
@@ -3331,6 +3439,38 @@ components:
       properties:
         currentPassword: { type: string, format: password }
         newPassword: { type: string, format: password }
+
+    IssuePasswordResetRequest:
+      type: object
+      required: [password]
+      properties:
+        password: { type: string, format: password, description: "The caller's own current password." }
+
+    IssuedPasswordReset:
+      type: object
+      required: [code, expiresAt]
+      properties:
+        code: { type: string, description: "The link's code, shown once." }
+        expiresAt: { type: string, format: date-time }
+
+    CheckPasswordResetRequest:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string, description: "The reset link's code, from the link's fragment." }
+
+    PasswordResetAccount:
+      type: object
+      required: [username]
+      properties:
+        username: { type: string }
+
+    RedeemPasswordResetRequest:
+      type: object
+      required: [code, password]
+      properties:
+        code: { type: string, description: "The reset link's code, from the link's fragment." }
+        password: { type: string, format: password, description: The new password. }
 
     ReclaimedDeviceId:
       type: string

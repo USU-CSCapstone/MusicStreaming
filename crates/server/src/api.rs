@@ -137,6 +137,8 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/login", signed_out(post(login::login)))
         .route("/auth/invites/check", signed_out(post(invites::redeem::check)))
         .route("/auth/invites/redeem", signed_out(post(invites::redeem::redeem)))
+        .route("/auth/password-resets/check", signed_out(post(password::reset::check)))
+        .route("/auth/password-resets/redeem", signed_out(post(password::reset::redeem)))
         .merge(signed_in)
         .merge(admin)
         .route_layer(middleware::from_fn_with_state(state.clone(), setup::require));
@@ -202,7 +204,9 @@ mod tests {
         let cases = [
             (app.clone(), "/api/v1/auth/login"),
             (app.clone(), "/api/v1/auth/invites/check"),
-            (app, "/api/v1/auth/invites/redeem"),
+            (app.clone(), "/api/v1/auth/invites/redeem"),
+            (app.clone(), "/api/v1/auth/password-resets/check"),
+            (app, "/api/v1/auth/password-resets/redeem"),
             (new_server, "/api/v1/setup"),
         ];
         for (app, uri) in cases {
