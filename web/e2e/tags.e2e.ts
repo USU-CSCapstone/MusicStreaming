@@ -105,37 +105,12 @@ test('on a phone, a tag type opens as a sheet', async ({ page }) => {
 	await expect(titles(page)).toHaveText(['Signal Remix']);
 });
 
-test('a search filters from above its results, and keeps the filter when it leaves nothing', async ({
-	page,
-	server
-}) => {
-	const { Ambient, Electronic } = server.ids.tags;
+test('a search offers no tag filters', async ({ page }) => {
 	await page.goto('/search?q=signal');
-	const songs = titles(page);
-	await expect(songs).toHaveCount(3);
-	const filters = page.getByRole('group', { name: 'Filter by tags' });
-
-	await filters.getByRole('button', { name: 'Genre' }).click();
-	await page.getByRole('checkbox', { name: /Electronic/ }).check();
-	await page.getByRole('checkbox', { name: /Ambient/ }).check();
-	await expect(songs).toHaveCount(3);
-	// All of both genres is no song, though the album that holds a song of each still matches.
-	await page.getByRole('radio', { name: 'All' }).click();
-	await expect(page).toHaveURL(
-		new RegExp(`tagAll=(${Electronic}%2C${Ambient}|${Ambient}%2C${Electronic})`)
-	);
-	await expect(songs).toHaveCount(0);
-	await expect(page.getByRole('heading', { name: 'Albums' })).toBeVisible();
-	// With a genre of the other album, nothing matches, and the filter stays to change.
-	await page.getByRole('checkbox', { name: /Folk/ }).check();
-	await expect(page.getByRole('heading', { name: /with these tags/ })).toBeVisible();
-	await page.getByRole('checkbox', { name: /Folk/ }).uncheck();
-	await page.getByRole('checkbox', { name: /Ambient/ }).uncheck();
-	await page.keyboard.press('Escape');
-	await expect(songs).toHaveText(['Signal Remix']);
-
-	await filters.getByRole('button', { name: 'Clear filters' }).click();
-	await expect(songs).toHaveCount(3);
+	await expect(titles(page)).toHaveCount(3);
+	// Tags are found by name rather than applied (`requirements/search.md` §5).
+	await expect(page.getByRole('group', { name: 'Filter by tags' })).toHaveCount(0);
+	await expect(page.getByRole('main').getByRole('button', { name: 'Genre' })).toHaveCount(0);
 });
 
 test('on a phone, search leads to each tag type', async ({ page }) => {

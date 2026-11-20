@@ -9,12 +9,10 @@
 	import { albumCard, artistCard, playlistCard, type Card } from '$lib/cards';
 	import AddToPlaylistButton from '$lib/components/AddToPlaylistButton.svelte';
 	import CollectionView from '$lib/components/CollectionView.svelte';
-	import FilterPicker from '$lib/components/FilterPicker.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import SearchBox, { settler } from '$lib/components/SearchBox.svelte';
 	import TopResult from '$lib/components/TopResult.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
-	import { UNFILTERED, isFiltered, showFiltered, shownFilter } from '$lib/filters';
 	import { tagTypePlural } from '$lib/tags';
 	import type { Selected } from '$lib/recent';
 	import { searchRecipe, type PlayFrom } from '$lib/queue';
@@ -41,10 +39,6 @@
 	}
 
 	const sections = $derived(data.results?.sections ?? []);
-	const filtered = $derived(isFiltered(data.filter));
-	// The filter narrows every section, so its controls sit above them all, and stay when it
-	// leaves nothing (`requirements/tags.md` §7).
-	const filter = $derived(shownFilter(data.filter));
 	const tagTypes = $derived(data.tagTypes ?? []);
 	// Songs come in match order; sorted, they play as shown (`requirements/conventions.md` §4.1).
 	const sort = $derived(currentSort(FIELDS));
@@ -58,24 +52,18 @@
 		];
 	});
 
-	// The songs the search finds under the loaded filter, in its ranking, which the server
-	// resolves to the end. Unsorted, the songs shown are the first of them; sorted, they play as
+	// The songs the search finds, in its ranking, which the server resolves to the end. Unsorted, the songs shown are the first of them; sorted, they play as
 	// shown. The top result, a track, always plays first of them.
 	const ranked = $derived<PlayFrom | undefined>(
 		data.q
 			? {
-					recipe: searchRecipe(data.q, data.filter),
+					recipe: searchRecipe(data.q),
 					total: sections.find((s) => s.type === 'tracks')?.total ?? songs.length
 				}
 			: undefined
 	);
 	const from = $derived(sort ? undefined : ranked);
-	const context = $derived<PlayContext>({
-		type: 'search',
-		query: data.q ?? '',
-		section: 'tracks',
-		...(filtered && { filter: { tagAll: data.filter.all, tagAny: data.filter.any } })
-	});
+	const context = $derived<PlayContext>({ type: 'search', query: data.q ?? '', section: 'tracks' });
 
 	// All the songs the search finds, in its ranking, which only queues. Sorted, there is no
 	// recipe for the order shown, and the rows queue one by one.
@@ -116,25 +104,6 @@
 <!-- The sidebar holds the box on wide screens; at phone width this page does. -->
 <div class="box"><SearchBox /></div>
 
-{#if data.results && tagTypes.length}
-	<div class="filters" role="group" aria-label="Filter by tags">
-		{#each tagTypes as type (type.key)}
-			<FilterPicker
-				libraryId={data.library?.id ?? ''}
-				{type}
-				variant="button"
-				{filter}
-				onfilter={showFiltered}
-			/>
-		{/each}
-		{#if isFiltered(filter)}
-			<button type="button" class="link" onclick={() => showFiltered({ ...UNFILTERED })}>
-				Clear filters
-			</button>
-		{/if}
-	</div>
-{/if}
-
 {#if !data.results}
 	<p class="state muted">Search songs, albums, artists, and playlists.</p>
 	<!-- Each type's tags to browse, which on a phone, without the sidebar, are only here. -->
@@ -155,15 +124,8 @@
 			<h2>You have no music yet</h2>
 			<p class="muted">Songs appear here once the library has been scanned.</p>
 		{:else}
-			<h2>No music matches “{data.q}”{filtered ? ' with these tags' : ''}</h2>
-			{#if filtered}
-				<p class="muted">
-					Try taking a tag out, or
-					<button type="button" class="link" onclick={() => showFiltered({ ...UNFILTERED })}>
-						search without them</button
-					>.
-				</p>
-			{:else if data.results.nearMisses.length}
+			<h2>No music matches “{data.q}”</h2>
+			{#if data.results.nearMisses.length}
 				<p class="muted">
 					Did you mean
 					{#each data.results.nearMisses as miss, i (miss)}
@@ -197,7 +159,6 @@
 					tracks={marks.unhidden(data.lib, songs)}
 					{sort}
 					onsort={showSorted}
-					filter={data.filter}
 					{context}
 					{from}
 					onplay={(track) => settler.settle({ type: 'track', id: track.id })}
@@ -217,14 +178,6 @@
 
 	section {
 		margin-bottom: var(--space-6);
-	}
-
-	.filters {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: var(--space-2);
-		margin-bottom: var(--space-5);
 	}
 
 	.browse {
@@ -283,14 +236,5 @@
 		.box {
 			display: block;
 		}
-	}
-
-	.link {
-		padding: 0;
-		border: 0;
-		background: none;
-		color: var(--accent);
-		font: inherit;
-		cursor: pointer;
 	}
 </style>
