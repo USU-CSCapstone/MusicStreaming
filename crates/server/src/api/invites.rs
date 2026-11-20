@@ -16,6 +16,7 @@ use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
+use super::accounts::manager_rank;
 use super::extract::{self, Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Total, Unknown};
 use super::session::{new_token, token_hash};
@@ -149,7 +150,8 @@ pub struct Created {
 }
 
 /// `adminCreateInvite`: makes an invite for the libraries, which must all exist, and answers it
-/// with its code. Only the code's hash is stored.
+/// with its code. Only the code's hash is stored. A creator who is no longer an active admin or
+/// the owner when the invite is written is `403`, so no invite outlives their authority.
 pub async fn create(
     State(db): State<Arc<Database>>,
     Caller { user, .. }: Caller,
@@ -163,6 +165,7 @@ pub async fn create(
     let hash = token_hash(&code);
     let invite = db
         .try_write(move |tx| {
+            manager_rank(tx, user)?;
             for &Id(library) in &request.library_ids {
                 let exists = tx
                     .prepare_cached("SELECT 1 FROM libraries WHERE id = ?1")?
