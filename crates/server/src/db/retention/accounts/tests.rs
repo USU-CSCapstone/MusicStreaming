@@ -494,16 +494,16 @@ fn at_scale(tx: &Transaction<'_>) -> Result<()> {
 /// reached through every installed plugin and library. It holds with no statistics, as the server
 /// keeps for libraries under
 /// [`STATISTICS_FROM_TRACKS`](jewelcase_catalog::statistics::STATISTICS_FROM_TRACKS) tracks, and
-/// with those of a large database ([`at_scale`]). Statistics gathered while an account table is
-/// smaller than about a chunk (once the libraries pass that many tracks) may make scanning it
-/// the cheaper plan, which reads no more than the chunk's lookups would; the test does not
-/// gather them over these few rows.
+/// with those gathered over a household's few rows, which a server keeps until its tables grow
+/// tenfold, and with those of a large database ([`at_scale`]).
 #[test]
 fn every_statement_of_the_task_uses_an_index() {
     let (_temp, db) = open();
-    for statistics in ["none", "at scale"] {
-        if statistics == "at scale" {
-            db.write_blocking(at_scale).unwrap();
+    for statistics in ["none", "household", "at scale"] {
+        match statistics {
+            "household" => db.write_blocking(|tx| tx.execute_batch("ANALYZE")).unwrap(),
+            "at scale" => db.write_blocking(at_scale).unwrap(),
+            _ => {}
         }
         let statements = TABLES
             .iter()

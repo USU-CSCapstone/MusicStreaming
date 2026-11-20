@@ -48,7 +48,7 @@ const TABLES: [(&str, &str, usize); 15] = [
     ),
     (
         "playlists",
-        "DELETE FROM playlists WHERE rowid IN \
+        "DELETE FROM playlists WHERE user_id = ?1 AND rowid IN \
          (SELECT rowid FROM playlists WHERE user_id = ?1 LIMIT ?2)",
         100,
     ),
@@ -90,7 +90,7 @@ const TABLES: [(&str, &str, usize); 15] = [
     ),
     (
         "queue_lists",
-        "DELETE FROM queue_lists WHERE rowid IN \
+        "DELETE FROM queue_lists WHERE user_id = ?1 AND rowid IN \
          (SELECT rowid FROM queue_lists WHERE user_id = ?1 LIMIT ?2)",
         1,
     ),
@@ -108,7 +108,7 @@ const TABLES: [(&str, &str, usize); 15] = [
     ),
     (
         "devices",
-        "DELETE FROM devices WHERE rowid IN \
+        "DELETE FROM devices WHERE user_id = ?1 AND rowid IN \
          (SELECT rowid FROM devices WHERE user_id = ?1 LIMIT ?2)",
         100,
     ),
