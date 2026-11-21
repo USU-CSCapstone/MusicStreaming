@@ -156,6 +156,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/password-resets/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check a password reset link's code
+         * @description Whose password a reset link's code can still set (`requirements/users.md` §3). The code
+         *     travels in the body, never in a URL. A code that is unknown, already used, replaced or
+         *     expired, or whose account is suspended, is `404`, the same answer for each.
+         */
+        post: operations["checkPasswordReset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/password-resets/redeem": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set a password with a reset link
+         * @description Sets the account's password and uses up the link (`requirements/users.md` §3). Every
+         *     device of the account is signed out: each later request with its token is `401
+         *     session_revoked` with `credentials_changed`, and its realtime connections are sent
+         *     `sessionRevoked` and closed. No one is signed in, and no session cookie is set: the
+         *     person then logs in with the new password. A code that is not live is `404`, as
+         *     `checkPasswordReset` answers, before the password is looked at. One code sets one
+         *     password, however many redeem it at once. Recorded in the audit log, with no actor.
+         */
+        post: operations["redeemPasswordReset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me": {
         parameters: {
             query?: never;
@@ -1816,6 +1864,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/users/{userId}/password-reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a password reset link
+         * @description Gives the account a password reset link that lasts 24 hours, replacing any earlier one,
+         *     and answers its `code`, shown this once: only a hash of it is kept, and no later answer
+         *     repeats it. The client builds the link with the code in its fragment, `/reset#<code>`.
+         *     Nothing else changes: the account's password and devices keep working until the link
+         *     is used (`redeemPasswordReset`), and the admin never learns or sets the password. A
+         *     suspended account may be given a link, which cannot be used while it is suspended;
+         *     suspending an account clears its link.
+         *
+         *     `password` is the caller's own current password, checked as `changeMyPassword` checks
+         *     it: a wrong one is `403 wrong_password`, and past the sign-in limits the request is
+         *     `429`. An admin issues a link for a user; the owner for an admin or a user. No one
+         *     issues one for the owner or themselves: `403`. An account that does not exist or is
+         *     being deleted is `404`. Recorded in the audit log as `password_reset_issued`. This
+         *     operation ignores `Idempotency-Key`, since replaying its answer would keep the code.
+         */
+        post: operations["adminIssuePasswordReset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/audit-log": {
         parameters: {
             query?: never;
@@ -2311,6 +2394,35 @@ export interface components {
             currentPassword: string;
             /** Format: password */
             newPassword: string;
+        };
+        IssuePasswordResetRequest: {
+            /**
+             * Format: password
+             * @description The caller's own current password.
+             */
+            password: string;
+        };
+        IssuedPasswordReset: {
+            /** @description The link's code, shown once. */
+            code: string;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        CheckPasswordResetRequest: {
+            /** @description The reset link's code, from the link's fragment. */
+            code: string;
+        };
+        PasswordResetAccount: {
+            username: string;
+        };
+        RedeemPasswordResetRequest: {
+            /** @description The reset link's code, from the link's fragment. */
+            code: string;
+            /**
+             * Format: password
+             * @description The new password.
+             */
+            password: string;
         };
         /**
          * @description The device's ID from before it was logged out with `credentials_changed`. The device
@@ -4443,6 +4555,81 @@ export interface operations {
              * @description `weak_password` — the password is too easy to guess; `detail` says why.
              *     `validation_failed` — `username`, `displayName` or `device` is malformed.
              */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    checkPasswordReset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckPasswordResetRequest"];
+            };
+        };
+        responses: {
+            /** @description The code is live. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasswordResetAccount"];
+                };
+            };
+            /** @description `not_found` — the code is unknown, used, replaced or expired, or its account is suspended. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    redeemPasswordReset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedeemPasswordResetRequest"];
+            };
+        };
+        responses: {
+            /** @description The password is set. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `not_found` — the code is unknown, used, replaced or expired, or its account is suspended. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description `weak_password` — the password is too easy to guess; `detail` says why. The link stays live. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -6709,6 +6896,47 @@ export interface operations {
                 };
                 content?: never;
             };
+            default: components["responses"]["Problem"];
+        };
+    };
+    adminIssuePasswordReset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IssuePasswordResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Issued. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssuedPasswordReset"];
+                };
+            };
+            /**
+             * @description `wrong_password` — `password` is not the caller's current password, or it changed
+             *     while the request was handled. `forbidden` — the rank rule does not let the caller
+             *     act on this account; `detail` says why.
+             */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
             default: components["responses"]["Problem"];
         };
     };

@@ -5,7 +5,7 @@ use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, post, put};
 
-use crate::api::{AppState, accounts, audit, invites, plugins, scans};
+use crate::api::{AppState, accounts, audit, invites, password, plugins, scans};
 
 /// Every route under `/admin`.
 pub fn router() -> Router<AppState> {
@@ -46,5 +46,7 @@ pub fn router() -> Router<AppState> {
 
 /// The routes under `/admin` that ignore `Idempotency-Key`, because they answer a code once.
 pub fn unkeyed() -> Router<AppState> {
-    Router::new().route("/admin/invites", post(invites::create))
+    Router::new()
+        .route("/admin/invites", post(invites::create))
+        .route("/admin/users/{user_id}/password-reset", post(password::reset::issue))
 }

@@ -1,22 +1,21 @@
 //! Changing one's own password.
 
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
 use axum::http::StatusCode;
 use futures_util::{SinkExt, StreamExt};
 use rusqlite::Connection;
-use rusqlite::functions::FunctionFlags;
 use serde_json::{Value, json};
-use tokio::sync::oneshot;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::api::password::{hash_new, hold_checks};
 use crate::api::session::token_hash;
 use crate::api::testing::socket::{Socket, connect_with, next, next_of, serve};
 use crate::api::testing::{
-    TOKEN, add_device, add_signed_out_device, app, call, conn, eventually, send_json,
+    TOKEN, add_device, add_signed_out_device, app, call, conn, eventually,
+    hold_next_password_write, send_json,
 };
 use crate::db::testing::User;
 use crate::db::{Database, now_ms};
@@ -185,37 +184,13 @@ async fn the_remaining_devices_are_sent_the_new_list() {
     }
 }
 
-/// Holds the writer inside the next write that changes a password, until the sender is
-/// dropped; the receiver hears when it is held.
-async fn hold_next_change(db: &Database) -> (oneshot::Receiver<()>, mpsc::Sender<()>) {
-    let (entered, held) = oneshot::channel();
-    let (release, released) = mpsc::channel();
-    let hold = Mutex::new(Some((entered, released)));
-    db.write(move |tx| {
-        tx.create_scalar_function("hold", 0, FunctionFlags::SQLITE_UTF8, move |_| {
-            if let Some((entered, released)) = hold.lock().unwrap().take() {
-                entered.send(()).unwrap();
-                let _ = released.recv();
-            }
-            Ok(0)
-        })?;
-        tx.execute_batch(
-            "CREATE TEMP TRIGGER IF NOT EXISTS hold AFTER UPDATE OF password ON users \
-             BEGIN SELECT hold(); END",
-        )
-    })
-    .await
-    .unwrap();
-    (held, release)
-}
-
 #[tokio::test]
 async fn a_change_whose_request_is_dropped_mid_write_still_closes_the_other_sockets() {
     let (_temp, db, app) = accounts().await;
     let address = serve(app.clone()).await;
     let mut phone = connect_with(address, "phone-token").await;
 
-    let (held, release) = hold_next_change(&db).await;
+    let (held, release) = hold_next_password_write(&db).await;
     let request = tokio::spawn({
         let app = app.clone();
         async move { change(&app, "user-token", PASSWORD, NEW).await }
