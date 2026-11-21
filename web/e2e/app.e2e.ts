@@ -1,5 +1,5 @@
 import { type Server, setupOwner } from './server';
-import { expect, login, test } from './test';
+import { createUser, expect, login, test } from './test';
 
 test.describe('on a server of its own, logged out', () => {
 	test.use({ loggedIn: false });
@@ -263,4 +263,20 @@ test('lyrics follow the playing track', async ({ page }) => {
 	await expect(panel.getByText('No lyrics for this song.')).toBeVisible();
 	await page.keyboard.press('Escape');
 	await expect(panel).toBeHidden();
+});
+
+test('a user who opens an admin page is told it is for admins', async ({ browser, server }) => {
+	const user = await createUser(server, [server.ids.library]);
+	const context = await browser.newContext({ baseURL: server.url });
+	try {
+		const page = await context.newPage();
+		await login(page, server.url, user.username, user.password);
+		for (const path of ['/admin/invites', '/admin/plugins']) {
+			await page.goto(path);
+			await expect(page.getByRole('heading', { name: 'Admins only' })).toBeVisible();
+			await expect(page.getByText('This page is for the admins of this server.')).toBeVisible();
+		}
+	} finally {
+		await context.close();
+	}
 });
