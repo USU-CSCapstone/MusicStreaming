@@ -4,11 +4,12 @@
 //! Rows go once they are older than [`WINDOW_MS`]: finished scans, but each library's last
 //! that ran and last completed; login attempts; ended plays' events for the `played` hook;
 //! recent searches and what the `searched` hook noted of them; invites redeemed, revoked or
-//! expired that long ago; admin actions after a year; kept queues parked that long
+//! expired that long ago; kept queues parked that long
 //! ago, with the lists no queue uses after them; and tracks missing that long,
 //! with whatever of the catalog goes with them. A request to forget searches (`stopped`) is
 //! kept until it is delivered instead, however old it is. Art and biographies that nothing
-//! points at go whatever their age, and idempotency keys go after 8 days, not the window.
+//! points at go whatever their age, idempotency keys after 8 days and admin actions after a
+//! year, not the window.
 //! Accounts marked for deletion are emptied, and their rows deleted ([`accounts`]).
 //!
 //! The sweep is one write per chunk of rows ([`sweep`]), so a write queued behind it waits for
