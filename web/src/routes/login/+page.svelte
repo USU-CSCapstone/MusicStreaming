@@ -6,7 +6,7 @@
 	import AuthForm from '$lib/components/AuthForm.svelte';
 	import { connectivity } from '$lib/connectivity.svelte';
 	import { thisDevice } from '$lib/device';
-	import { setLogoutPending } from '$lib/last-known';
+	import { clearReclaimedDevice, reclaimedDevice, setLogoutPending } from '$lib/last-known';
 	import { finishLogout } from '$lib/logout';
 	import { DISCARDED } from '$lib/sync/store';
 
@@ -48,7 +48,12 @@
 		// login makes; one it still cannot take is dropped, as this login is the newer.
 		await finishLogout(fetch);
 		try {
-			await login(fetch, { username, password, device: thisDevice() });
+			await login(fetch, {
+				username,
+				password,
+				device: thisDevice(),
+				deviceId: reclaimedDevice() ?? undefined
+			});
 		} catch (e) {
 			if (e instanceof ApiError && e.code === 'invalid_credentials') {
 				throw new Error('The username or password is wrong.', { cause: e });
@@ -59,6 +64,8 @@
 			}
 			throw e;
 		}
+		// Kept through a refused attempt, as the old password may be tried first.
+		clearReclaimedDevice();
 		setLogoutPending(false);
 		// eslint-disable-next-line svelte/no-navigation-without-resolve -- a path of this app, checked in next()
 		await goto(next(), { invalidateAll: true });

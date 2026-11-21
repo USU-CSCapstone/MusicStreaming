@@ -8,6 +8,8 @@ const fake = vi.hoisted(() => ({
 	role: 'owner' as 'owner' | 'admin' | 'user',
 	libraries: {} as Record<string, object>,
 	signedOutOthers: 0,
+	passwordChanges: [] as object[],
+	passwordFailure: null as Error | null,
 	failure: null as Error | null
 }));
 
@@ -23,6 +25,10 @@ vi.mock('$lib/realtime.svelte', () => ({
 }));
 vi.mock('$lib/api/client', async (original) => ({
 	...(await original<object>()),
+	changeMyPassword: async (_f: unknown, body: object) => {
+		fake.passwordChanges.push(body);
+		if (fake.passwordFailure) throw fake.passwordFailure;
+	},
 	signOutMyOtherDevices: async () => {
 		fake.signedOutOthers++;
 		if (fake.failure) throw fake.failure;
@@ -69,6 +75,8 @@ beforeEach(() => {
 	fake.libraries = {};
 	fake.signedOutOthers = 0;
 	fake.failure = null;
+	fake.passwordChanges = [];
+	fake.passwordFailure = null;
 	playback.devices = [];
 	localStorage.clear();
 	// The wait for the server is never over, so the page does not go to the login page.
@@ -329,4 +337,65 @@ it("shows the server's reason in the dialog when signing out the others fails", 
 		.getByRole('button', { name: 'Sign out all other devices' })
 		.click();
 	await expect.element(page.getByRole('alert')).toHaveTextContent(/^Internal Server Error$/);
+});
+
+/** Fills the change-password form: the current password, the new one, and the new one again. */
+async function fillPassword(current: string, next: string, again: string) {
+	await page.getByLabelText('Current password').fill(current);
+	await page.getByLabelText('New password', { exact: true }).fill(next);
+	await page.getByLabelText('New password again').fill(again);
+	await page.getByRole('button', { name: 'Change password' }).click();
+}
+
+it('changes the password, clears the form and says the other devices were signed out', async () => {
+	render(Account, { data: { connectable: [] } } as never);
+	await expect
+		.element(page.getByLabelText('Current password'))
+		.toHaveAttribute('autocomplete', 'current-password');
+	await expect
+		.element(page.getByLabelText('New password', { exact: true }))
+		.toHaveAttribute('autocomplete', 'new-password');
+	await fillPassword('old one', 'a brand new passphrase', 'a brand new passphrase');
+	await expect
+		.element(page.getByRole('status'))
+		.toHaveTextContent('Your password was changed and your other devices were signed out.');
+	expect(fake.passwordChanges).toEqual([
+		{ currentPassword: 'old one', newPassword: 'a brand new passphrase' }
+	]);
+	await expect.element(page.getByLabelText('Current password')).toHaveValue('');
+	await expect.element(page.getByLabelText('New password', { exact: true })).toHaveValue('');
+	await expect.element(page.getByLabelText('New password again')).toHaveValue('');
+});
+
+it.each([
+	[403, 'wrong_password', 'Your current password is not correct.'],
+	[429, 'rate_limited', 'Too many wrong passwords. Wait a moment and try again.']
+])(
+	'shows the server’s %i %s message, and keeps the form and the session',
+	async (status, code, detail) => {
+		fake.passwordFailure = new ApiError(status, code, detail);
+		render(Account, { data: { connectable: [] } } as never);
+		await fillPassword('wrong', 'a brand new passphrase', 'a brand new passphrase');
+		await expect.element(page.getByRole('alert')).toHaveTextContent(detail);
+		await expect.element(page.getByLabelText('Current password')).toHaveValue('wrong');
+		await expect.element(page.getByRole('status')).not.toBeInTheDocument();
+		expect(fake.calls).not.toContain('wipe');
+	}
+);
+
+it('shows a weak password’s message as the server sends it', async () => {
+	const detail = 'This is a top-10 common password. Choose a longer or less predictable password.';
+	fake.passwordFailure = new ApiError(422, 'weak_password', detail);
+	render(Account, { data: { connectable: [] } } as never);
+	await fillPassword('old one', 'password', 'password');
+	await expect.element(page.getByRole('alert')).toHaveTextContent(detail);
+});
+
+it('refuses new passwords that differ, without sending', async () => {
+	render(Account, { data: { connectable: [] } } as never);
+	await fillPassword('old one', 'a brand new passphrase', 'a different one');
+	await expect
+		.element(page.getByRole('alert'))
+		.toHaveTextContent('The new passwords do not match.');
+	expect(fake.passwordChanges).toEqual([]);
 });
