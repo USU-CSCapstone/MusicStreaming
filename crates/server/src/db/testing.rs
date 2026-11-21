@@ -43,6 +43,13 @@ pub fn access(conn: &Connection, user: i64, library: i64) -> Result<()> {
     .map(drop)
 }
 
+/// Marks account `user` as being deleted, as the first write of a deletion does: no name, and
+/// gone to every reader.
+pub fn mark_deleting(conn: &Connection, user: i64) -> Result<()> {
+    conn.execute("UPDATE users SET status = 'deleting', username = NULL WHERE id = ?1", [user])
+        .map(drop)
+}
+
 /// An account, created at the epoch.
 pub struct User {
     pub id: i64,
