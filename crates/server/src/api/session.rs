@@ -78,6 +78,25 @@ pub fn register(
     Ok(Session { token: None, user: me::user(tx, user)?, device })
 }
 
+/// Like [`register`], but signs device `reclaim` in again instead when it is `user`'s and was
+/// signed out by a password change ([`devices::reclaim`]).
+pub fn register_or_reclaim(
+    tx: &Transaction,
+    user: i64,
+    device: &DeviceRegistration,
+    hash: &[u8; 32],
+    reclaim: Option<i64>,
+) -> rusqlite::Result<Session> {
+    let reclaimed = match reclaim {
+        Some(id) => devices::reclaim(tx, user, id, device, hash)?,
+        None => None,
+    };
+    match reclaimed {
+        Some(device) => Ok(Session { token: None, user: me::user(tx, user)?, device }),
+        None => register(tx, user, device, hash),
+    }
+}
+
 impl Session {
     /// The `status` response to a sign-in with `token`: this session as JSON, and the [`cookie`]
     /// for `prefix` and `from`. The body carries `token` too unless the request's `headers` hold
