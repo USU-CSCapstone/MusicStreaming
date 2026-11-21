@@ -11,6 +11,8 @@ use crate::db::now_ms;
 pub enum Action {
     /// An invite made an account, with these libraries.
     AccountCreated { invite_id: i64, library_ids: Vec<i64> },
+    /// An account was granted these libraries and lost these, each list ascending.
+    AccessChanged { granted: Vec<i64>, revoked: Vec<i64> },
 }
 
 impl Action {
@@ -18,15 +20,21 @@ impl Action {
     fn name(&self) -> &'static str {
         match self {
             Self::AccountCreated { .. } => "account_created",
+            Self::AccessChanged { .. } => "access_changed",
         }
     }
 
     /// The row's `detail`, an object whose IDs are decimal strings, as the API shows them.
     fn detail(&self) -> Value {
+        let ids = |ids: &[i64]| ids.iter().map(i64::to_string).collect::<Vec<_>>();
         match self {
             Self::AccountCreated { invite_id, library_ids } => json!({
                 "inviteId": invite_id.to_string(),
-                "libraryIds": library_ids.iter().map(i64::to_string).collect::<Vec<_>>(),
+                "libraryIds": ids(library_ids),
+            }),
+            Self::AccessChanged { granted, revoked } => json!({
+                "granted": ids(granted),
+                "revoked": ids(revoked),
             }),
         }
     }

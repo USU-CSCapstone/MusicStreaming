@@ -31,6 +31,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/admin/libraries/{library_id}/scans", get(scans::list).post(scans::start))
         .route("/admin/users", get(accounts::list))
+        .route("/admin/users/{user_id}/libraries", put(accounts::access::set))
         .route("/admin/invites", get(invites::list))
         .route("/admin/invites/{invite_id}", delete(invites::revoke))
 }

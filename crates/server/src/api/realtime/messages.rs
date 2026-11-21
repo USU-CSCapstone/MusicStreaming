@@ -94,6 +94,9 @@ pub enum ServerMessage {
     SessionRevoked {
         reason: Revoked,
     },
+    /// The account's role or libraries changed, so a device fetches the account and its
+    /// libraries again.
+    AccessChanged,
 }
 
 /// Why a device was signed out: the spec's `reason` in `sessionRevoked` and in a
