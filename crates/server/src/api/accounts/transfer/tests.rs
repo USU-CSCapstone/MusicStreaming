@@ -369,6 +369,21 @@ async fn a_transfer_ends_the_reset_link_of_the_former_owner() {
     assert_eq!(reset_pending(&app, "admin-token", "1").await, false);
 }
 
+/// Only the owner can issue a link for an admin, so the former owner's links for admins go with
+/// their rank; a link for a user stays, as an admin may still reset a user.
+#[tokio::test]
+async fn a_transfer_ends_the_links_the_former_owner_issued_for_admins_but_not_users() {
+    let (_temp, _state, app) = accounts().await;
+    let admin = issue_reset(&app, 3).await;
+    let user = issue_reset(&app, 4).await;
+
+    assert_eq!(transfer(&app, TOKEN, 2, PASSWORD).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(check_reset(&app, &admin).await, StatusCode::NOT_FOUND);
+    assert_eq!(reset_pending(&app, "admin-token", "3").await, false);
+    assert_eq!(check_reset(&app, &user).await, StatusCode::OK);
+    assert_eq!(reset_pending(&app, "admin-token", "4").await, true);
+}
+
 #[tokio::test]
 async fn both_accounts_devices_alone_are_told() {
     let (_temp, _state, app) = accounts().await;
