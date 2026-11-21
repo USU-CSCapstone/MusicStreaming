@@ -64,20 +64,26 @@ describe('the app layout load', () => {
 		expect(catalog.signOut).toHaveBeenCalled();
 	});
 
-	it('shows the invite page without asking who is signed in, so an ended session’s files stay', async () => {
-		kept.owner = '1';
-		await expect(loadAt('/invite')).resolves.toEqual({ me: null, library: null, tagTypes: [] });
-		expect(api.getMe).not.toHaveBeenCalled();
-		expect(catalog.signOut).not.toHaveBeenCalled();
-		expect(kept.claim).not.toHaveBeenCalled();
-	});
+	it.each(['/invite', '/reset'])(
+		'shows %s without asking who is signed in, so an ended session’s files stay',
+		async (route) => {
+			kept.owner = '1';
+			await expect(loadAt(route)).resolves.toEqual({ me: null, library: null, tagTypes: [] });
+			expect(api.getMe).not.toHaveBeenCalled();
+			expect(catalog.signOut).not.toHaveBeenCalled();
+			expect(kept.claim).not.toHaveBeenCalled();
+		}
+	);
 
-	it('sends the invite page to setup on a new server, and to the login page while a logout waits', async () => {
-		api.getServerInfo.mockResolvedValueOnce({ setupRequired: true });
-		await expect(loadAt('/invite')).rejects.toMatchObject({ status: 307, location: '/setup' });
-		kept.pending = true;
-		await expect(loadAt('/invite')).rejects.toMatchObject({ status: 307, location: '/login' });
-	});
+	it.each(['/invite', '/reset'])(
+		'sends %s to setup on a new server, and to the login page while a logout waits',
+		async (route) => {
+			api.getServerInfo.mockResolvedValueOnce({ setupRequired: true });
+			await expect(loadAt(route)).rejects.toMatchObject({ status: 307, location: '/setup' });
+			kept.pending = true;
+			await expect(loadAt(route)).rejects.toMatchObject({ status: 307, location: '/login' });
+		}
+	);
 
 	it('wipes what another account left before this one connects', async () => {
 		kept.owner = '1';

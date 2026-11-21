@@ -23,6 +23,9 @@ import type {
 	CreatedInvite,
 	Device,
 	InviteCreate,
+	IssuedPasswordReset,
+	PasswordResetAccount,
+	RedeemPasswordResetRequest,
 	Invite,
 	InvitePage,
 	KeptQueue,
@@ -228,6 +231,14 @@ export const login = (f: Fetch, request: LoginRequest) =>
 /** Changes the caller's password; every other device of theirs is signed out. */
 export const changeMyPassword = (f: Fetch, request: ChangePasswordRequest) =>
 	send<void>(f, 'PUT', '/me/password', request);
+
+/** Names the account a password reset link is for; rejects with `404` once the link is not live. */
+export const checkPasswordReset = (f: Fetch, code: string) =>
+	send<PasswordResetAccount>(f, 'POST', '/auth/password-resets/check', { code });
+
+/** Sets the account's new password with a reset link; it does not sign anyone in. */
+export const redeemPasswordReset = (f: Fetch, request: RedeemPasswordResetRequest) =>
+	send<void>(f, 'POST', '/auth/password-resets/redeem', request);
 
 /** Logs this browser out: the server forgets the device and clears the cookie. */
 export const logout = (f: Fetch) => send<void>(f, 'POST', '/auth/logout');
@@ -583,6 +594,18 @@ export const adminListUsers = (f: Fetch, query: { q?: string; cursor?: string } 
 /** Suspends an account, which signs it out everywhere, or restores it; answers the account. */
 export const adminSetUserStatus = (f: Fetch, userId: string, status: AdminUser['status']) =>
 	send<AdminUser>(f, 'PUT', `/admin/users/${encodeURIComponent(userId)}/status`, { status });
+
+/**
+ * Makes a link that lets the account set a new password, replacing any pending one; the admin
+ * confirms with their own password, and the code is in the answer and nowhere else.
+ */
+export const adminIssuePasswordReset = (f: Fetch, userId: string, request: { password: string }) =>
+	send<IssuedPasswordReset>(
+		f,
+		'POST',
+		`/admin/users/${encodeURIComponent(userId)}/password-reset`,
+		request
+	);
 
 const adminUser = (userId: string) => `/admin/users/${encodeURIComponent(userId)}`;
 

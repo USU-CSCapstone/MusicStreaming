@@ -2,7 +2,8 @@ import { page } from 'vitest/browser';
 import { afterEach, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 
-vi.mock('$app/state', () => ({ page: { url: new URL('https://jewelcase.test/login') } }));
+const at = vi.hoisted(() => ({ url: new URL('https://jewelcase.test/login') }));
+vi.mock('$app/state', () => ({ page: at }));
 vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
 const ending = vi.hoisted(() => ({ now: false }));
 vi.mock('$lib/api/client', async (original) => ({
@@ -14,6 +15,7 @@ const { default: Login } = await import('./+page.svelte');
 const { connectivity } = await import('$lib/connectivity.svelte');
 
 afterEach(() => {
+	at.url = new URL('https://jewelcase.test/login');
 	sessionStorage.clear();
 	localStorage.clear();
 	ending.now = false;
@@ -89,4 +91,18 @@ it('keeps the device ID through a refused login, for the attempt with the new pa
 
 it('sends no device ID when none was kept', async () => {
 	expect(await logInAs()).not.toHaveProperty('deviceId');
+});
+
+it('says a reset password was changed, for the person sent here after choosing one', async () => {
+	at.url = new URL('https://jewelcase.test/login?reset=1');
+	render(Login);
+	await expect
+		.element(page.getByText('Your password was changed. Log in with the new one.'))
+		.toBeVisible();
+});
+
+it('says nothing of a password change on an ordinary visit', async () => {
+	render(Login);
+	await expect.element(page.getByLabelText('Username')).toBeVisible();
+	await expect.element(page.getByText('Your password was changed')).not.toBeInTheDocument();
 });

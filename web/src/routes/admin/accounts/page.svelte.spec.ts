@@ -16,6 +16,7 @@ const fake = vi.hoisted(() => ({
 	more: null as unknown,
 	asked: [] as unknown[],
 	set: [] as [string, string][],
+	issued: [] as [string, string][],
 	answer: null as unknown,
 	fail: null as Error | null,
 	went: [] as string[],
@@ -51,6 +52,11 @@ vi.mock('$lib/api/client', async (original) => ({
 	adminListUsers: async (_f: unknown, query: unknown) => {
 		fake.asked.push(query);
 		return fake.more;
+	},
+	adminIssuePasswordReset: async (_f: unknown, id: string, body: { password: string }) => {
+		fake.issued.push([id, body.password]);
+		if (fake.fail) throw fake.fail;
+		return { code: 'reset-code', expiresAt: '2026-11-21T10:00:00Z' };
 	},
 	adminSetUserStatus: async (_f: unknown, id: string, status: string) => {
 		fake.set.push([id, status]);
@@ -130,6 +136,7 @@ const buttonsOn = (name: string) =>
 
 beforeEach(() => {
 	fake.set = [];
+	fake.issued = [];
 	fake.asked = [];
 	fake.fail = null;
 	fake.went = [];
@@ -196,14 +203,52 @@ it('offers actions only on accounts the viewer outranks', async () => {
 	expect(buttonsOn('olga')).toBe(0);
 	expect(buttonsOn('ada')).toBe(0);
 	expect(buttonsOn('me Display')).toBe(0);
-	expect(buttonsOn('bob')).toBe(3);
+	expect(buttonsOn('bob')).toBe(4);
 	await admin.unmount();
 
 	render(Accounts, open([...rows.slice(0, 1), ...rows.slice(1)], as('owner')) as never);
 	await expect.element(page.getByText('bob Display')).toBeVisible();
 	expect(buttonsOn('olga')).toBe(0);
-	expect(buttonsOn('ada')).toBe(3);
-	expect(buttonsOn('bob')).toBe(3);
+	expect(buttonsOn('ada')).toBe(4);
+	expect(buttonsOn('bob')).toBe(4);
+});
+
+it('asks for the admin’s password, then shows the reset link once and the account as having a reset pending', async () => {
+	render(Accounts, open([account('3', 'bob')], as('admin')) as never);
+	await page.getByRole('button', { name: 'Reset password' }).click();
+	const dialog = page.getByRole('dialog', { name: 'Reset bob’s password?' });
+	await expect.element(dialog).toBeVisible();
+	expect(fake.issued).toEqual([]);
+
+	await dialog.getByLabelText('Your password').fill('my own password');
+	await dialog.getByRole('button', { name: 'Reset password' }).click();
+
+	await expect.element(page.getByText(`${location.origin}/jc/reset#reset-code`)).toBeVisible();
+	expect(fake.issued).toEqual([['3', 'my own password']]);
+	await expect.element(page.getByText('Reset pending')).toBeVisible();
+	await expect.element(page.getByText(/24 hours/)).toBeVisible();
+	await expect.element(page.getByText(/works only where this address works/)).toBeVisible();
+	await expect.element(page.getByText(/replaces/)).toBeVisible();
+
+	// Dismissed, the link is gone and is not shown again.
+	await page.getByRole('button', { name: 'Done' }).click();
+	await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
+	expect(document.body.textContent).not.toContain('reset-code');
+});
+
+it('shows the server’s reason when the password is wrong, and keeps the dialog for another try', async () => {
+	fake.fail = new ApiError(403, 'wrong_password', 'Your current password is not correct.');
+	render(Accounts, open([account('3', 'bob')], as('admin')) as never);
+	await page.getByRole('button', { name: 'Reset password' }).click();
+	const dialog = page.getByRole('dialog');
+	await dialog.getByLabelText('Your password').fill('wrong');
+	await dialog.getByRole('button', { name: 'Reset password' }).click();
+	await expect
+		.element(page.getByRole('alert'))
+		.toHaveTextContent('Your current password is not correct.');
+	await expect.element(dialog).toBeVisible();
+	expect(document.body.textContent).not.toContain('reset-code');
+	await expect.element(page.getByText('Reset pending')).not.toBeInTheDocument();
 });
 
 it('offers no action to a user', async () => {
