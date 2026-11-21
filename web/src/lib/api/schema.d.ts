@@ -1607,6 +1607,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/users/library-access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Grant or revoke libraries for many accounts
+         * @description Grants (`grant`) or revokes (`revoke`) every library in `libraryIds` for every account in
+         *     `userIds`, all or nothing: if any account is refused or does not exist, nothing changes
+         *     and the request fails as it would for that account alone in `adminSetUserLibraries` (`403`
+         *     for the owner's, an equal or higher rank's or one's own account, `404` for one that does
+         *     not exist or is being deleted). A library that does not exist is `422` and nothing
+         *     changes. `userIds` names between 1 and 1000 accounts, else `422`; an ID named twice, in
+         *     either list, counts once. Once committed, what changed for each account is recorded in
+         *     the audit log and that account's devices are sent `accessChanged`; an account that
+         *     already is as asked gets neither.
+         */
+        post: operations["adminChangeLibraryAccess"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/users/{userId}/libraries": {
         parameters: {
             query?: never;
@@ -2143,6 +2171,12 @@ export interface components {
         UserLibraries: {
             /** @description Every library the account is to be granted. */
             libraryIds: components["schemas"]["Id"][];
+        };
+        LibraryAccessChange: {
+            userIds: components["schemas"]["Id"][];
+            libraryIds: components["schemas"]["Id"][];
+            /** @enum {string} */
+            action: "grant" | "revoke";
         };
         AdminUserPage: components["schemas"]["PageInfo"] & {
             items: components["schemas"]["AdminUser"][];
@@ -6214,6 +6248,29 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AdminUserPage"];
                 };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    adminChangeLibraryAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LibraryAccessChange"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Problem"];
         };

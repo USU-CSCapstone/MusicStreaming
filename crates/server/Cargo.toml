@@ -34,7 +34,7 @@ zxcvbn = { version = "3.1", default-features = false }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 tokio = { version = "1.53.1", features = ["test-util"] }
 tower = { version = "0.5.3", features = ["util"] }
-rusqlite = { version = "0.41.1", features = ["hooks"] }
+rusqlite = { version = "0.41.1", features = ["functions", "hooks"] }
 tokio-tungstenite = "0.29"
 jewelcase-scanner = { version = "0.1.0", path = "../scanner", features = ["testing"] }
 jewelcase-catalog = { version = "0.1.0", path = "../catalog", features = ["testing"] }
