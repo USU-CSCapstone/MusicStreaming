@@ -75,6 +75,10 @@
 			['path', { d: 'm16 9 6 6m0-6-6 6' }]
 		],
 		close: [['path', { d: 'M6 6l12 12M18 6 6 18' }]],
+		user: [
+			['circle', { cx: 12, cy: 8, r: 4 }],
+			['path', { d: 'M4 21a8 8 0 0 1 16 0' }]
+		],
 		plus: [['path', { d: 'M12 5v14M5 12h14' }]],
 		more: [
 			['circle', { cx: 5, cy: 12, r: 1.75 }],
