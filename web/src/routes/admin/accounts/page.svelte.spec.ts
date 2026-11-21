@@ -373,6 +373,20 @@ it('offers no action to a user', async () => {
 	expect(buttonsOn('bob')).toBe(0);
 });
 
+it('drops a reset link shown for an account once it is suspended, which cancelled it', async () => {
+	fake.answer = account('3', 'bob', { status: 'suspended' });
+	render(Accounts, open([account('3', 'bob')], as('admin')) as never);
+	await page.getByRole('button', { name: 'Reset password' }).click();
+	await page.getByLabelText('Your password').fill('pw');
+	await page.getByRole('dialog').getByRole('button', { name: 'Reset password' }).click();
+	await expect.element(page.getByText(`${location.origin}/jc/reset#reset-code`)).toBeVisible();
+
+	await rowOf('bob').getByRole('button', { name: 'Suspend' }).click();
+	await page.getByRole('dialog').getByRole('button', { name: 'Suspend' }).click();
+	await expect.element(page.getByRole('button', { name: 'Restore' })).toBeVisible();
+	expect(document.body.textContent).not.toContain('reset-code');
+});
+
 it('asks before suspending, then shows the account as the server now has it', async () => {
 	fake.answer = account('3', 'bob', { status: 'suspended' });
 	render(Accounts, open([account('3', 'bob')], as('admin')) as never);
@@ -801,6 +815,39 @@ it('shows what an admin sees once ownership has moved', async () => {
 	expect(
 		[...document.querySelectorAll('button')].filter((b) => ROLE_ACTIONS.test(b.textContent!.trim()))
 	).toEqual([]);
+});
+
+it('drops a shown reset link and the selection once ownership has moved, as the transfer cancelled the one and may forbid the other', async () => {
+	const rows = [account('3', 'bob'), account('4', 'ann', { role: 'admin' })];
+	render(Accounts, open(rows, as('owner')) as never);
+	await rowOf('ann').getByRole('button', { name: 'Reset password' }).click();
+	await page.getByLabelText('Your password').fill('pw');
+	await page.getByRole('dialog').getByRole('button', { name: 'Reset password' }).click();
+	await expect.element(page.getByText(`${location.origin}/jc/reset#reset-code`)).toBeVisible();
+	await page.getByRole('checkbox', { name: 'Select bob' }).click();
+	await expect.element(page.getByText('1 selected')).toBeVisible();
+
+	await rowOf('ann').getByRole('button', { name: 'Make owner' }).click();
+	await page.getByLabelText('Your password').fill('pw');
+	await page.getByRole('dialog').getByRole('button', { name: 'Make owner' }).click();
+	await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
+	await expect.element(page.getByText('selected')).not.toBeInTheDocument();
+	expect(document.body.textContent).not.toContain('reset-code');
+});
+
+it('says an admin reaches every library and keeps the ticked ones if made a user again', async () => {
+	const rows = [account('3', 'bob'), account('4', 'ann', { role: 'admin', libraryIds: ['lib-a'] })];
+	render(Accounts, open(rows, as('owner')) as never);
+	await rowOf('ann').getByRole('button', { name: 'Libraries' }).click();
+	await expect.element(page.getByText('Libraries ann keeps if made a user again')).toBeVisible();
+	await expect.element(page.getByText('As an admin, ann reaches every library.')).toBeVisible();
+	await expect.element(page.getByRole('checkbox', { name: 'Alpha' })).toBeChecked();
+
+	await rowOf('bob').getByRole('button', { name: 'Libraries' }).click();
+	await expect.element(page.getByText('Libraries bob can reach')).toBeVisible();
+	await expect
+		.element(page.getByText('As an admin, bob reaches every library.'))
+		.not.toBeInTheDocument();
 });
 
 it('keeps the role actions usable at phone width and by keyboard', async () => {

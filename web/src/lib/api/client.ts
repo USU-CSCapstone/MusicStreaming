@@ -592,28 +592,26 @@ export const startScan = (f: Fetch, libraryId: string) => send<Scan>(f, 'POST', 
 export const adminListUsers = (f: Fetch, query: { q?: string; cursor?: string } = {}) =>
 	get<AdminUserPage>(f, '/admin/users', query);
 
+/** The path of one account under `/admin/users`. */
+const adminUser = (userId: string) => `/admin/users/${encodeURIComponent(userId)}`;
+
 /** Suspends an account, which signs it out everywhere, or restores it; answers the account. */
 export const adminSetUserStatus = (f: Fetch, userId: string, status: AdminUser['status']) =>
-	send<AdminUser>(f, 'PUT', `/admin/users/${encodeURIComponent(userId)}/status`, { status });
+	send<AdminUser>(f, 'PUT', `${adminUser(userId)}/status`, { status });
 
 /**
  * Makes a link that lets the account set a new password, replacing any pending one; the admin
  * confirms with their own password, and the code is in the answer and nowhere else.
  */
 export const adminIssuePasswordReset = (f: Fetch, userId: string, request: { password: string }) =>
-	send<IssuedPasswordReset>(
-		f,
-		'POST',
-		`/admin/users/${encodeURIComponent(userId)}/password-reset`,
-		request
-	);
+	send<IssuedPasswordReset>(f, 'POST', `${adminUser(userId)}/password-reset`, request);
 
 /**
  * Deletes the account for good, its playlists, history, likes and devices with it; the admin
  * confirms with their own password.
  */
 export const adminDeleteUser = (f: Fetch, userId: string, request: { password: string }) =>
-	send<void>(f, 'POST', `/admin/users/${encodeURIComponent(userId)}/delete`, request);
+	send<void>(f, 'POST', `${adminUser(userId)}/delete`, request);
 
 /**
  * Makes the account an admin or a user again; only the owner may, with their own password.
@@ -623,13 +621,11 @@ export const adminSetUserRole = (
 	f: Fetch,
 	userId: string,
 	request: { role: 'admin' | 'user'; password: string }
-) => send<AdminUser>(f, 'PUT', `/admin/users/${encodeURIComponent(userId)}/role`, request);
+) => send<AdminUser>(f, 'PUT', `${adminUser(userId)}/role`, request);
 
 /** Hands ownership to an active admin, who becomes the owner as the caller becomes an admin. */
 export const transferOwnership = (f: Fetch, request: { userId: string; password: string }) =>
 	send<void>(f, 'POST', '/admin/ownership-transfer', request);
-
-const adminUser = (userId: string) => `/admin/users/${encodeURIComponent(userId)}`;
 
 /** Replaces the account's library grants with exactly `libraryIds`, and answers the account. */
 export const adminSetUserLibraries = (f: Fetch, userId: string, libraryIds: string[]) =>

@@ -35,7 +35,12 @@
 
 <form onsubmit={save}>
 	<fieldset disabled={saving}>
-		<legend>Libraries {row.username} can reach</legend>
+		{#if row.role === 'user'}
+			<legend>Libraries {row.username} can reach</legend>
+		{:else}
+			<legend>Libraries {row.username} keeps if made a user again</legend>
+			<p class="muted">As an admin, {row.username} reaches every library.</p>
+		{/if}
 		{#if libraries.length === 0}
 			<p class="muted">No libraries yet.</p>
 		{/if}
