@@ -53,6 +53,7 @@ export type Problem = Schemas['Problem'];
 export type ServerInfo = Schemas['ServerInfo'];
 export type DeviceRegistration = Schemas['DeviceRegistration'];
 export type SetupRequest = Schemas['SetupRequest'];
+export type RedeemInviteRequest = Schemas['RedeemInviteRequest'];
 export type Session = Schemas['Session'];
 export type LoginRequest = Schemas['LoginRequest'];
 export type User = Schemas['User'];

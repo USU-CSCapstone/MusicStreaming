@@ -17,6 +17,7 @@
 	import { marks } from '$lib/marks.svelte';
 	import { playback } from '$lib/playback.svelte';
 	import { player } from '$lib/player.svelte';
+	import { isPublic } from '$lib/public-routes';
 	import { queue } from '$lib/queue/client.svelte';
 	import { sender } from '$lib/sync/sender';
 	import { checkForUpdate } from '$lib/app-update';
@@ -24,15 +25,15 @@
 
 	let { data, children } = $props();
 
-	// Setup and login come before there is anything to browse or play.
-	const bare = $derived(page.route.id === '/setup' || page.route.id === '/login');
+	// The public pages, such as setup and login, come before there is anything to browse or play.
+	const bare = $derived(isPublic(page.route.id));
 
 	$effect.pre(() => {
 		player.libraryId = data.library?.id ?? '';
 	});
 
 	// Live updates, the account's devices and playback as last heard, its queue and the device's
-	// copy of its libraries, for someone signed in; setup and login have nothing to update. They
+	// copy of its libraries, for someone signed in; the public pages have nothing to update. They
 	// leave the catalog's election but keep its files, which stay the last account's until the
 	// server ends its session or another signs in.
 	// Keyed on the account alone: a load run again, as `invalidateAll` does, gives the same
