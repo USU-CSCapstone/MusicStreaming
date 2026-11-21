@@ -95,3 +95,49 @@ test('a user signs their other browser out from the Account page, and it ends up
 		await second.close();
 	}
 });
+
+test('the owner deletes a user: their open browser is sent to the login page, they cannot sign in, and the name can be used again', async ({
+	page,
+	browser,
+	server
+}) => {
+	const user = await createUser(server, [server.ids.library]);
+	const context = await browser.newContext({ baseURL: server.url });
+	try {
+		const theirs = await context.newPage();
+		await login(theirs, server.url, user.username, user.password);
+		await theirs.goto('/albums');
+		await expect(theirs.getByText('Signal', { exact: true }).first()).toBeVisible();
+
+		await page.goto('/admin/accounts');
+		await page.getByRole('searchbox', { name: 'Search accounts' }).fill(user.username);
+		await page.getByRole('button', { name: 'Search' }).click();
+		const row = page.getByRole('listitem').filter({ hasText: user.username });
+		await expect(row).toHaveCount(1);
+		await row.getByRole('button', { name: 'Delete' }).click();
+		const dialog = page.getByRole('dialog');
+		await expect(dialog).toContainText('cannot be undone');
+		await dialog.getByLabel('Your password').fill(server.password);
+		await dialog.getByRole('button', { name: 'Delete' }).click();
+
+		await expect(row).toHaveCount(0);
+		await page.reload();
+		await expect(page.getByText('No account matches that search.')).toBeVisible();
+
+		await expect(theirs).toHaveURL(/\/login(\?|$)/);
+		const refused = await theirs.request.post(`${server.url}/api/v1/auth/login`, {
+			headers: { 'X-Jewelcase-Client': 'web' },
+			data: {
+				username: user.username,
+				password: user.password,
+				device: { name: 'Again', type: 'desktop' }
+			}
+		});
+		expect(refused.ok()).toBe(false);
+
+		const again = await createUser(server, [server.ids.library], user.username);
+		expect(again.id).not.toBe(user.id);
+	} finally {
+		await context.close();
+	}
+});

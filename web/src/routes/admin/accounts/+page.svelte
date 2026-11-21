@@ -5,6 +5,7 @@
 	import {
 		ApiError,
 		adminChangeLibraryAccess,
+		adminDeleteUser,
 		adminIssuePasswordReset,
 		adminListUsers,
 		adminSetUserStatus
@@ -32,6 +33,7 @@
 	let query = $derived(data.q);
 	let suspending = $state<AdminUser | null>(null);
 	let resetting = $state<AdminUser | null>(null);
+	let deleting = $state<AdminUser | null>(null);
 	/** The reset link just made, held only here: the server does not give the code again. */
 	let issued = $state<{ username: string; link: string } | null>(null);
 	let listError = $state<string | null>(null);
@@ -84,6 +86,17 @@
 			link: `${location.origin}${resolve('/reset')}#${made.code}`
 		};
 		list.replace({ ...row, resetPending: true }, (r) => r.id === row.id);
+	}
+
+	/**
+	 * Deletes the account, then drops its row, its place in the selection and a reset link shown
+	 * for it, which the deletion cancelled.
+	 */
+	async function remove(row: AdminUser, password: string) {
+		await adminDeleteUser(fetch, row.id, { password });
+		list.remove((r) => r.id === row.id);
+		selected = selected.filter((id) => id !== row.id);
+		if (issued?.username === row.username) issued = null;
 	}
 
 	function toggle(row: AdminUser, which: 'libraries' | 'devices') {
@@ -216,6 +229,7 @@
 								Devices
 							</button>
 							<button type="button" onclick={() => (resetting = row)}>Reset password</button>
+							<button type="button" onclick={() => (deleting = row)}>Delete</button>
 						</div>
 						{#if panel[row.id] === 'libraries'}
 							<!-- Restarts on a new row, so the boxes show the grants the server now has. -->
@@ -269,6 +283,24 @@
 		<p>
 			You get a link to give {row.username}, who uses it to choose a new password. Using it signs
 			them out of every device.
+		</p>
+	</ConfirmDialog>
+{/if}
+
+{#if deleting}
+	{@const row = deleting}
+	<ConfirmDialog
+		title={`Delete ${row.username}?`}
+		confirmLabel="Delete"
+		danger
+		password
+		action={(password) => remove(row, password)}
+		onclose={() => (deleting = null)}
+	>
+		<p>
+			{row.username}’s playlists, listening history, likes and devices go for good, and they are
+			signed out everywhere. No music files are touched. Plugins {row.username} connected keep what they
+			already received. This cannot be undone.
 		</p>
 	</ConfirmDialog>
 {/if}

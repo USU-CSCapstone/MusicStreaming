@@ -17,6 +17,7 @@ const fake = vi.hoisted(() => ({
 	asked: [] as unknown[],
 	set: [] as [string, string][],
 	issued: [] as [string, string][],
+	deleted: [] as [string, string][],
 	answer: null as unknown,
 	fail: null as Error | null,
 	went: [] as string[],
@@ -57,6 +58,10 @@ vi.mock('$lib/api/client', async (original) => ({
 		fake.issued.push([id, body.password]);
 		if (fake.fail) throw fake.fail;
 		return { code: 'reset-code', expiresAt: '2026-11-21T10:00:00Z' };
+	},
+	adminDeleteUser: async (_f: unknown, id: string, body: { password: string }) => {
+		fake.deleted.push([id, body.password]);
+		if (fake.fail) throw fake.fail;
 	},
 	adminSetUserStatus: async (_f: unknown, id: string, status: string) => {
 		fake.set.push([id, status]);
@@ -137,6 +142,7 @@ const buttonsOn = (name: string) =>
 beforeEach(() => {
 	fake.set = [];
 	fake.issued = [];
+	fake.deleted = [];
 	fake.asked = [];
 	fake.fail = null;
 	fake.went = [];
@@ -203,14 +209,14 @@ it('offers actions only on accounts the viewer outranks', async () => {
 	expect(buttonsOn('olga')).toBe(0);
 	expect(buttonsOn('ada')).toBe(0);
 	expect(buttonsOn('me Display')).toBe(0);
-	expect(buttonsOn('bob')).toBe(4);
+	expect(buttonsOn('bob')).toBe(5);
 	await admin.unmount();
 
 	render(Accounts, open([...rows.slice(0, 1), ...rows.slice(1)], as('owner')) as never);
 	await expect.element(page.getByText('bob Display')).toBeVisible();
 	expect(buttonsOn('olga')).toBe(0);
-	expect(buttonsOn('ada')).toBe(4);
-	expect(buttonsOn('bob')).toBe(4);
+	expect(buttonsOn('ada')).toBe(5);
+	expect(buttonsOn('bob')).toBe(5);
 });
 
 it('asks for the admin’s password, then shows the reset link once and the account as having a reset pending', async () => {
@@ -249,6 +255,83 @@ it('shows the server’s reason when the password is wrong, and keeps the dialog
 	await expect.element(dialog).toBeVisible();
 	expect(document.body.textContent).not.toContain('reset-code');
 	await expect.element(page.getByText('Reset pending')).not.toBeInTheDocument();
+});
+
+it('names what deleting an account takes and leaves, and sends the admin’s password', async () => {
+	render(Accounts, open([account('3', 'bob'), account('4', 'cy')], as('admin')) as never);
+	await rowOf('bob').getByRole('button', { name: 'Delete' }).click();
+	const dialog = page.getByRole('dialog', { name: 'Delete bob?' });
+	await expect.element(dialog).toBeVisible();
+	await expect.element(dialog).toHaveTextContent(/playlists, listening history, likes and devices/);
+	await expect.element(dialog).toHaveTextContent(/No music files are touched/);
+	await expect.element(dialog).toHaveTextContent(/Plugins bob connected keep what they already/);
+	await expect.element(dialog).toHaveTextContent(/cannot be undone/);
+	expect(fake.deleted).toEqual([]);
+
+	await dialog.getByLabelText('Your password').fill('my own password');
+	await dialog.getByRole('button', { name: 'Delete' }).click();
+	await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
+	expect(fake.deleted).toEqual([['3', 'my own password']]);
+});
+
+it('drops a deleted account from the list and the selection, keeps the other rows including a second page, and closes its panel', async () => {
+	fake.more = { items: [account('9', 'zed')], nextCursor: null, total: 4 };
+	render(
+		Accounts,
+		open([account('3', 'bob'), account('4', 'cy')], as('admin'), '', 'next') as never
+	);
+	await page.getByRole('button', { name: 'Load more' }).click();
+	await expect.element(page.getByText('zed Display')).toBeVisible();
+	await page.getByRole('checkbox', { name: 'Select bob' }).click();
+	await page.getByRole('checkbox', { name: 'Select zed' }).click();
+	await expect.element(page.getByText('2 selected')).toBeVisible();
+	await rowOf('bob').getByRole('button', { name: 'Devices' }).click();
+	await expect.element(page.getByRole('button', { name: 'Devices', expanded: true })).toBeVisible();
+
+	await rowOf('bob').getByRole('button', { name: 'Delete' }).click();
+	await page.getByLabelText('Your password').fill('pw');
+	await page.getByRole('dialog').getByRole('button', { name: 'Delete' }).click();
+
+	await expect.element(page.getByText('bob Display')).not.toBeInTheDocument();
+	await expect.element(page.getByText('cy Display')).toBeVisible();
+	await expect.element(page.getByText('zed Display')).toBeVisible();
+	await expect.element(page.getByText('1 selected')).toBeVisible();
+	await expect.element(page.getByRole('checkbox', { name: 'Select zed' })).toBeChecked();
+	// Nothing was read again: the list kept its pages.
+	expect(fake.asked).toEqual([{ q: '', cursor: 'next' }]);
+});
+
+it('drops a reset link shown for an account once that account is deleted, which cancelled it', async () => {
+	render(Accounts, open([account('3', 'bob')], as('admin')) as never);
+	await page.getByRole('button', { name: 'Reset password' }).click();
+	await page.getByLabelText('Your password').fill('pw');
+	await page.getByRole('dialog').getByRole('button', { name: 'Reset password' }).click();
+	await expect.element(page.getByText(`${location.origin}/jc/reset#reset-code`)).toBeVisible();
+
+	await rowOf('bob').getByRole('button', { name: 'Delete' }).click();
+	await page.getByLabelText('Your password').fill('pw');
+	await page.getByRole('dialog').getByRole('button', { name: 'Delete' }).click();
+	await expect.element(page.getByText('bob Display')).not.toBeInTheDocument();
+	expect(document.body.textContent).not.toContain('reset-code');
+});
+
+it('keeps the dialog and shows the server’s reason when the password is wrong, or the delete is refused', async () => {
+	fake.fail = new ApiError(403, 'wrong_password', 'Your current password is not correct.');
+	render(Accounts, open([account('3', 'bob')], as('admin')) as never);
+	await page.getByRole('button', { name: 'Delete' }).click();
+	const dialog = page.getByRole('dialog');
+	await dialog.getByLabelText('Your password').fill('wrong');
+	await dialog.getByRole('button', { name: 'Delete' }).click();
+	await expect
+		.element(page.getByRole('alert'))
+		.toHaveTextContent('Your current password is not correct.');
+	await expect.element(dialog).toBeVisible();
+	await expect.element(page.getByText('bob Display')).toBeVisible();
+
+	fake.fail = new ApiError(404, 'not_found', 'Not Found');
+	await dialog.getByRole('button', { name: 'Delete' }).click();
+	await expect.element(page.getByRole('alert')).toHaveTextContent('Not Found');
+	await expect.element(dialog).toBeVisible();
 });
 
 it('offers no action to a user', async () => {
