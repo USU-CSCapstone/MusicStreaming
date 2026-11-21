@@ -2091,6 +2091,72 @@ paths:
               schema: { $ref: '#/components/schemas/Scan' }
         default: { $ref: '#/components/responses/Problem' }
 
+  # ───────────────────────────── Admin: invites ─────────────────────────────
+  /admin/invites:
+    get:
+      tags: [Admin]
+      summary: List invites
+      description: |
+        Every invite, newest first, a page at a time. Any admin lists every admin's invites. An
+        invite is `redeemed` once its code made an account, else `revoked` if it was revoked,
+        else `expired` once its time has passed, else `pending`; the status is worked out when
+        the list is read. `createdBy` and `redeemedBy` are `null` when that account is gone.
+      operationId: adminListInvites
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvitePage' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Admin]
+      summary: Create an invite
+      description: |
+        Makes a single-use invite that creates an account with access to `libraryIds`, which
+        may be empty. The answer carries the invite's `code`, shown this once: only a hash of it
+        is kept, and no later answer repeats it. A library that does not exist, or an
+        `expiresInDays` outside 1 to 30, is `422` and nothing is stored. This operation ignores
+        `Idempotency-Key`, since replaying its answer would keep the code.
+      operationId: adminCreateInvite
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InviteCreate' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreatedInvite' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/invites/{inviteId}:
+    parameters:
+      - name: inviteId
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      tags: [Admin]
+      summary: Revoke an invite
+      description: |
+        Revokes a pending invite, so its code no longer works, and answers it as it now is. An
+        invite that was not pending is not changed and not an error: the answer shows it
+        `redeemed`, `expired` or already `revoked`. An unknown invite is `404`.
+      operationId: adminRevokeInvite
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Invite' }
+        default: { $ref: '#/components/responses/Problem' }
+
   # ───────────────────────────── Admin: plugins ─────────────────────────────
   /admin/plugins:
     get:
@@ -2977,6 +3043,66 @@ components:
         scanning:
           type: boolean
           description: Content is still appearing. The library is fully usable either way.
+
+    Invite:
+      type: object
+      description: A single-use link that creates an account (`requirements/users.md` §2.2).
+      required: [id, status, createdBy, redeemedBy, createdAt, expiresAt, libraryIds]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        status:
+          type: string
+          enum: [pending, redeemed, revoked, expired]
+        createdBy:
+          description: The admin who made it, or `null` if that account is gone.
+          oneOf:
+            - $ref: '#/components/schemas/InviteAccount'
+            - type: 'null'
+        redeemedBy:
+          description: The account it made, or `null` if not redeemed or that account is gone.
+          oneOf:
+            - $ref: '#/components/schemas/InviteAccount'
+            - type: 'null'
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        redeemedAt: { type: string, format: date-time, description: "Present only when redeemed." }
+        libraryIds:
+          type: array
+          items: { $ref: '#/components/schemas/Id' }
+
+    InvitePage:
+      allOf:
+        - $ref: '#/components/schemas/PageInfo'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/Invite' }
+
+    InviteAccount:
+      type: object
+      required: [id, username]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        username: { type: string }
+
+    InviteCreate:
+      type: object
+      required: [libraryIds]
+      properties:
+        libraryIds:
+          type: array
+          items: { $ref: '#/components/schemas/Id' }
+        expiresInDays: { type: integer, minimum: 1, maximum: 30, default: 7 }
+
+    CreatedInvite:
+      allOf:
+        - $ref: '#/components/schemas/Invite'
+        - type: object
+          required: [code]
+          properties:
+            code: { type: string, description: "The invite's code, shown once." }
 
     Scan:
       type: object

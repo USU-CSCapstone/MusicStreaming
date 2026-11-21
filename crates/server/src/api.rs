@@ -15,6 +15,7 @@ mod hidden;
 mod id;
 mod idempotency;
 mod images;
+mod invites;
 mod libraries;
 mod login;
 mod lyrics;
@@ -123,8 +124,11 @@ pub fn router(state: AppState) -> Router {
         .route_layer(middleware::from_fn_with_state(state.clone(), idempotency::layer))
         .route_layer(middleware::from_fn_with_state(state.clone(), authenticate::require));
     // These answer as signed-in routes do, and `403` to anyone but an admin or the owner.
+    // The routes that answer a code are kept out of the idempotency layer, which would store the
+    // code and show it again.
     let admin = routes::admin::router()
         .route_layer(middleware::from_fn_with_state(state.clone(), idempotency::layer))
+        .merge(routes::admin::unkeyed())
         .route_layer(middleware::from_fn_with_state(state.clone(), authenticate::require_admin));
     // Until setup is done, these answer `503 setup_required`.
     let after_setup = Router::new()
