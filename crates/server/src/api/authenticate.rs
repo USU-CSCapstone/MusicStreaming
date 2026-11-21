@@ -214,13 +214,18 @@ fn device(
         "SELECT d.id, d.user_id, d.last_seen_at, u.role <> 'user', \
              EXISTS (SELECT 1 FROM libraries l WHERE l.id = ?2 AND ",
         reaches!(admin: "u.role <> 'user'", user: "u.id", library: "l.id"),
-        "), d.revoked_reason \
+        "), d.revoked_reason, u.role = 'owner' \
          FROM devices d JOIN users u ON u.id = d.user_id \
          WHERE d.token_hash = ?1 AND u.status = 'active'"
     ))?
     .query_row(rusqlite::params![hash, library], |row| {
         Ok(Found {
-            caller: Caller { device: row.get(0)?, user: row.get(1)?, admin: row.get(3)? },
+            caller: Caller {
+                device: row.get(0)?,
+                user: row.get(1)?,
+                admin: row.get(3)?,
+                owner: row.get(6)?,
+            },
             last_seen_at: row.get(2)?,
             reaches_library: library.is_none() || row.get(4)?,
             revoked: row.get::<_, Option<Text<_>>>(5)?.map(|Text(reason)| reason),

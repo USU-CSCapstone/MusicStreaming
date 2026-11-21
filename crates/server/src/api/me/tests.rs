@@ -16,7 +16,7 @@ async fn an_account_being_deleted_is_signed_out() {
     add_user(&conn, 2, "user");
     mark_deleting(&conn, 2).unwrap();
 
-    let caller = Caller { user: 2, device: 2, admin: false };
+    let caller = Caller { user: 2, device: 2, admin: false, owner: false };
     let response = get(State(db), caller).await;
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);

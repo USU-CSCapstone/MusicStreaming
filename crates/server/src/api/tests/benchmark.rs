@@ -192,7 +192,8 @@ async fn benchmark_queue_resolves() {
         .read(|conn| conn.prepare(ARTISTS)?.query_map([], |r| r.get(0))?.collect())
         .await
         .unwrap();
-    let (indexes, caller) = (Indexes::default(), Caller { user: 1, device: 1, admin: true });
+    let (indexes, caller) =
+        (Indexes::default(), Caller { user: 1, device: 1, admin: true, owner: true });
     let library = |sort: &str, order: &str| json!({ "type": "library", "filters": {}, "sort": sort, "order": order });
     let mut recipes = Vec::new();
     for sort in ["name", "artist", "album", "dateAdded", "releaseDate", "duration"] {

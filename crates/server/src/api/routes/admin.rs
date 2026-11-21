@@ -5,7 +5,7 @@ use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, post, put};
 
-use crate::api::{AppState, accounts, invites, plugins, scans};
+use crate::api::{AppState, accounts, audit, invites, plugins, scans};
 
 /// Every route under `/admin`.
 pub fn router() -> Router<AppState> {
@@ -33,6 +33,7 @@ pub fn router() -> Router<AppState> {
         .route("/admin/users", get(accounts::list))
         .route("/admin/users/library-access", post(accounts::access::change))
         .route("/admin/users/{user_id}/libraries", put(accounts::access::set))
+        .route("/admin/audit-log", get(audit::list))
         .route("/admin/invites", get(invites::list))
         .route("/admin/invites/{invite_id}", delete(invites::revoke))
 }
