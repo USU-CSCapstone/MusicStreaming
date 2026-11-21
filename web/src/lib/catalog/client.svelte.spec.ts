@@ -193,8 +193,17 @@ describe('CatalogClient', () => {
 		b.hear({ type: 'devices', devices: [] });
 		b.hear({ type: 'libraryChanged', libraryId: '1', position: 5 });
 		b.hear({ type: 'accountChanged', position: 3 });
+		b.hear({ type: 'accessChanged' });
 
-		expect(types(workers[0])).toEqual(['init', 'start', 'message', 'message', 'message']);
+		expect(types(workers[0])).toEqual([
+			'init',
+			'start',
+			'message',
+			'message',
+			'message',
+			'message'
+		]);
+		expect(workers[0].sent.at(-1)).toEqual({ type: 'message', message: { type: 'accessChanged' } });
 		expect(workers[0].sent[0]).toMatchObject({ type: 'init', user: '7' });
 		client.disconnect();
 	});

@@ -7,6 +7,7 @@ import type {
 	Track
 } from '$lib/api/types';
 import type { FromWorker, RowSection, StartRequest, ToWorker } from '$lib/queue/protocol';
+import { ApiError } from '$lib/api/root';
 import { marks } from '$lib/marks.svelte';
 import { sender } from '$lib/sync/sender';
 import { memoryEnv } from '$lib/sync/store';
@@ -732,6 +733,58 @@ describe('player and the queue', () => {
 		await settle();
 		expect(info).toHaveBeenCalled();
 		expect(audio.getAttribute('src')).not.toBeNull();
+	});
+
+	it('stops, once and quietly, when the account loses the library of the track it plays', async () => {
+		const { audio } = await playing('72', '73');
+		const pause = vi.spyOn(audio, 'pause');
+		const fail = vi.spyOn(playback, 'fail');
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+		try {
+			let asked = 0;
+			fake.info = () => {
+				asked++;
+				return Promise.reject(new ApiError(404, 'not_found', 'Not found'));
+			};
+			send({ type: 'accessChanged' });
+			await vi.waitFor(() => expect(player.finished).toBe(true));
+			await vi.advanceTimersByTimeAsync(30_000);
+
+			expect(asked).toBe(1);
+			expect(player.playing).toBe(false);
+			expect(pause).toHaveBeenCalled();
+			expect(queueWorker.edits).toEqual([]);
+			expect(fail).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+			fail.mockRestore();
+		}
+	});
+
+	it('plays on when the account’s access changes but still reaches the track it plays', async () => {
+		const { play } = await playing('74');
+		const played = play.mock.calls.length;
+		const info = vi.fn(() => Promise.resolve({ variant: 'original' }));
+		fake.info = info;
+		send({ type: 'accessChanged' });
+		await settle();
+
+		expect(info).toHaveBeenCalledOnce();
+		expect(player.playing).toBe(true);
+		expect(player.finished).toBe(false);
+		expect(play.mock.calls.length).toBe(played);
+	});
+
+	it('plays on when the check of access after a change cannot reach the server', async () => {
+		await playing('75');
+		const info = vi.fn(() => Promise.reject(new TypeError('Failed to fetch')));
+		fake.info = info;
+		send({ type: 'accessChanged' });
+		await settle();
+
+		expect(info).toHaveBeenCalledOnce();
+		expect(player.playing).toBe(true);
+		expect(player.finished).toBe(false);
 	});
 
 	it('start plays immediately, and reports its item once the server has the queue', async () => {

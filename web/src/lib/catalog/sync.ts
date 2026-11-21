@@ -103,7 +103,7 @@ type Page = { changes: Change[]; next: number; head: number; epoch: string };
 /** The messages of the realtime connection that make the worker pull. */
 type Heard = Extract<
 	RealtimeServerMessage,
-	{ type: 'hello' | 'libraryChanged' | 'accountChanged' }
+	{ type: 'hello' | 'libraryChanged' | 'accountChanged' | 'accessChanged' }
 >;
 
 /** A file's synchronous handle, which only a worker has (the DOM typings leave it out). */
@@ -270,6 +270,8 @@ export class CatalogSync {
 	#broken = new WeakSet<Catalog>();
 	/** Bootstraps under way: snapshot downloads that a stop would throw away. */
 	#booting = 0;
+	/** How many answers to the device's own writes the sync has been told of. */
+	#answers = 0;
 	/**
 	 * The one file with a search index, which its `Catalog` holds but does not keep current. Search
 	 * covers one library at a time, so building another's lets this one go first.
@@ -367,8 +369,9 @@ export class CatalogSync {
 	}
 
 	/**
-	 * Hears the realtime connection: pulls on `hello`, and on a hint of a feed ahead of this
-	 * device. A hint that lands during a pull makes it run once more, so none is lost.
+	 * Hears the realtime connection: pulls on `hello`, on a hint of a feed ahead of this device,
+	 * and on a change of the libraries the account reaches. A hint that lands during a pull makes
+	 * it run once more, so none is lost.
 	 */
 	message(message: RealtimeServerMessage) {
 		const heard = message as Heard;
@@ -385,7 +388,7 @@ export class CatalogSync {
 					void this.#pullLibrary(heard.libraryId, true);
 				}
 			});
-		} else if (heard.type === 'accountChanged') {
+		} else if (heard.type === 'accountChanged' || heard.type === 'accessChanged') {
 			void this.#run(ACCOUNT, () => this.#pullAccount(), true);
 		}
 	}
@@ -763,6 +766,7 @@ export class CatalogSync {
 		const kinds = new Set<Kind>();
 		const liked = catalog.liked(this.#user, id);
 		let staged = 0;
+		let answers = this.#answers;
 		for (;;) {
 			const response = await this.#get(`/me/changes?${this.#cursor(catalog, ACCOUNT, after)}`);
 			if (stale()) return true;
@@ -781,7 +785,9 @@ export class CatalogSync {
 			catalog.stage(ACCOUNT, page.epoch, JSON.stringify(mine));
 			collect(kinds, mine, liked);
 			staged += mine.length;
-			if (page.next >= page.head) {
+			// The apply drops the writes the server answered, as the feed brings them, but one answered
+			// while the page was asked for may be past it: the pages after it are asked for first.
+			if (page.next >= page.head && answers === this.#answers) {
 				// A new file not swapped in yet has the device's own writes made as it is installed.
 				const rebase = staged > 0 && this.catalogs.get(id) === catalog;
 				await this.#apply(id, catalog, ACCOUNT, BigInt(page.next), stale, rebase);
@@ -789,6 +795,7 @@ export class CatalogSync {
 				if (kinds.size > 0 && this.catalogs.get(id) === catalog) this.#changed(id, told(kinds));
 				return true;
 			}
+			answers = this.#answers;
 			after = page.next;
 		}
 	}
@@ -1064,6 +1071,7 @@ export class CatalogSync {
 	 * which brings them; one it lacks is left to that feed, which may have brought it already.
 	 */
 	async mutate(library: string, calls: Call[], answered = false) {
+		if (answered) this.#answers++;
 		for (;;) {
 			await this.#queue;
 			const catalog = this.catalogs.get(library);

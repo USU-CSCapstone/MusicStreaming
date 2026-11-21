@@ -527,6 +527,24 @@ describe('catalog sync', () => {
 		expect(await dbs()).toHaveLength(2);
 	});
 
+	it('a change of access reads the library list once, deleting the library lost and downloading the one gained', async () => {
+		await started('1', '2');
+		const listed = () =>
+			h.api.asked('/libraries').then((paths) => paths.filter((path) => path === '/libraries'));
+		const before = (await listed()).length;
+		await h.api.setLibraries(['1', '3']);
+		await h.api.setPosition('3', 7);
+		await h.api.setFeed('3', [], 7);
+		await h.message({ type: 'accessChanged' });
+		await h.idle();
+
+		expect(await listed()).toHaveLength(before + 1);
+		expect(await h.libraries()).toEqual(['1', '3']);
+		expect(await h.lost()).toEqual(['2']);
+		expect(await h.cursor('3', 'library')).toBe(7);
+		expect(await dbs()).toHaveLength(2);
+	});
+
 	it('a file runs with the journalling the pool needs: a kept lock and journal, memory for temporaries, FULL syncs', async () => {
 		await started('1');
 		expect(await h.pragmas('1')).toEqual({
@@ -2168,6 +2186,58 @@ describe('the device’s own writes', () => {
 		expect((await itemsOf('500')).filter((id) => id === '1001')).toHaveLength(1);
 		expect(await h.applied('1')).toBe(0);
 		await h.rebase('1');
+		expect((await itemsOf('500')).filter((id) => id === '1001')).toHaveLength(1);
+	});
+
+	it('keeps showing a write answered while a page of the account feed was asked for, which the page predates', async () => {
+		await started('1');
+		await h.setLog('1', [like]);
+		await h.mutate('1', [like]);
+		// A rename of Road Trip on the server: the page asked for brings it alone.
+		const renamed = structuredClone(roadTrip);
+		const playlist = renamed.rows.playlists[0] as { version: number; title: string };
+		playlist.version += 1;
+		playlist.title = 'Theirs';
+		await h.api.setAccount(
+			[...playlists, elsewhere, { ...renamed, position: accountHead + 1 }] as typeof playlists,
+			accountHead + 1
+		);
+		await h.api.hold('/me/changes');
+		await h.message({ type: 'accountChanged', position: accountHead + 1 });
+		await expect.poll(() => h.api.holding()).toBe(true);
+
+		// The like is answered meanwhile: on the server after the page was read, and out of the log.
+		const liked = structuredClone(playlists[0]);
+		const row = liked.rows.playlists[0] as { version: number; track_count: number };
+		row.version += 1;
+		row.track_count += 1;
+		const item = {
+			op: 'upsert',
+			kind: 'playlistItem',
+			id: '500',
+			key: 1,
+			rows: {
+				playlist_items: [
+					{ added_at: at, key: 1, library_id: '1', playlist_id: '500', track_id: '1001' }
+				]
+			}
+		};
+		await h.answered('1', [like]);
+		await h.setLog('1', []);
+		await h.api.setAccount(
+			[
+				...playlists,
+				elsewhere,
+				{ ...renamed, position: accountHead + 1 },
+				{ ...liked, position: accountHead + 2 },
+				{ ...item, position: accountHead + 3 }
+			] as typeof playlists,
+			accountHead + 3
+		);
+		await h.api.release();
+		await h.idle();
+		expect((await roadTrip501()).title).toBe('Theirs');
+		expect((await shown()).liked).toBe(true);
 		expect((await itemsOf('500')).filter((id) => id === '1001')).toHaveLength(1);
 	});
 
