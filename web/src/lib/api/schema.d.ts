@@ -110,6 +110,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/invites/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check an invite's code
+         * @description Whether an invite's code can still make an account (`requirements/users.md` §2.2). The
+         *     code travels in the body, never in a URL. A code that is unknown, already redeemed,
+         *     revoked or expired is `404`, the same answer for each.
+         */
+        post: operations["checkInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/invites/redeem": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create an account with an invite
+         * @description Creates a `user` account with the libraries the invite grants, uses up the invite, and
+         *     logs the new account in on this device, as `completeSetup` does
+         *     (`requirements/users.md` §2.2). A code that is not live is `404`, as `checkInvite`
+         *     answers, before anything else in the request is looked at. One code makes one account,
+         *     however many redeem it at once.
+         */
+        post: operations["redeemInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me": {
         parameters: {
             query?: never;
@@ -1794,7 +1840,7 @@ export interface components {
              * @description `unsupported_media` comes only from planned operations.
              * @enum {string}
              */
-            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "queue_changed" | "queue_active" | "anchor_gone" | "play_gone" | "duplicate_key" | "version_conflict" | "id_taken" | "cursor_expired" | "setup_required" | "catalog_building" | "unsupported_media" | "device_unavailable" | "plugin_settings_invalid" | "internal";
+            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "queue_changed" | "queue_active" | "anchor_gone" | "play_gone" | "duplicate_key" | "version_conflict" | "id_taken" | "username_taken" | "cursor_expired" | "setup_required" | "catalog_building" | "unsupported_media" | "device_unavailable" | "plugin_settings_invalid" | "internal";
             /**
              * @description With `session_revoked`. `credentials_changed` — the device keeps its downloads and
              *     logs in again with its `deviceId`; `logged_out` — the device removes them
@@ -1975,6 +2021,20 @@ export interface components {
         /** @description ASCII letters, digits, `_` and `-`. Unique regardless of case; shown as chosen. */
         Username: string;
         SetupRequest: {
+            username: components["schemas"]["Username"];
+            /** Format: password */
+            password: string;
+            /** @description Not blank. Defaults to the username. */
+            displayName?: string;
+            device: components["schemas"]["DeviceRegistration"];
+        };
+        CheckInviteRequest: {
+            /** @description The invite's code, from the link's fragment. */
+            code: string;
+        };
+        RedeemInviteRequest: {
+            /** @description The invite's code, from the link's fragment. */
+            code: string;
             username: components["schemas"]["Username"];
             /** Format: password */
             password: string;
@@ -3971,6 +4031,93 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    checkInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckInviteRequest"];
+            };
+        };
+        responses: {
+            /** @description The code is live. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `not_found` — the code is unknown, redeemed, revoked or expired. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    redeemInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedeemInviteRequest"];
+            };
+        };
+        responses: {
+            /** @description Account created and logged in on this device. Also sets the session cookie. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Session"];
+                };
+            };
+            /** @description `not_found` — the code is unknown, redeemed, revoked or expired. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description `username_taken` — another account has the username, regardless of case. The invite is still pending. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /**
+             * @description `weak_password` — the password is too easy to guess; `detail` says why.
+             *     `validation_failed` — `username`, `displayName` or `device` is malformed.
+             */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
             };
             default: components["responses"]["Problem"];
         };

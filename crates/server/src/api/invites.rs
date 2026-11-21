@@ -3,6 +3,7 @@
 //! libraries chosen when it was made (`requirements/users.md` §2.2). Admins and the owner only,
 //! as everything under `/admin` is (`authenticate`); every admin sees every invite.
 
+pub(super) mod redeem;
 #[cfg(test)]
 mod tests;
 
