@@ -13,10 +13,13 @@
 	const onLibraries = $derived(page.route.id?.startsWith('/admin/libraries') ?? false);
 	const onAccounts = $derived(page.route.id?.startsWith('/admin/accounts') ?? false);
 	const onInvites = $derived(page.route.id?.startsWith('/admin/invites') ?? false);
+	const onAudit = $derived(page.route.id?.startsWith('/admin/audit') ?? false);
 	const onPlugins = $derived(page.route.id?.startsWith('/admin/plugins') ?? false);
 	// Libraries and plugins are administered, so only admins and the owner see them
 	// (`requirements/users.md` §1).
 	const admin = $derived(page.data.me !== null && page.data.me.role !== 'user');
+	// The audit log is the owner's alone (`requirements/users.md` §8).
+	const owner = $derived(page.data.me?.role === 'owner');
 	// A section for each type of tag the library's music carries, under Songs: its list, and the
 	// page of each of its tags (`requirements/tags.md` §7).
 	const tagTypes = $derived(page.data.tagTypes ?? []);
@@ -84,6 +87,18 @@
 					Invites
 				</a>
 			</li>
+			{#if owner}
+				<li>
+					<a
+						href={resolve('/admin/audit')}
+						class:active={onAudit}
+						aria-current={onAudit ? 'page' : undefined}
+					>
+						<Icon name="list" size={18} />
+						Audit log
+					</a>
+				</li>
+			{/if}
 			<li>
 				<a
 					href={resolve('/admin/plugins')}

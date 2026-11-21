@@ -235,7 +235,17 @@ it('offers administration to an admin, and not to a user', async () => {
 	const shown = render(Account, { data: { connectable: [] } } as never);
 	await expect.element(admin.getByRole('link', { name: 'Libraries' })).toBeVisible();
 	await expect.element(admin.getByRole('link', { name: 'Plugins' })).toBeVisible();
+	// The owner alone reads the audit log.
+	expect(admin.getByRole('link', { name: 'Audit log' }).elements()).toHaveLength(0);
+	expect(
+		admin.getByText('Find an account and manage its access, status, password and role.').elements()
+	).toHaveLength(1);
 	shown.unmount();
+
+	fake.role = 'owner';
+	const owner = render(Account, { data: { connectable: [] } } as never);
+	await expect.element(admin.getByRole('link', { name: 'Audit log' })).toBeVisible();
+	owner.unmount();
 
 	fake.role = 'user';
 	render(Account, { data: { connectable: [] } } as never);

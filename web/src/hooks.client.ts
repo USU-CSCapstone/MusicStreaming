@@ -14,12 +14,12 @@ import { realtime } from '$lib/realtime.svelte';
 const SHOWN = new Set(['not_on_device', 'unavailable_offline', 'forbidden']);
 
 /**
- * Passes the code of an error the error page explains on to it; any other is logged and shows
- * SvelteKit's message.
+ * Passes the code of an error the error page explains on to it, with the server's detail if it
+ * gave one; any other is logged and shows SvelteKit's message.
  */
 export const handleError: HandleClientError = ({ error, message }) => {
 	if (error instanceof ApiError && error.code && SHOWN.has(error.code))
-		return { message: error.message, code: error.code };
+		return { message: error.message, code: error.code, detail: error.detail };
 	console.error(error);
 	return { message };
 };

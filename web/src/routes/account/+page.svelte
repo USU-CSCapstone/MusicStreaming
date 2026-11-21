@@ -272,14 +272,18 @@
 			</li>
 			<li>
 				<a href={resolve('/admin/accounts')}>Accounts</a>
-				<span class="muted"
-					>Find an account, change what it can reach, and suspend or restore it.</span
-				>
+				<span class="muted">Find an account and manage its access, status, password and role.</span>
 			</li>
 			<li>
 				<a href={resolve('/admin/invites')}>Invites</a>
 				<span class="muted">Let people join, with the libraries they can reach.</span>
 			</li>
+			{#if me.role === 'owner'}
+				<li>
+					<a href={resolve('/admin/audit')}>Audit log</a>
+					<span class="muted">See who did what to which account, and when.</span>
+				</li>
+			{/if}
 			<li>
 				<a href={resolve('/admin/plugins')}>Plugins</a>
 				<span class="muted">Add features, and approve what each one reaches.</span>

@@ -64,6 +64,9 @@ export type User = Schemas['User'];
 /** An account as an admin sees it. */
 export type AdminUser = Schemas['AdminUser'];
 export type AdminUserPage = Schemas['AdminUserPage'];
+/** One thing done to one account, from the audit log. */
+export type AuditEntry = Schemas['AuditEntry'];
+export type AuditPage = Schemas['AuditPage'];
 export type LibraryAccessChange = Schemas['LibraryAccessChange'];
 export type Device = Schemas['Device'];
 

@@ -8,6 +8,8 @@ declare global {
 			message: string;
 			/** Why the device cannot show the page, for the states the error page explains. */
 			code?: string;
+			/** The server's reason for a `forbidden`, when it gave one. */
+			detail?: string;
 		}
 		// interface Locals {}
 		interface PageData {
