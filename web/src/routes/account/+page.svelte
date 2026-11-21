@@ -2,9 +2,15 @@
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { disconnectMyPlugin, getMyPluginSettings, setMyPluginSettings } from '$lib/api/client';
+	import {
+		disconnectMyPlugin,
+		getMyPluginSettings,
+		setMyPluginSettings,
+		signOutMyOtherDevices
+	} from '$lib/api/client';
 	import type { PersonalPlugin } from '$lib/api/plugins';
 	import type { User } from '$lib/api/types';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import DeviceList from '$lib/components/DeviceList.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
@@ -14,6 +20,7 @@
 	import { imageCacheSize } from '$lib/image-cache';
 	import { lastKnown, remember, setLogoutPending } from '$lib/last-known';
 	import { finishLogout } from '$lib/logout';
+	import { playback } from '$lib/playback.svelte';
 	import { prefs } from '$lib/prefs.svelte';
 	import { queue } from '$lib/queue/client.svelte';
 	import { realtime } from '$lib/realtime.svelte';
@@ -101,6 +108,10 @@
 		await (how === 'retry' ? sender.retry(key) : sender.discard(key));
 		await readSetAside();
 	}
+
+	/** Whether the account is signed in on a device besides this one. */
+	const hasOthers = $derived(playback.devices.some((d) => d.id !== playback.thisDevice));
+	let signingOutOthers = $state(false);
 
 	let busy = $state(false);
 	/**
@@ -252,7 +263,12 @@
 			Everywhere you're signed in. Music plays on one at a time, and any of the others can control
 			it or take it over.
 		</p>
-		<DeviceList />
+		<DeviceList signOut />
+		{#if hasOthers}
+			<button type="button" onclick={() => (signingOutOthers = true)}>
+				Sign out all other devices
+			</button>
+		{/if}
 	</section>
 {/if}
 
@@ -451,6 +467,18 @@
 			{/each}
 		</ul>
 	</section>
+{/if}
+
+{#if signingOutOthers}
+	<ConfirmDialog
+		title="Sign out your other devices?"
+		confirmLabel="Sign out all other devices"
+		danger
+		action={() => signOutMyOtherDevices(fetch)}
+		onclose={() => (signingOutOthers = false)}
+	>
+		<p>Every device but this one is signed out at once. You can sign in on them again.</p>
+	</ConfirmDialog>
 {/if}
 
 {#if connecting}
