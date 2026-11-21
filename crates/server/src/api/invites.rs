@@ -151,8 +151,9 @@ pub struct Created {
 }
 
 /// `adminCreateInvite`: makes an invite for the libraries, which must all exist, and answers it
-/// with its code. Only the code's hash is stored. A creator who is no longer an active admin or
-/// the owner when the invite is written is `403`, so no invite outlives their authority.
+/// with its code. Only the code's hash is stored. A creator who is no longer active when the
+/// invite is written is `401`, and one who is no longer an admin `403`, so no invite outlives
+/// their authority.
 pub async fn create(
     State(db): State<Arc<Database>>,
     Caller { user, .. }: Caller,
