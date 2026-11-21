@@ -58,7 +58,7 @@
 		busy[invite.id] = true;
 		delete rowError[invite.id];
 		try {
-			list.replace(await adminRevokeInvite(fetch, invite.id), (row) => row.id === invite.id);
+			list.replace(await adminRevokeInvite(fetch, invite.id));
 		} catch (err) {
 			rowError[invite.id] = message(err);
 		} finally {

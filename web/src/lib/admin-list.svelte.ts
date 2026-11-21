@@ -6,7 +6,7 @@ type AdminPage<T> = { items: T[]; nextCursor: string | null };
  * more follow, and the means to read the next page, start over, replace a row with the
  * server's newer answer, or drop one.
  */
-export class AdminList<T> {
+export class AdminList<T extends { id: string }> {
 	#items = $state.raw<T[]>([]);
 	#cursor = $state<string | null>(null);
 	/** The read under way; another ask for the same page waits for it rather than running beside. */
@@ -48,13 +48,13 @@ export class AdminList<T> {
 		this.#cursor = page.nextCursor;
 	}
 
-	/** Puts `item` where the row `is` true of is, as the server now has it. */
-	replace(item: T, is: (row: T) => boolean): void {
-		this.#items = this.#items.map((row) => (is(row) ? item : row));
+	/** Puts `item` in place of the row with its ID, as the server now has it. */
+	replace(item: T): void {
+		this.#items = this.#items.map((row) => (row.id === item.id ? item : row));
 	}
 
-	/** Drops the rows `is` is true of, keeping every page loaded and where the next one starts. */
-	remove(is: (row: T) => boolean): void {
-		this.#items = this.#items.filter((row) => !is(row));
+	/** Drops the row with ID `id`, keeping every page loaded and where the next one starts. */
+	remove(id: string): void {
+		this.#items = this.#items.filter((row) => row.id !== id);
 	}
 }

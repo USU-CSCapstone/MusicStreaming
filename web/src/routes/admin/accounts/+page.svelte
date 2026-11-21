@@ -66,9 +66,13 @@
 		void goto(`${resolve('/admin/accounts')}?${params}`, { keepFocus: true });
 	}
 
-	/** Sets the account's status and shows it as the server answers. */
+	/**
+	 * Sets the account's status and shows it as the server answers. Suspending drops a reset link
+	 * shown for it, which the suspension cancelled.
+	 */
 	async function setStatus(row: AdminUser, status: AdminUser['status']) {
-		list.replace(await adminSetUserStatus(fetch, row.id, status), (r) => r.id === row.id);
+		list.replace(await adminSetUserStatus(fetch, row.id, status));
+		if (status === 'suspended' && issued?.username === row.username) issued = null;
 	}
 
 	async function restore(row: AdminUser) {
@@ -90,7 +94,7 @@
 			username: row.username,
 			link: `${location.origin}${resolve('/reset')}#${made.code}`
 		};
-		list.replace({ ...row, resetPending: true }, (r) => r.id === row.id);
+		list.replace({ ...row, resetPending: true });
 	}
 
 	/**
@@ -99,7 +103,7 @@
 	 */
 	async function remove(row: AdminUser, password: string) {
 		await adminDeleteUser(fetch, row.id, { password });
-		list.remove((r) => r.id === row.id);
+		list.remove(row.id);
 		selected = selected.filter((id) => id !== row.id);
 		if (issued?.username === row.username) issued = null;
 	}
@@ -109,14 +113,20 @@
 	 * it, which the change cancelled.
 	 */
 	async function setRole(row: AdminUser, role: 'admin' | 'user', password: string) {
-		list.replace(await adminSetUserRole(fetch, row.id, { role, password }), (r) => r.id === row.id);
+		list.replace(await adminSetUserRole(fetch, row.id, { role, password }));
 		if (issued?.username === row.username) issued = null;
 	}
 
-	/** Hands ownership to the account, then reloads so the page shows the viewer as an admin. */
+	/**
+	 * Hands ownership to the account, then reloads so the page shows the viewer as an admin. The
+	 * transfer cancelled every admin's reset link, and the viewer may no longer act on the
+	 * accounts ticked, so both are dropped.
+	 */
 	async function transfer(row: AdminUser, password: string) {
 		await transferOwnership(fetch, { userId: row.id, password });
 		await invalidateAll();
+		issued = null;
+		selected = [];
 	}
 
 	function toggle(row: AdminUser, which: 'libraries' | 'devices') {
@@ -265,7 +275,7 @@
 								<AccountLibraries
 									{row}
 									libraries={data.libraries}
-									onsaved={(user) => list.replace(user, (r) => r.id === row.id)}
+									onsaved={(user) => list.replace(user)}
 								/>
 							{/key}
 						{:else if panel[row.id] === 'devices'}
