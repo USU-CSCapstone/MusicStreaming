@@ -71,6 +71,7 @@ saying what's wrong.
 | `JEWELCASE_LOG` | `info` | How much to log: `error`, `warn`, `info`, `debug`, or `trace` |
 | `JEWELCASE_TRUSTED_PROXIES` | `127.0.0.0/8, ::1` | Reverse proxies to believe about the client's address, as addresses or networks separated by commas |
 | `JEWELCASE_WEB_DIR` | `/usr/share/jewelcase/web` | The web app's build, served beside the API. Without one at the default, only the API is served; a folder you name must be there. |
+| `JEWELCASE_OWNER_RESET` | off | Set to `1` to give the owner a new password reset link at startup, for an owner who is locked out ([below](#recovering-the-owners-password)). Any other value stops the server. |
 
 With the development setup, `JEWELCASE_MUSIC` in `.env` picks the folder that's mounted as the
 library; point it somewhere else and the library shows that folder's music instead. Of the
@@ -84,6 +85,14 @@ services:
     environment:
       JEWELCASE_LOG: debug
 ```
+
+## Recovering the owner's password
+
+The owner's password can't be reset from inside Jewelcase, so if it is lost, the person who
+runs the server does it. Set `JEWELCASE_OWNER_RESET=1` and restart. The server logs a link, a
+path ending in `/reset#` and a code, and the owner opens it on the server's address to choose a
+new password. It works for 24 hours, and each start with the setting on makes a new link and
+cancels the last. Then remove the setting and restart, so it doesn't issue a link every time.
 
 ## Your data
 

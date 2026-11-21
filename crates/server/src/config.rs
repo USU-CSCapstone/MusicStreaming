@@ -22,8 +22,10 @@ const BASE_PATH: &str = "JEWELCASE_BASE_PATH";
 const LOG: &str = "JEWELCASE_LOG";
 const TRUSTED_PROXIES: &str = "JEWELCASE_TRUSTED_PROXIES";
 pub const WEB_DIR: &str = "JEWELCASE_WEB_DIR";
+pub const OWNER_RESET: &str = "JEWELCASE_OWNER_RESET";
 
-const SETTINGS: [&str; 7] = [DATA_DIR, MUSIC, PORT, BASE_PATH, LOG, TRUSTED_PROXIES, WEB_DIR];
+const SETTINGS: [&str; 8] =
+    [DATA_DIR, MUSIC, PORT, BASE_PATH, LOG, TRUSTED_PROXIES, WEB_DIR, OWNER_RESET];
 
 /// The server's settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +46,8 @@ pub struct Config {
     /// The web app's static build, when not where the image puts it. A build named here must be
     /// there.
     pub web_dir: Option<PathBuf>,
+    /// Whether to give the owner a new password reset link at startup, for an owner locked out.
+    pub owner_reset: bool,
 }
 
 impl Default for Config {
@@ -57,6 +61,7 @@ impl Default for Config {
             log: "info".to_owned(),
             trusted_proxies: TrustedProxies::default(),
             web_dir: None,
+            owner_reset: false,
         }
     }
 }
@@ -93,6 +98,7 @@ impl Config {
                     trusted_proxies::parse(&value).map(|proxies| config.trusted_proxies = proxies)
                 }
                 WEB_DIR => parse_dir(&value).map(|dir| config.web_dir = Some(dir)),
+                OWNER_RESET => parse_flag(&value).map(|on| config.owner_reset = on),
                 _ => {
                     problems.push(format!(
                         "{key} is not a Jewelcase setting; the settings are {}",
@@ -121,6 +127,11 @@ fn parse_dir(value: &str) -> Result<PathBuf, &'static str> {
         return Err("a directory path");
     }
     Ok(PathBuf::from(value))
+}
+
+/// An on switch: `1`; anything else is refused, so a `0` or `false` cannot be misread as on.
+fn parse_flag(value: &str) -> Result<bool, &'static str> {
+    if value == "1" { Ok(true) } else { Err("1, or leave it unset") }
 }
 
 /// A port setting: 1 to 65535.
@@ -205,6 +216,7 @@ mod tests {
             ("JEWELCASE_LOG", "jewelcase_server=debug"),
             ("JEWELCASE_TRUSTED_PROXIES", "172.16.0.0/12"),
             ("JEWELCASE_WEB_DIR", "/srv/web"),
+            ("JEWELCASE_OWNER_RESET", "1"),
         ])
         .unwrap();
         assert_eq!(
@@ -217,8 +229,21 @@ mod tests {
                 log: "jewelcase_server=debug".to_owned(),
                 trusted_proxies: trusted_proxies::parse("172.16.0.0/12").unwrap(),
                 web_dir: Some(PathBuf::from("/srv/web")),
+                owner_reset: true,
             }
         );
+    }
+
+    #[test]
+    fn owner_reset_is_on_only_for_1() {
+        for value in ["0", "true", "", "yes", "11"] {
+            let error = parse(&[("JEWELCASE_OWNER_RESET", value)]).unwrap_err().to_string();
+            assert!(
+                error.contains(&format!("JEWELCASE_OWNER_RESET is {value:?}; expected 1")),
+                "{error}"
+            );
+        }
+        assert!(!parse(&[]).unwrap().owner_reset);
     }
 
     #[test]
@@ -249,18 +274,21 @@ mod tests {
         let error = parse(&[
             ("JEWELCASE_PORT", "http"),
             ("JEWELCASE_DATADIR", "/data"),
+            ("JEWELCASE_OWNER_RESET", "true"),
             ("JEWELCASE_LOG", "info,[[["),
             ("JEWELCASE_TRUSTED_PROXIES", "localhost"),
         ])
         .unwrap_err();
         let message = error.to_string();
-        assert_eq!(error.problems.len(), 4, "{message}");
+        assert_eq!(error.problems.len(), 5, "{message}");
         assert!(message.contains("JEWELCASE_DATADIR is not a Jewelcase setting"), "{message}");
         assert!(
             message.contains("JEWELCASE_PORT is \"http\"; expected a port number"),
             "{message}"
         );
         assert!(message.contains("JEWELCASE_LOG is"), "{message}");
+        assert!(message.contains("JEWELCASE_OWNER_RESET is \"true\"; expected 1"), "{message}");
+        assert!(message.contains("JEWELCASE_WEB_DIR"), "the settings are listed: {message}");
         assert!(
             message.contains("JEWELCASE_TRUSTED_PROXIES is \"localhost\"; expected addresses"),
             "{message}"

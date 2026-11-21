@@ -56,6 +56,9 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
         create_first_library(&db, music).await?;
     }
     roots_apart(&db, &data_dir).await?;
+    if config.owner_reset {
+        reset_owner_password(&db, &config.base_path).await?;
+    }
 
     let ffmpeg_config = FfmpegConfig::default();
     let ffmpeg = Ffmpeg::new(ffmpeg_config.clone()).context("could not start ffmpeg's watchdog")?;
@@ -190,6 +193,24 @@ async fn create_first_library(db: &Database, music: &Path) -> anyhow::Result<()>
     let path = music.clone();
     let id = db.write(move |tx| libraries::create(tx, None, "Music", &[&path], &[])).await?;
     info!(library = id, path = %music.display(), "created library");
+    Ok(())
+}
+
+/// Gives the owner a password reset link for `JEWELCASE_OWNER_RESET`, and logs its path under
+/// `base_path` once, the only place its code is shown. Before setup there is no owner, so it
+/// only says so.
+async fn reset_owner_password(db: &Database, base_path: &str) -> anyhow::Result<()> {
+    match api::issue_for_owner(db).await? {
+        Some(code) => warn!(
+            "{} is set: to set the owner's password, open {base_path}/reset#{code} on this \
+             server's address within 24 hours, then remove the setting and restart",
+            config::OWNER_RESET
+        ),
+        None => info!(
+            "{} is set, but there is no owner yet, so there is nothing to reset",
+            config::OWNER_RESET
+        ),
+    }
     Ok(())
 }
 
