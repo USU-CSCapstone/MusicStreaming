@@ -86,6 +86,13 @@ services:
       JEWELCASE_LOG: debug
 ```
 
+## Other people
+
+The owner and the admins they choose invite people from **Invites** in the app and manage
+their accounts from **Accounts**. An invite is a single-use link that works for 1 to 30 days. If
+the owner loses their own password, the person who runs the server recovers it
+([below](#recovering-the-owners-password)).
+
 ## Recovering the owner's password
 
 The owner's password can't be reset from inside Jewelcase, so if it is lost, the person who
@@ -134,7 +141,6 @@ docker compose up --detach
 - Running behind a reverse proxy
 - Upgrading the database from older development versions
 - Backing up while the server runs
-- Other user accounts besides the owner
 - More than one library
 - Converting formats a browser can't play
 - Serving the web app under a base path
