@@ -14,7 +14,8 @@ pub fn router() -> Router<AppState> {
         .route("/me", get(me::get))
         // Rows repeat the same few names, so a page is gzipped like the library's feed.
         .route("/me/changes", get(account_changes::list).layer(CompressionLayer::new()))
-        .route("/me/devices", get(devices::list))
+        .route("/me/devices", get(devices::list).delete(devices::sign_out_mine_others))
+        .route("/me/devices/{device_id}", delete(devices::sign_out_mine))
         .route("/me/player", get(player::get))
         .route("/me/player/commands", post(player::send_command))
         .route(

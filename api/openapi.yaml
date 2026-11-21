@@ -499,6 +499,42 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/DeviceList' }
         default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Devices]
+      summary: Sign out the caller's other devices
+      description: |
+        Signs out every signed-in device of the caller except the calling one, as
+        `adminSignOutDevices` does for an account: each later request with its token is
+        `401 session_revoked` with `logged_out`, its realtime connections are sent
+        `sessionRevoked` and closed, and the remaining connections are sent the new device list.
+        Not recorded in the audit log. The calling device signs itself out with `logout`.
+      operationId: signOutMyOtherDevices
+      responses:
+        '204': { description: No Content }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /me/devices/{deviceId}:
+    delete:
+      tags: [Devices]
+      summary: Sign out one of the caller's other devices
+      description: |
+        Signs out the device as `signOutMyOtherDevices` does all of them. A device that is not
+        the caller's, or is not signed in, is `404` and nothing changes. The calling device's
+        own ID is `422`: it signs itself out with `logout`.
+      operationId: signOutMyDevice
+      parameters:
+        - name: deviceId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: No Content }
+        '422':
+          description: '`validation_failed` — the calling device''s own ID.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
 
   # ───────────────────────────── Libraries ─────────────────────────────
   /libraries:

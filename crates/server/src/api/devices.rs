@@ -10,14 +10,16 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
+use axum::http::StatusCode;
 use rusqlite::{Connection, Row, Transaction, params};
 use serde::{Deserialize, Serialize};
 
+use super::extract::Path;
 use super::me::check_name;
-use super::realtime::{Hub, ServerMessage};
+use super::realtime::{Hub, Revoked, ServerMessage};
 use super::scope::Caller;
 use super::time::serialize_rfc3339;
-use super::{Id, Problem};
+use super::{Code, Id, Problem};
 use crate::db::{Database, new_id, now_ms};
 
 /// The spec's `Device`.
@@ -169,6 +171,61 @@ pub async fn list(
         item.current = Some(item.id.0 == caller.device);
     }
     Ok(Json(DeviceList { items }))
+}
+
+/// `signOutMyDevice`: signs out another of the caller's signed-in devices, `404` if it is not
+/// the caller's or not signed in. The calling device signs out with `logout`.
+pub async fn sign_out_mine(
+    State(db): State<Arc<Database>>,
+    State(hub): State<Arc<Hub>>,
+    caller: Caller,
+    Path(Id(device)): Path<Id>,
+) -> Result<StatusCode, Problem> {
+    if device == caller.device {
+        return Err(Problem::invalid("This is the device you are using. Log out instead."));
+    }
+    sign_out_of(db, hub, caller.user, Which::One(device)).await
+}
+
+/// `signOutMyOtherDevices`: signs out every signed-in device of the caller but the calling one.
+pub async fn sign_out_mine_others(
+    State(db): State<Arc<Database>>,
+    State(hub): State<Arc<Hub>>,
+    caller: Caller,
+) -> Result<StatusCode, Problem> {
+    sign_out_of(db, hub, caller.user, Which::All { keep: Some(caller.device) }).await
+}
+
+/// Signs out `which` of `user`'s devices, then closes their connections and sends the rest the
+/// new list.
+async fn sign_out_of(
+    db: Arc<Database>,
+    hub: Arc<Hub>,
+    user: i64,
+    which: Which,
+) -> Result<StatusCode, Problem> {
+    let one = matches!(which, Which::One(_));
+    // Spawned: a client that hangs up drops this request, which must not leave the connections
+    // open once the sign-out is committed.
+    let done = tokio::spawn(async move {
+        let signed_out = db.write(move |tx| sign_out(tx, user, which)).await?;
+        if one && signed_out.is_empty() {
+            return Err(Problem::not_found());
+        }
+        if signed_out.is_empty() {
+            return Ok(());
+        }
+        for (device, _) in signed_out {
+            hub.revoke(user, device, Revoked::LoggedOut);
+        }
+        changed(db, hub, user);
+        Ok::<_, Problem>(())
+    });
+    done.await.map_err(|error| {
+        tracing::error!(%error, "signing out devices did not complete");
+        Problem::new(Code::Internal)
+    })??;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Sends `user`'s realtime connections their device list, without `current`, which differs
