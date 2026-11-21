@@ -229,9 +229,14 @@ async fn a_user_is_refused_all_three() {
 
 #[tokio::test]
 async fn a_creator_suspended_or_demoted_since_the_gate_makes_no_invite() {
-    for change in [
-        "UPDATE users SET status = 'suspended' WHERE id = 3",
-        "UPDATE users SET role = 'user' WHERE id = 3",
+    for (change, status, code, detail) in [
+        ("UPDATE users SET status = 'suspended' WHERE id = 3", 401, "unauthenticated", None),
+        (
+            "UPDATE users SET role = 'user' WHERE id = 3",
+            403,
+            "forbidden",
+            Some("Only an admin or the owner can manage accounts."),
+        ),
     ] {
         let (temp, db, _app) = app("");
         let conn = conn(&temp);
@@ -243,12 +248,9 @@ async fn a_creator_suspended_or_demoted_since_the_gate_makes_no_invite() {
             panic!("{change}: an invite was made");
         };
         let problem = serde_json::to_value(problem).unwrap();
-        assert_eq!(problem["status"], 403, "{change}");
-        assert_eq!(problem["code"], "forbidden", "{change}");
-        assert_eq!(
-            problem["detail"], "Only an active admin or the owner can manage accounts.",
-            "{change}"
-        );
+        assert_eq!(problem["status"], status, "{change}");
+        assert_eq!(problem["code"], code, "{change}");
+        assert_eq!(problem["detail"].as_str(), detail, "{change}");
         let invites: i64 =
             conn.query_row("SELECT count(*) FROM invites", [], |r| r.get(0)).unwrap();
         assert_eq!(invites, 0, "{change}");

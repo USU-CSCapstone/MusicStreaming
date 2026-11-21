@@ -42,19 +42,25 @@ fn account(conn: &Connection, id: i64) -> rusqlite::Result<Option<(String, Strin
         .optional()
 }
 
-/// `actor`'s rank, as it stands in `conn`, if they are an active admin or the owner, else `403`.
-/// Call it inside the action's write, since the gate's view of the actor may be stale by then.
+/// `actor`'s rank, as it stands in `conn`, if they are an admin or the owner. An actor who is
+/// gone or no longer active is `401 unauthenticated`, as their next request is at the gate; an
+/// active user is `403`. Call it inside the action's write, since the gate's view of the actor
+/// may be stale by then.
 pub fn manager_rank(conn: &Connection, actor: i64) -> Result<u8, Problem> {
     match account(conn, actor)? {
-        Some((role, status)) if status == "active" && rank(&role) > 0 => Ok(rank(&role)),
-        _ => Err(forbidden("Only an active admin or the owner can manage accounts.")),
+        Some((role, status)) if status == "active" => match rank(&role) {
+            0 => Err(forbidden("Only an admin or the owner can manage accounts.")),
+            rank => Ok(rank),
+        },
+        _ => Err(Problem::new(Code::Unauthenticated)),
     }
 }
 
 /// Whether `actor` may act on account `target`, as both stand in `conn`: call it inside the
-/// action's write, since the gate's view of the actor may be stale by then. An actor who is not
-/// an active admin or owner is `403` whatever the target ([`manager_rank`]); a target that does
-/// not exist or is being deleted is `404`; a target the actor does not outrank is `403`.
+/// action's write, since the gate's view of the actor may be stale by then. An actor who is no
+/// longer active is `401`, and one who is not an admin or owner `403`, whatever the target
+/// ([`manager_rank`]); a target that does not exist or is being deleted is `404`; a target the
+/// actor does not outrank is `403`.
 pub fn authorize(conn: &Connection, actor: i64, target: i64) -> Result<Target, Problem> {
     let actor_rank = manager_rank(conn, actor)?;
     let (target_role, target_status) = match account(conn, target)? {

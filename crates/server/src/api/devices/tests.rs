@@ -1,8 +1,12 @@
 use axum::Router;
+use axum::extract::State;
 use axum::http::StatusCode;
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
+use super::super::Id;
+use super::super::extract::Path;
+use super::super::scope::Caller;
 use super::super::session::token_hash;
 use super::super::testing::socket::{connect_with, next_of, serve};
 use super::super::testing::{
@@ -174,4 +178,33 @@ async fn signing_out_the_others_leaves_only_the_calling_device_and_records_nothi
         ]
     );
     assert_eq!(audit_rows(&conn), 0);
+}
+
+#[tokio::test]
+async fn a_device_signed_out_since_the_gate_signs_out_nothing() {
+    for which in ["one", "others"] {
+        let (temp, db, _app) = app_with_tracks().await;
+        let state = state(&temp, db);
+        let conn = conn(&temp);
+        add_device(&conn, 1, 2, "phone-token");
+        add_device(&conn, 1, 3, "tablet-token");
+        conn.execute("UPDATE devices SET revoked_reason = 'logged_out' WHERE id = 2", []).unwrap();
+        let before = revoked(&conn);
+
+        let caller = Caller { user: 1, device: 2, admin: true, owner: true };
+        let (db, hub) = (State(state.db.clone()), State(state.hub.clone()));
+        let answer = match which {
+            "one" => super::sign_out_mine(db, hub, caller, Path(Id(3))).await,
+            _ => super::sign_out_mine_others(db, hub, caller).await,
+        };
+        let Err(problem) = answer else { panic!("{which}: devices were signed out") };
+        let problem = serde_json::to_value(problem).unwrap();
+        assert_eq!(problem["status"], 401, "{which}");
+        assert_eq!(
+            (&problem["code"], &problem["reason"]),
+            (&json!("session_revoked"), &json!("logged_out")),
+            "{which}"
+        );
+        assert_eq!(revoked(&conn), before, "{which}: no device is signed out");
+    }
 }

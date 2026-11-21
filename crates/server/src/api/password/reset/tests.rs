@@ -353,7 +353,7 @@ async fn an_admin_suspended_while_issuing_issues_nothing() {
 
 #[tokio::test]
 async fn an_admin_demoted_while_issuing_issues_nothing() {
-    let detail = json!("Only an active admin or the owner can manage accounts.");
+    let detail = json!("Only an admin or the owner can manage accounts.");
     issue_stops_at(Meanwhile::Demoted, StatusCode::FORBIDDEN, "forbidden", detail).await;
 }
 

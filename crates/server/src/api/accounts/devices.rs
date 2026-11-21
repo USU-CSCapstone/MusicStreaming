@@ -14,8 +14,9 @@ use super::authorize;
 use crate::api::audit::{self, Action};
 use crate::api::devices::{self, DeviceList, Which};
 use crate::api::extract::Path;
+use crate::api::playlists::settle;
 use crate::api::realtime::Revoked;
-use crate::api::{Caller, Code, Hub, Id, Problem};
+use crate::api::{Caller, Hub, Id, Problem};
 use crate::db::Database;
 
 /// `adminListUserDevices`: the account's signed-in devices, most recently seen first.
@@ -66,9 +67,8 @@ async fn sign_out_of(
     user: i64,
     which: Which,
 ) -> Result<StatusCode, Problem> {
-    // Spawned: an admin who hangs up drops this request, which must not leave the connections
-    // open once the sign-out is committed.
-    let done = tokio::spawn(async move {
+    // Settled: an admin who hangs up must not leave the connections open.
+    settle(async move {
         let one = matches!(which, Which::One(_));
         let signed_out = db
             .try_write(move |tx| {
@@ -91,11 +91,8 @@ async fn sign_out_of(
             hub.revoke(user, device, Revoked::LoggedOut);
         }
         devices::changed(db, hub, user);
-        Ok::<_, Problem>(())
-    });
-    done.await.map_err(|error| {
-        tracing::error!(%error, "signing out devices did not complete");
-        Problem::new(Code::Internal)
-    })??;
+        Ok(())
+    })
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
