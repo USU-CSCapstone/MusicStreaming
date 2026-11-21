@@ -2622,7 +2622,8 @@ paths:
 
         The account must be an active admin: a user or a suspended admin is `422`. The owner
         cannot transfer to themselves (`403`), and an account that does not exist or is being
-        deleted is `404`. The transfer clears both accounts' password reset links, and both
+        deleted is `404`. The transfer clears both accounts' password reset links and every
+        admin's, since the former owner may have issued them; a user's link is kept. Both
         accounts' realtime connections are sent `accessChanged`. Recorded in the audit log as
         `ownership_transferred`, with the former owner as the actor.
       operationId: transferOwnership
