@@ -3,7 +3,8 @@
 //! A task runs it every hour, first a few minutes after the server starts.
 //! Rows go once they are older than [`WINDOW_MS`]: finished scans, but each library's last
 //! that ran and last completed; login attempts; ended plays' events for the `played` hook;
-//! recent searches and what the `searched` hook noted of them; kept queues parked that long
+//! recent searches and what the `searched` hook noted of them; invites redeemed, revoked or
+//! expired that long ago; kept queues parked that long
 //! ago, with the lists no queue uses after them; and tracks missing that long,
 //! with whatever of the catalog goes with them. A request to forget searches (`stopped`) is
 //! kept until it is delivered instead, however old it is. Art and biographies that nothing
@@ -51,7 +52,7 @@ type Stage = fn(&Transaction<'_>, i64, &mut i64) -> Result<bool>;
 
 /// Every kind of row, in order: missing tracks before the art and biographies they leave
 /// unreferenced.
-const STAGES: [Stage; 13] = [
+const STAGES: [Stage; 14] = [
     scans,
     login_attempts,
     play_ends,
@@ -60,6 +61,7 @@ const STAGES: [Stage; 13] = [
     searches_noted,
     forgets_delivered,
     idempotency_keys,
+    invites,
     kept_queues,
     unused_queue_lists,
     catalog::tracks,
@@ -207,6 +209,17 @@ fn searches_noted(tx: &Transaction<'_>, now: i64, _: &mut i64) -> Result<bool> {
         now,
         "DELETE FROM search_events WHERE seq IN (SELECT seq FROM search_events \
          WHERE kind <> 'stopped' AND created_at < ?1 LIMIT ?2)",
+    )
+}
+
+/// Invites that can no longer be used, once the window has passed since they were redeemed,
+/// revoked or expired, with their library links. A pending invite is never deleted.
+fn invites(tx: &Transaction<'_>, now: i64, _: &mut i64) -> Result<bool> {
+    aged(
+        tx,
+        now,
+        "DELETE FROM invites WHERE id IN (SELECT id FROM invites \
+         WHERE coalesce(redeemed_at, revoked_at, expires_at) < ?1 LIMIT ?2)",
     )
 }
 
