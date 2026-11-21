@@ -104,9 +104,11 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 
 ### Stage 7 — Administration
 
-- Invites, account suspension and deletion, ownership transfer, password change and reset, signing devices out, and the audit log.
+- **Built: the account side.** Invites are single-use and last 1–30 days. The Accounts page lists accounts and sets each one's library access. Accounts can be suspended, and deleted. Devices are signed out by an admin, and by people for their own. People change their own password, and admins issue reset links. Whoever runs the server can recover the owner's password from the host. Roles follow the rank rule, and the owner can hand ownership to an admin. The owner reads an audit log of admin actions, kept for a year ([`users.md` §1–3, §8–9](requirements/users.md), [`design/database.md` §9](design/database.md#9-retention)).
 - Library management: create, rename, roots, exclude rules, delete, repointing a moved root, access grants, and a health view.
-- Admin views for scan progress and problems, missing tracks and cleanup, and the duplicate report. Account preferences that sync across devices.
+- Admin views for scan progress and problems, missing tracks and cleanup, and the duplicate report.
+- Exporting a user's data, account preferences that sync across devices, and the admin's view of sign-in attempts ([`users.md` §3.1](requirements/users.md#31-protection)).
+- Asking plugins to forget a deleted account (Stage 12's questions), and a sweep of device rows revoked long ago.
 
 **Open questions:**
 1. The format for exporting a user's data ([`users.md` §9](requirements/users.md#9-account-lifecycle)).
@@ -114,7 +116,7 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 3. ~~How `session_revoked` reaches a device.~~ **Decided:** as Stage 3 #1.
 4. How duplicates are stored and detected: matching tags, matching content, or the same album under two paths ([`scanning.md` §9](requirements/scanning.md#9-duplicates)).
 5. The default interval for scheduled scans.
-6. What the admin UI tells users about admin visibility, and where it says it ([`users.md` §8](requirements/users.md#8-admin-capabilities--visibility)).
+6. ~~What the admin UI tells users about admin visibility, and where it says it.~~ **Decided, built:** the Account page tells each user that admins can see their listening data and cannot sign in as them or change any of it ([`users.md` §8](requirements/users.md#8-admin-capabilities--visibility)).
 
 **End goal:** A household runs one server with several libraries, managed entirely from the admin UI. [`users.md`](requirements/users.md), [`libraries.md` §1–4](requirements/libraries.md), and the admin surfaces of [`scanning.md` §8–10](requirements/scanning.md#8-missing-files) are met.
 

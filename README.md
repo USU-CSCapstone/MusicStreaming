@@ -19,11 +19,13 @@ tracks, even on a Raspberry Pi. Plugins add everything else, such as fetching ly
 - **Instant search:** finds albums, artists, and songs as you type, typos included.
 - **Web player:** seeking, waveforms, lyrics, and media keys and lock-screen controls.
 - **Remote control:** see your signed-in devices and control what plays from any of them.
+- **Accounts:** admins invite people with single-use links and choose which libraries each
+  account reaches; the owner makes admins and can read a record of admin actions.
 - **Plugins:** sandboxed WebAssembly plugins that an admin approves and turns on per library.
   [LRCLIB lyrics](plugins/lrclib-lyrics/) and [ListenBrainz scrobbling](plugins/listenbrainz/)
   are included as examples.
 
-Playlists, offline listening, recommendations, multiple users, transcoding, and an Android app
+Playlists, offline listening, recommendations, transcoding, and an Android app
 are planned.
 
 ## Getting started
