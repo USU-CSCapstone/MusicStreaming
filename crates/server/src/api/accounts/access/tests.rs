@@ -1,18 +1,16 @@
 //! Setting an account's libraries.
 
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::Arc;
 
 use axum::Router;
 use axum::http::StatusCode;
 use futures_util::SinkExt;
 use rusqlite::Connection;
-use rusqlite::functions::FunctionFlags;
 use serde_json::{Value, json};
-use tokio::sync::oneshot;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::api::testing::socket::{Socket, connect_with, next, next_of, serve};
-use crate::api::testing::{TOKEN, add_device, add_user, app, audit, call, conn};
+use crate::api::testing::{TOKEN, add_device, add_user, app, audit, call, conn, hold_next};
 use crate::db::Database;
 use crate::db::testing::{access, library, mark_deleting};
 
@@ -313,36 +311,13 @@ async fn a_grant_to_a_thousand_accounts_is_accepted() {
     assert_eq!(audit(&conn).len(), 1000);
 }
 
-/// Holds the writer inside the next write that records an admin action, until the sender this
-/// answers sends or is dropped. The receiver hears once the write is held there.
-async fn hold_next_record(db: &Database) -> (oneshot::Receiver<()>, mpsc::Sender<()>) {
-    let (entered, held) = oneshot::channel();
-    let (release, released) = mpsc::channel();
-    let hold = Mutex::new(Some((entered, released)));
-    db.write(move |tx| {
-        tx.create_scalar_function("hold", 0, FunctionFlags::SQLITE_UTF8, move |_| {
-            if let Some((entered, released)) = hold.lock().unwrap().take() {
-                entered.send(()).unwrap();
-                let _ = released.recv();
-            }
-            Ok(0)
-        })?;
-        tx.execute_batch(
-            "CREATE TEMP TRIGGER IF NOT EXISTS hold AFTER INSERT ON admin_actions BEGIN SELECT hold(); END",
-        )
-    })
-    .await
-    .unwrap();
-    (held, release)
-}
-
 #[tokio::test]
 async fn a_change_whose_request_is_dropped_mid_write_is_still_announced() {
     let (_temp, db, app) = accounts();
     let address = serve(app.clone()).await;
     let mut target = connect_with(address, "user-token").await;
 
-    let (held, release) = hold_next_record(&db).await;
+    let (held, release) = hold_next(&db, "AFTER INSERT ON admin_actions").await;
     let request = tokio::spawn({
         let app = app.clone();
         async move { set(&app, TOKEN, 4, &["1", "2", "3"]).await }
@@ -353,7 +328,7 @@ async fn a_change_whose_request_is_dropped_mid_write_is_still_announced() {
     drop(release);
     assert_eq!(next_of(&mut target, "accessChanged").await, json!({ "type": "accessChanged" }));
 
-    let (held, release) = hold_next_record(&db).await;
+    let (held, release) = hold_next(&db, "AFTER INSERT ON admin_actions").await;
     let request = tokio::spawn({
         let app = app.clone();
         async move { change(&app, TOKEN, &["4"], &["3"], "revoke").await }

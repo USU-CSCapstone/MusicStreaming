@@ -9,7 +9,7 @@ use crate::db::testing::{User, mark_deleting, open};
 const OWNER_ONLY: &str = "No one can do this to the owner's account.";
 const SELF: &str = "You cannot do this to your own account.";
 const ADMIN: &str = "Only the owner can do this to an admin's account.";
-const NOT_ADMIN: &str = "Only an active admin or the owner can manage accounts.";
+const NOT_ADMIN: &str = "Only an admin or the owner can manage accounts.";
 
 /// The owner (1), admins 2 and 3, users 4 and 5 (suspended), and user 6, being deleted.
 fn accounts() -> (tempfile::TempDir, Connection) {
@@ -76,17 +76,16 @@ fn each_role_acts_only_on_those_it_outranks() {
 
 #[test]
 fn an_actor_demoted_suspended_or_deleted_since_the_gate_is_refused() {
-    for change in [
-        "UPDATE users SET role = 'user' WHERE id = 2",
-        "UPDATE users SET status = 'suspended' WHERE id = 2",
-        "UPDATE users SET status = 'deleting', username = NULL WHERE id = 2",
-        "DELETE FROM users WHERE id = 2",
+    for (change, refused) in [
+        ("UPDATE users SET role = 'user' WHERE id = 2", (403, Some(NOT_ADMIN.to_owned()))),
+        ("UPDATE users SET status = 'suspended' WHERE id = 2", (401, None)),
+        ("UPDATE users SET status = 'deleting', username = NULL WHERE id = 2", (401, None)),
+        ("DELETE FROM users WHERE id = 2", (401, None)),
     ] {
         let (_temp, conn) = accounts();
         assert_eq!(answer(&conn, 2, 4), (200, None));
         conn.execute(change, []).unwrap();
         for target in [4, 99] {
-            let refused = (403, Some(NOT_ADMIN.to_owned()));
             assert_eq!(answer(&conn, 2, target), refused, "{change}, on {target}");
         }
     }

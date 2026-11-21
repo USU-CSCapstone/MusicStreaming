@@ -16,6 +16,7 @@ use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
+use super::accounts::access::libraries_exist;
 use super::accounts::manager_rank;
 use super::extract::{self, Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Total, Unknown};
@@ -166,14 +167,7 @@ pub async fn create(
     let invite = db
         .try_write(move |tx| {
             manager_rank(tx, user)?;
-            for &Id(library) in &request.library_ids {
-                let exists = tx
-                    .prepare_cached("SELECT 1 FROM libraries WHERE id = ?1")?
-                    .exists([library])?;
-                if !exists {
-                    return Err(Problem::invalid("libraryIds names a library that does not exist"));
-                }
-            }
+            libraries_exist(tx, request.library_ids.iter().map(|&Id(id)| id))?;
             let (id, now) = (new_id()?, now_ms());
             tx.prepare_cached(
                 "INSERT INTO invites (id, code_hash, created_by, created_at, expires_at) \
@@ -186,7 +180,7 @@ pub async fn create(
             for Id(library) in request.library_ids {
                 link.execute([id, library])?;
             }
-            Ok(find(tx, id, now)?)
+            Ok::<_, Problem>(find(tx, id, now)?)
         })
         .await?;
     let invite = invite.ok_or_else(|| Problem::new(super::Code::Internal))?;

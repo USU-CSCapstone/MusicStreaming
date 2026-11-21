@@ -6,17 +6,16 @@ mod tests;
 
 use axum::extract::State;
 use axum::http::StatusCode;
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::{OptionalExtension, params};
 use serde::Deserialize;
 
 use super::{confirm, hash_new};
-use crate::api::devices::{self, Which};
+use crate::api::devices::{self, Which, still_signed_in};
 use crate::api::extract;
 use crate::api::origin::Origin;
 use crate::api::playlists::settle;
 use crate::api::realtime::Revoked;
 use crate::api::{AppState, Caller, Code, Problem};
-use crate::db::Text;
 
 /// The spec's `ChangePasswordRequest`.
 #[derive(Deserialize)]
@@ -81,19 +80,4 @@ pub async fn change(
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-/// Refuses as the gate would now unless `user`'s `device` is still signed in: `401
-/// session_revoked` with the reason if it was signed out, `401 unauthenticated` if its own
-/// `logout` removed it.
-fn still_signed_in(tx: &Transaction, user: i64, device: i64) -> Result<(), Problem> {
-    let revoked = tx
-        .prepare_cached("SELECT revoked_reason FROM devices WHERE id = ?1 AND user_id = ?2")?
-        .query_row([device, user], |row| row.get::<_, Option<Text<Revoked>>>(0))
-        .optional()?;
-    match revoked {
-        None => Err(Problem::new(Code::Unauthenticated)),
-        Some(Some(Text(reason))) => Err(Problem::revoked(reason)),
-        Some(None) => Ok(()),
-    }
 }

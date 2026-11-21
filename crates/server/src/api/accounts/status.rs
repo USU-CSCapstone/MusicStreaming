@@ -13,8 +13,9 @@ use super::{AdminUser, Status, admin_user, authorize};
 use crate::api::audit::{self, Action};
 use crate::api::devices::{self, Which};
 use crate::api::extract::{self, Path};
+use crate::api::playlists::settle;
 use crate::api::realtime::Revoked;
-use crate::api::{Caller, Code, Hub, Id, Problem, invites};
+use crate::api::{Caller, Hub, Id, Problem, invites};
 use crate::db::{Database, now_ms};
 
 /// The body of `adminSetUserStatus`.
@@ -34,9 +35,8 @@ pub async fn set(
     Path(Id(target)): Path<Id>,
     extract::Json(StatusChange { status }): extract::Json<StatusChange>,
 ) -> Result<Json<AdminUser>, Problem> {
-    // Spawned: an admin who hangs up drops this request, which must not leave the account's
-    // connections open once the suspension is committed.
-    let change = tokio::spawn(async move {
+    // Settled: an admin who hangs up must not leave the account's connections open.
+    let account = settle(async move {
         let (account, suspended) = db
             .try_write(move |tx| {
                 let was_suspended = authorize(tx, actor, target)?.suspended;
@@ -71,11 +71,8 @@ pub async fn set(
         if suspended {
             hub.revoke_all(target, Revoked::LoggedOut);
         }
-        Ok::<_, Problem>(account)
-    });
-    let account = change.await.map_err(|error| {
-        tracing::error!(%error, "changing an account's status did not complete");
-        Problem::new(Code::Internal)
-    })??;
+        Ok(account)
+    })
+    .await?;
     Ok(Json(account))
 }
