@@ -229,7 +229,9 @@
 			</li>
 			<li>
 				<a href={resolve('/admin/accounts')}>Accounts</a>
-				<span class="muted">Find an account, and suspend or restore it.</span>
+				<span class="muted"
+					>Find an account, change what it can reach, and suspend or restore it.</span
+				>
 			</li>
 			<li>
 				<a href={resolve('/admin/invites')}>Invites</a>

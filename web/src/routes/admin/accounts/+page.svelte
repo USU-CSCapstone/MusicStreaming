@@ -2,10 +2,17 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { AdminList } from '$lib/admin-list.svelte';
-	import { ApiError, adminListUsers, adminSetUserStatus } from '$lib/api/client';
+	import {
+		ApiError,
+		adminChangeLibraryAccess,
+		adminListUsers,
+		adminSetUserStatus
+	} from '$lib/api/client';
 	import type { AdminUser } from '$lib/api/types';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import AccountDevices from './AccountDevices.svelte';
+	import AccountLibraries from './AccountLibraries.svelte';
 
 	let { data } = $props();
 
@@ -23,6 +30,16 @@
 	let query = $derived(data.q);
 	let suspending = $state<AdminUser | null>(null);
 	let listError = $state<string | null>(null);
+	/** The accounts ticked, by ID, kept here so a reloaded list neither loses nor misapplies them. */
+	let selected = $state<string[]>([]);
+	let bulkLibrary = $state('');
+	let bulkBusy = $state(false);
+	let bulkError = $state<string | null>(null);
+	/** The panel open on each account: its libraries or its devices. */
+	let panel = $state<Record<string, 'libraries' | 'devices' | undefined>>({});
+	const MOST_AT_ONCE = 1000;
+	const blocked = $derived(!bulkLibrary || bulkBusy || selected.length > MOST_AT_ONCE);
+
 	let busy = $state<Record<string, boolean>>({});
 	let rowError = $state<Record<string, string>>({});
 
@@ -54,6 +71,29 @@
 		}
 	}
 
+	function toggle(row: AdminUser, which: 'libraries' | 'devices') {
+		panel[row.id] = panel[row.id] === which ? undefined : which;
+	}
+
+	/** Grants or revokes the chosen library for the selection, then reads the list again. */
+	async function change(action: 'grant' | 'revoke') {
+		bulkBusy = true;
+		bulkError = null;
+		try {
+			await adminChangeLibraryAccess(fetch, {
+				userIds: [...selected],
+				libraryIds: [bulkLibrary],
+				action
+			});
+			selected = [];
+			await list.reload();
+		} catch (err) {
+			bulkError = message(err);
+		} finally {
+			bulkBusy = false;
+		}
+	}
+
 	async function more() {
 		listError = null;
 		try {
@@ -64,7 +104,10 @@
 	}
 </script>
 
-<PageHeader title="Accounts" subtitle="Find an account, and suspend or restore it." />
+<PageHeader
+	title="Accounts"
+	subtitle="Find an account, change what it can reach, and suspend or restore it."
+/>
 
 <section aria-labelledby="all-title">
 	<h2 id="all-title">All accounts</h2>
@@ -80,10 +123,36 @@
 	{#if list.items.length === 0}
 		<p class="muted">{data.q ? 'No account matches that search.' : 'No accounts.'}</p>
 	{:else}
+		{#if selected.length > 0}
+			<div class="bulk" role="group" aria-label="Selected accounts">
+				<strong>{selected.length} selected</strong>
+				<select aria-label="Library for the selection" bind:value={bulkLibrary} disabled={bulkBusy}>
+					<option value="">Choose a library</option>
+					{#each data.libraries as library (library.id)}
+						<option value={library.id}>{library.name}</option>
+					{/each}
+				</select>
+				<button type="button" disabled={blocked} onclick={() => change('grant')}>Grant</button>
+				<button type="button" disabled={blocked} onclick={() => change('revoke')}>Revoke</button>
+				<button type="button" disabled={bulkBusy} onclick={() => (selected = [])}>Clear</button>
+				{#if selected.length > MOST_AT_ONCE}
+					<p class="muted small">Change at most 1,000 accounts at once. Clear some.</p>
+				{/if}
+				{#if bulkError}<p class="error" role="alert">{bulkError}</p>{/if}
+			</div>
+		{/if}
 		<ul class="accounts">
 			{#each list.items as row (row.id)}
 				<li class="card">
 					<div class="top">
+						{#if outranks(row)}
+							<input
+								type="checkbox"
+								aria-label="Select {row.username}"
+								value={row.id}
+								bind:group={selected}
+							/>
+						{/if}
 						<div class="who">
 							<strong>{row.displayName}</strong>
 							<span class="muted small">{row.username}</span>
@@ -103,6 +172,36 @@
 						{#if row.status === 'suspended'}<span class="flag">Suspended</span>{/if}
 						{#if row.resetPending}<span class="flag">Reset pending</span>{/if}
 					</p>
+					{#if outranks(row)}
+						<div class="panels">
+							<button
+								type="button"
+								aria-expanded={panel[row.id] === 'libraries'}
+								onclick={() => toggle(row, 'libraries')}
+							>
+								Libraries
+							</button>
+							<button
+								type="button"
+								aria-expanded={panel[row.id] === 'devices'}
+								onclick={() => toggle(row, 'devices')}
+							>
+								Devices
+							</button>
+						</div>
+						{#if panel[row.id] === 'libraries'}
+							<!-- Restarts on a new row, so the boxes show the grants the server now has. -->
+							{#key row}
+								<AccountLibraries
+									{row}
+									libraries={data.libraries}
+									onsaved={(user) => list.replace(user, (r) => r.id === row.id)}
+								/>
+							{/key}
+						{:else if panel[row.id] === 'devices'}
+							<AccountDevices {row} />
+						{/if}
+					{/if}
 					{#if rowError[row.id]}<p class="error" role="alert">{rowError[row.id]}</p>{/if}
 				</li>
 			{/each}
@@ -181,10 +280,44 @@
 		gap: var(--space-3);
 	}
 
+	.top input[type='checkbox'] {
+		flex-shrink: 0;
+		width: 20px;
+		height: 20px;
+	}
+
 	.who {
+		flex: 1;
 		display: flex;
 		flex-direction: column;
 		min-width: 0;
+	}
+
+	.panels,
+	.bulk {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--space-3);
+	}
+
+	.bulk {
+		margin-bottom: var(--space-4);
+	}
+
+	.bulk select {
+		min-width: 0;
+		height: 36px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-m);
+		background: var(--surface);
+		color: var(--text);
+		font: inherit;
+	}
+
+	.panels button[aria-expanded='true'] {
+		background: var(--accent-soft);
+		color: var(--accent);
 	}
 
 	.tags {
