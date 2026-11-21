@@ -436,7 +436,7 @@ async fn an_admin_suspended_while_deleting_deletes_nothing() {
 
 #[tokio::test]
 async fn an_admin_demoted_while_deleting_deletes_nothing() {
-    let detail = json!("Only an active admin or the owner can manage accounts.");
+    let detail = json!("Only an admin or the owner can manage accounts.");
     delete_stops_at(Meanwhile::Demoted, StatusCode::FORBIDDEN, "forbidden", detail).await;
 }
 

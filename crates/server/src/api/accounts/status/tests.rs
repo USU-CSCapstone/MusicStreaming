@@ -9,6 +9,9 @@ use rusqlite::types::Value as Column;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 
+use super::super::Status;
+use super::StatusChange;
+use crate::api::extract::{self, Path};
 use crate::api::password::{hash_new, hold_checks};
 use crate::api::player;
 use crate::api::scope::Caller;
@@ -16,9 +19,9 @@ use crate::api::testing::player::{start_playing, start_queue};
 use crate::api::testing::socket::{Socket, connect_with, next, next_of, serve};
 use crate::api::testing::{
     TOKEN, add_device, add_signed_out_device, add_user, app_with_tracks, audit, call, conn,
-    eventually, router_over, send_json, state,
+    eventually, hold_next, router_over, send_json, state,
 };
-use crate::api::{AppState, session::token_hash};
+use crate::api::{AppState, Id, session::token_hash};
 use crate::db::now_ms;
 use crate::db::testing::{User, access, mark_deleting};
 
@@ -326,4 +329,46 @@ async fn each_change_is_recorded_and_one_that_changes_nothing_does_nothing() {
     assert_eq!(set(&app, TOKEN, 4, "active").await.0, StatusCode::OK);
     assert_eq!(audit(&conn).len(), 2);
     assert_eq!(status(&conn, 4), "active");
+}
+
+#[tokio::test]
+async fn a_suspension_whose_request_is_dropped_mid_write_still_closes_the_sockets() {
+    let (_temp, state, app) = accounts().await;
+    let address = serve(app.clone()).await;
+    let mut phone = connect_with(address, "phone-token").await;
+
+    let (held, release) = hold_next(&state.db, "AFTER UPDATE OF status ON users").await;
+    let request = tokio::spawn({
+        let app = app.clone();
+        async move { set(&app, TOKEN, 4, "suspended").await }
+    });
+    held.await.unwrap();
+    request.abort();
+    assert!(request.await.unwrap_err().is_cancelled());
+    drop(release);
+    let revoked = json!({ "type": "sessionRevoked", "reason": "logged_out" });
+    assert_eq!(next_of(&mut phone, "sessionRevoked").await, revoked);
+}
+
+#[tokio::test]
+async fn an_admin_suspended_since_the_gate_changes_nothing() {
+    let (temp, state, _app) = accounts().await;
+    let conn = conn(&temp);
+    conn.execute("UPDATE users SET status = 'suspended' WHERE id = 2", []).unwrap();
+    let caller = Caller { user: 2, device: 2, admin: true, owner: false };
+    let request = StatusChange { status: Status::Suspended };
+    let answer = super::set(
+        State(state.db.clone()),
+        State(state.hub.clone()),
+        caller,
+        Path(Id(4)),
+        extract::Json(request),
+    )
+    .await;
+    let Err(problem) = answer else { panic!("the account was suspended") };
+    let problem = serde_json::to_value(problem).unwrap();
+    assert_eq!((&problem["status"], &problem["code"]), (&json!(401), &json!("unauthenticated")));
+    assert_eq!(status(&conn, 4), "active");
+    assert_eq!(devices(&conn, 4)[..2], [(4, None), (7, None)]);
+    assert!(audit(&conn).is_empty());
 }

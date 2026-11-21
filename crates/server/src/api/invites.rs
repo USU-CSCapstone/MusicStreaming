@@ -16,6 +16,7 @@ use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
+use super::accounts::access::libraries_exist;
 use super::accounts::manager_rank;
 use super::extract::{self, Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Total, Unknown};
@@ -150,8 +151,9 @@ pub struct Created {
 }
 
 /// `adminCreateInvite`: makes an invite for the libraries, which must all exist, and answers it
-/// with its code. Only the code's hash is stored. A creator who is no longer an active admin or
-/// the owner when the invite is written is `403`, so no invite outlives their authority.
+/// with its code. Only the code's hash is stored. A creator who is no longer active when the
+/// invite is written is `401`, and one who is no longer an admin `403`, so no invite outlives
+/// their authority.
 pub async fn create(
     State(db): State<Arc<Database>>,
     Caller { user, .. }: Caller,
@@ -166,14 +168,7 @@ pub async fn create(
     let invite = db
         .try_write(move |tx| {
             manager_rank(tx, user)?;
-            for &Id(library) in &request.library_ids {
-                let exists = tx
-                    .prepare_cached("SELECT 1 FROM libraries WHERE id = ?1")?
-                    .exists([library])?;
-                if !exists {
-                    return Err(Problem::invalid("libraryIds names a library that does not exist"));
-                }
-            }
+            libraries_exist(tx, request.library_ids.iter().map(|&Id(id)| id))?;
             let (id, now) = (new_id()?, now_ms());
             tx.prepare_cached(
                 "INSERT INTO invites (id, code_hash, created_by, created_at, expires_at) \
@@ -186,7 +181,7 @@ pub async fn create(
             for Id(library) in request.library_ids {
                 link.execute([id, library])?;
             }
-            Ok(find(tx, id, now)?)
+            Ok::<_, Problem>(find(tx, id, now)?)
         })
         .await?;
     let invite = invite.ok_or_else(|| Problem::new(super::Code::Internal))?;

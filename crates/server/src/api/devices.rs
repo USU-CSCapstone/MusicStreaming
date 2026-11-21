@@ -11,11 +11,12 @@ use std::sync::Arc;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use rusqlite::{Connection, Row, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 use serde::{Deserialize, Serialize};
 
 use super::extract::Path;
 use super::me::check_name;
+use super::playlists::settle;
 use super::realtime::{Hub, Revoked, ServerMessage};
 use super::scope::Caller;
 use super::time::serialize_rfc3339;
@@ -208,7 +209,7 @@ pub async fn sign_out_mine(
     if device == caller.device {
         return Err(Problem::invalid("This is the device you are using. Log out instead."));
     }
-    sign_out_of(db, hub, caller.user, Which::One(device)).await
+    sign_out_of(db, hub, caller, Which::One(device)).await
 }
 
 /// `signOutMyOtherDevices`: signs out every signed-in device of the caller but the calling one.
@@ -217,22 +218,26 @@ pub async fn sign_out_mine_others(
     State(hub): State<Arc<Hub>>,
     caller: Caller,
 ) -> Result<StatusCode, Problem> {
-    sign_out_of(db, hub, caller.user, Which::All { keep: Some(caller.device) }).await
+    sign_out_of(db, hub, caller, Which::All { keep: Some(caller.device) }).await
 }
 
-/// Signs out `which` of `user`'s devices, then closes their connections and sends the rest the
-/// new list.
+/// Signs out `which` of the caller's devices, if the calling device is still signed in, then
+/// closes their connections and sends the rest the new list.
 async fn sign_out_of(
     db: Arc<Database>,
     hub: Arc<Hub>,
-    user: i64,
+    Caller { user, device, .. }: Caller,
     which: Which,
 ) -> Result<StatusCode, Problem> {
     let one = matches!(which, Which::One(_));
-    // Spawned: a client that hangs up drops this request, which must not leave the connections
-    // open once the sign-out is committed.
-    let done = tokio::spawn(async move {
-        let signed_out = db.write(move |tx| sign_out(tx, user, which, Revoked::LoggedOut)).await?;
+    // Settled: a client that hangs up must not leave the connections open.
+    settle(async move {
+        let signed_out = db
+            .try_write(move |tx| {
+                still_signed_in(tx, user, device)?;
+                Ok::<_, Problem>(sign_out(tx, user, which, Revoked::LoggedOut)?)
+            })
+            .await?;
         if one && signed_out.is_empty() {
             return Err(Problem::not_found());
         }
@@ -243,13 +248,25 @@ async fn sign_out_of(
             hub.revoke(user, device, Revoked::LoggedOut);
         }
         changed(db, hub, user);
-        Ok::<_, Problem>(())
-    });
-    done.await.map_err(|error| {
-        tracing::error!(%error, "signing out devices did not complete");
-        Problem::new(Code::Internal)
-    })??;
+        Ok(())
+    })
+    .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Refuses as the gate would now unless `user`'s `device` is still signed in: `401
+/// session_revoked` with the reason if it was signed out, `401 unauthenticated` if its own
+/// `logout` removed it. Call it inside a write the device asked for.
+pub(crate) fn still_signed_in(conn: &Connection, user: i64, device: i64) -> Result<(), Problem> {
+    let revoked = conn
+        .prepare_cached("SELECT revoked_reason FROM devices WHERE id = ?1 AND user_id = ?2")?
+        .query_row([device, user], |row| row.get::<_, Option<Text<Revoked>>>(0))
+        .optional()?;
+    match revoked {
+        None => Err(Problem::new(Code::Unauthenticated)),
+        Some(Some(Text(reason))) => Err(Problem::revoked(reason)),
+        Some(None) => Ok(()),
+    }
 }
 
 /// Sends `user`'s realtime connections their device list, without `current`, which differs

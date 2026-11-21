@@ -45,7 +45,7 @@ pub async fn set(
         let (account, changed) = db
             .try_write(move |tx| {
                 authorize(tx, actor, target)?;
-                libraries_exist(tx, &wanted)?;
+                libraries_exist(tx, wanted.iter().copied())?;
                 let held = held(tx, target)?;
                 let granted: Vec<i64> = wanted.difference(&held).copied().collect();
                 let revoked: Vec<i64> = held.difference(&wanted).copied().collect();
@@ -67,9 +67,12 @@ pub async fn set(
 }
 
 /// Fails with `422` unless every library in `libraries` exists.
-fn libraries_exist(conn: &Connection, libraries: &BTreeSet<i64>) -> Result<(), Problem> {
+pub(crate) fn libraries_exist(
+    conn: &Connection,
+    libraries: impl IntoIterator<Item = i64>,
+) -> Result<(), Problem> {
     let mut exists = conn.prepare_cached("SELECT 1 FROM libraries WHERE id = ?1")?;
-    for &library in libraries {
+    for library in libraries {
         if !exists.exists([library])? {
             return Err(Problem::invalid("libraryIds names a library that does not exist"));
         }
@@ -154,7 +157,7 @@ pub async fn change(
                 for &user in &users {
                     authorize(tx, actor, user)?;
                 }
-                libraries_exist(tx, &libraries)?;
+                libraries_exist(tx, libraries.iter().copied())?;
                 let mut granted_any = false;
                 let mut changed = Vec::new();
                 for &user in &users {
