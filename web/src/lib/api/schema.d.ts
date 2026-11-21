@@ -1696,6 +1696,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/users/{userId}/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * List an account's signed-in devices
+         * @description The account's signed-in devices, most recently seen first, as `listDevices` shows the
+         *     caller's but without `current`; `connected` says the device holds a realtime
+         *     connection. An admin reads a user's; the owner an admin's or a user's. No one reads
+         *     the owner's or their own this way: `403`. An account that does not exist or is being
+         *     deleted is `404`.
+         */
+        get: operations["adminListUserDevices"];
+        put?: never;
+        post?: never;
+        /**
+         * Sign out all of an account's devices
+         * @description Signs out every signed-in device of the account (each later request with its token is
+         *     `401 session_revoked` with `logged_out`); then its realtime connections are sent
+         *     `sessionRevoked` and closed. The rank rule is `adminListUserDevices`'s. Recorded in the
+         *     audit log as `devices_signed_out` with `all: true`; an account with no signed-in device
+         *     changes nothing and records nothing.
+         */
+        delete: operations["adminSignOutDevices"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/users/{userId}/devices/{deviceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+                deviceId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Sign out one of an account's devices
+         * @description Signs out the device as `adminSignOutDevices` does all of them; the account's other
+         *     connections are sent the new device list. A device that is not the account's, or is not
+         *     signed in, is `404` and nothing changes. The rank rule is `adminListUserDevices`'s.
+         *     Recorded in the audit log as `devices_signed_out` with the device's `deviceId` and
+         *     `deviceName`.
+         */
+        delete: operations["adminSignOutDevice"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/audit-log": {
         parameters: {
             query?: never;
@@ -2244,6 +2305,9 @@ export interface components {
         };
         AdminUserPage: components["schemas"]["PageInfo"] & {
             items: components["schemas"]["AdminUser"][];
+        };
+        DeviceList: {
+            items: components["schemas"]["Device"][];
         };
         /** @description What the account's active device is playing is in `PlayerState`. */
         Device: {
@@ -4532,9 +4596,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        items: components["schemas"]["Device"][];
-                    };
+                    "application/json": components["schemas"]["DeviceList"];
                 };
             };
             default: components["responses"]["Problem"];
@@ -6421,6 +6483,72 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AdminUser"];
                 };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    adminListUserDevices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceList"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    adminSignOutDevices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    adminSignOutDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+                deviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Problem"];
         };

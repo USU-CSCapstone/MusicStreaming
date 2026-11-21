@@ -48,6 +48,8 @@ pub enum Action {
     Suspended,
     /// A suspended account was restored.
     Restored,
+    /// An account's devices were signed out: the one `(id, name)`, or all of them if none.
+    DevicesSignedOut { device: Option<(i64, String)> },
 }
 
 impl Action {
@@ -58,6 +60,7 @@ impl Action {
             Self::AccessChanged { .. } => "access_changed",
             Self::Suspended => "suspended",
             Self::Restored => "restored",
+            Self::DevicesSignedOut { .. } => "devices_signed_out",
         }
     }
 
@@ -74,6 +77,10 @@ impl Action {
                 "revoked": ids(revoked),
             }),
             Self::Suspended | Self::Restored => json!({}),
+            Self::DevicesSignedOut { device: Some((id, name)) } => {
+                json!({ "deviceId": id.to_string(), "deviceName": name })
+            }
+            Self::DevicesSignedOut { device: None } => json!({ "all": true }),
         }
     }
 }

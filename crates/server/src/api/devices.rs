@@ -43,7 +43,7 @@ pub struct Device {
 
 #[derive(Serialize)]
 pub struct DeviceList {
-    items: Vec<Device>,
+    pub(super) items: Vec<Device>,
 }
 
 const DEVICE_TYPES: [&str; 4] = ["phone", "tablet", "desktop", "tv"];
@@ -110,12 +110,51 @@ pub fn register(
 }
 
 /// `user`'s signed-in devices, most recently seen first, none of them `connected` yet.
-fn signed_in(conn: &Connection, user: i64) -> rusqlite::Result<Vec<Device>> {
+pub(super) fn signed_in(conn: &Connection, user: i64) -> rusqlite::Result<Vec<Device>> {
     conn.prepare_cached(&format!(
         "{SELECT} WHERE user_id = ?1 AND revoked_reason IS NULL ORDER BY last_seen_at DESC, id"
     ))?
     .query_map([user], device)?
     .collect()
+}
+
+/// Which of an account's signed-in devices [`sign_out`] ends.
+pub enum Which {
+    /// This one.
+    One(i64),
+    /// All of them but `keep`, if given.
+    All { keep: Option<i64> },
+}
+
+/// Signs out the devices of `user` that `which` names and are still signed in, as `logged_out`,
+/// keeping their rows and token hashes so each one's next request is told why. Returns each
+/// one's ID and name. Once the write commits, close their connections with `Hub::revoke` or
+/// `Hub::revoke_all` and call [`changed`].
+pub fn sign_out(
+    conn: &Connection,
+    user: i64,
+    which: Which,
+) -> rusqlite::Result<Vec<(i64, String)>> {
+    let (only, keep) = match which {
+        Which::One(id) => (Some(id), None),
+        Which::All { keep } => (None, keep),
+    };
+    conn.prepare_cached(
+        "UPDATE devices SET revoked_reason = 'logged_out' \
+         WHERE user_id = ?1 AND revoked_reason IS NULL \
+           AND (?2 IS NULL OR id = ?2) AND (?3 IS NULL OR id <> ?3) \
+         RETURNING id, name",
+    )?
+    .query_map(params![user, only, keep], |row| Ok((row.get(0)?, row.get(1)?)))?
+    .collect()
+}
+
+/// Sets `connected` on each of `user`'s `devices` that holds a realtime connection.
+pub(super) fn mark_connected(hub: &Hub, user: i64, devices: &mut [Device]) {
+    let connected = hub.connected(user);
+    for device in devices {
+        device.connected = connected.contains(&device.id.0);
+    }
 }
 
 /// `listDevices`: the caller's signed-in devices, most recently seen first.
@@ -125,10 +164,9 @@ pub async fn list(
     caller: Caller,
 ) -> Result<Json<DeviceList>, Problem> {
     let mut items = db.read(move |conn| signed_in(conn, caller.user)).await?;
-    let connected = hub.connected(caller.user);
+    mark_connected(&hub, caller.user, &mut items);
     for item in &mut items {
         item.current = Some(item.id.0 == caller.device);
-        item.connected = connected.contains(&item.id.0);
     }
     Ok(Json(DeviceList { items }))
 }

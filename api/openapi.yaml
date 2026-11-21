@@ -497,13 +497,7 @@ paths:
           description: OK
           content:
             application/json:
-              schema:
-                type: object
-                required: [items]
-                properties:
-                  items:
-                    type: array
-                    items: { $ref: '#/components/schemas/Device' }
+              schema: { $ref: '#/components/schemas/DeviceList' }
         default: { $ref: '#/components/responses/Problem' }
 
   # ───────────────────────────── Libraries ─────────────────────────────
@@ -2274,6 +2268,67 @@ paths:
               schema: { $ref: '#/components/schemas/AdminUser' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /admin/users/{userId}/devices:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Admin]
+      summary: List an account's signed-in devices
+      description: |
+        The account's signed-in devices, most recently seen first, as `listDevices` shows the
+        caller's but without `current`; `connected` says the device holds a realtime
+        connection. An admin reads a user's; the owner an admin's or a user's. No one reads
+        the owner's or their own this way: `403`. An account that does not exist or is being
+        deleted is `404`.
+      operationId: adminListUserDevices
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DeviceList' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Admin]
+      summary: Sign out all of an account's devices
+      description: |
+        Signs out every signed-in device of the account (each later request with its token is
+        `401 session_revoked` with `logged_out`); then its realtime connections are sent
+        `sessionRevoked` and closed. The rank rule is `adminListUserDevices`'s. Recorded in the
+        audit log as `devices_signed_out` with `all: true`; an account with no signed-in device
+        changes nothing and records nothing.
+      operationId: adminSignOutDevices
+      responses:
+        '204': { description: No Content }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/users/{userId}/devices/{deviceId}:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string }
+      - name: deviceId
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      tags: [Admin]
+      summary: Sign out one of an account's devices
+      description: |
+        Signs out the device as `adminSignOutDevices` does all of them; the account's other
+        connections are sent the new device list. A device that is not the account's, or is not
+        signed in, is `404` and nothing changes. The rank rule is `adminListUserDevices`'s.
+        Recorded in the audit log as `devices_signed_out` with the device's `deviceId` and
+        `deviceName`.
+      operationId: adminSignOutDevice
+      responses:
+        '204': { description: No Content }
+        default: { $ref: '#/components/responses/Problem' }
+
   # ───────────────────────────── Admin: audit log ─────────────────────────────
   /admin/audit-log:
     get:
@@ -3298,6 +3353,14 @@ components:
               items: { $ref: '#/components/schemas/AdminUser' }
 
     # ───────────────────────────── Devices ─────────────────────────────
+    DeviceList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Device' }
+
     Device:
       type: object
       description: What the account's active device is playing is in `PlayerState`.
