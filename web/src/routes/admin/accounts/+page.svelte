@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { AdminList } from '$lib/admin-list.svelte';
 	import {
@@ -8,7 +8,9 @@
 		adminDeleteUser,
 		adminIssuePasswordReset,
 		adminListUsers,
-		adminSetUserStatus
+		adminSetUserRole,
+		adminSetUserStatus,
+		transferOwnership
 	} from '$lib/api/client';
 	import type { AdminUser } from '$lib/api/types';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
@@ -34,6 +36,9 @@
 	let suspending = $state<AdminUser | null>(null);
 	let resetting = $state<AdminUser | null>(null);
 	let deleting = $state<AdminUser | null>(null);
+	let promoting = $state<AdminUser | null>(null);
+	let demoting = $state<AdminUser | null>(null);
+	let handing = $state<AdminUser | null>(null);
 	/** The reset link just made, held only here: the server does not give the code again. */
 	let issued = $state<{ username: string; link: string } | null>(null);
 	let listError = $state<string | null>(null);
@@ -99,6 +104,17 @@
 		if (issued?.username === row.username) issued = null;
 	}
 
+	/** Gives the account `role` and shows it as the server answers, which also clears its reset link. */
+	async function setRole(row: AdminUser, role: 'admin' | 'user', password: string) {
+		list.replace(await adminSetUserRole(fetch, row.id, { role, password }), (r) => r.id === row.id);
+	}
+
+	/** Hands ownership to the account, then reloads so the page shows the viewer as an admin. */
+	async function transfer(row: AdminUser, password: string) {
+		await transferOwnership(fetch, { userId: row.id, password });
+		await invalidateAll();
+	}
+
 	function toggle(row: AdminUser, which: 'libraries' | 'devices') {
 		panel[row.id] = panel[row.id] === which ? undefined : which;
 	}
@@ -134,7 +150,7 @@
 
 <PageHeader
 	title="Accounts"
-	subtitle="Find an account, change what it can reach, and suspend or restore it."
+	subtitle="Find an account and manage its access, status, password and role."
 />
 
 <section aria-labelledby="all-title">
@@ -229,6 +245,14 @@
 								Devices
 							</button>
 							<button type="button" onclick={() => (resetting = row)}>Reset password</button>
+							{#if data.me?.role === 'owner' && row.status === 'active'}
+								{#if row.role === 'user'}
+									<button type="button" onclick={() => (promoting = row)}>Make admin</button>
+								{:else if row.role === 'admin'}
+									<button type="button" onclick={() => (demoting = row)}>Remove admin</button>
+									<button type="button" onclick={() => (handing = row)}>Make owner</button>
+								{/if}
+							{/if}
 							<button type="button" onclick={() => (deleting = row)}>Delete</button>
 						</div>
 						{#if panel[row.id] === 'libraries'}
@@ -301,6 +325,54 @@
 			{row.username}’s playlists, listening history, likes and devices go for good, and they are
 			signed out everywhere. No music files are touched. Plugins {row.username} connected keep what they
 			already received. This cannot be undone.
+		</p>
+	</ConfirmDialog>
+{/if}
+
+{#if promoting}
+	{@const row = promoting}
+	<ConfirmDialog
+		title={`Make ${row.username} an admin?`}
+		confirmLabel="Make admin"
+		password
+		action={(password) => setRole(row, 'admin', password)}
+		onclose={() => (promoting = null)}
+	>
+		<p>
+			{row.username} gets every library and the admin pages. A pending reset link for the account is cancelled.
+		</p>
+	</ConfirmDialog>
+{/if}
+
+{#if demoting}
+	{@const row = demoting}
+	<ConfirmDialog
+		title={`Remove admin from ${row.username}?`}
+		confirmLabel="Remove admin"
+		password
+		action={(password) => setRole(row, 'user', password)}
+		onclose={() => (demoting = null)}
+	>
+		<p>
+			{row.username} returns to the libraries they were granted before, loses the admin pages, and their
+			pending invites are revoked. A pending reset link for the account is cancelled.
+		</p>
+	</ConfirmDialog>
+{/if}
+
+{#if handing}
+	{@const row = handing}
+	<ConfirmDialog
+		title={`Make ${row.username} the owner?`}
+		confirmLabel="Make owner"
+		danger
+		password
+		action={(password) => transfer(row, password)}
+		onclose={() => (handing = null)}
+	>
+		<p>
+			{row.username} becomes the owner. You become an admin, and you cannot undo it yourself: only {row.username}
+			can hand ownership back.
 		</p>
 	</ConfirmDialog>
 {/if}
