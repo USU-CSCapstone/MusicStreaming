@@ -1899,6 +1899,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/users/{userId}/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete an account
+         * @description Deletes the account for good. At once it can no longer sign in, and its password and
+         *     every token answer exactly as an unknown account's would; its name is free for a new
+         *     account; it is in no list; its password reset link is cleared and the invites it made
+         *     that are still pending are revoked; then its realtime connections are sent
+         *     `sessionRevoked` and closed. Everything it owns (playlists, plays, queues, devices and
+         *     the rest) is then removed in the background, a little at a time. Audio files, metadata
+         *     and artwork are never touched. What plugins already received from the account is not
+         *     recalled: they are not asked to forget it.
+         *
+         *     `password` is the caller's own current password, checked as `changeMyPassword` checks
+         *     it: a wrong one is `403 wrong_password`, and past the sign-in limits the request is
+         *     `429`. An admin deletes a user; the owner an admin or a user. No one deletes the owner
+         *     or themselves: `403`. An account that does not exist or is already being deleted is
+         *     `404`. Recorded in the audit log as `deleted`, with the account's name as it was.
+         */
+        post: operations["adminDeleteUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/audit-log": {
         parameters: {
             query?: never;
@@ -2396,6 +2431,13 @@ export interface components {
             newPassword: string;
         };
         IssuePasswordResetRequest: {
+            /**
+             * Format: password
+             * @description The caller's own current password.
+             */
+            password: string;
+        };
+        DeleteUserRequest: {
             /**
              * Format: password
              * @description The caller's own current password.
@@ -6922,6 +6964,45 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["IssuedPasswordReset"];
                 };
+            };
+            /**
+             * @description `wrong_password` — `password` is not the caller's current password, or it changed
+             *     while the request was handled. `forbidden` — the rank rule does not let the caller
+             *     act on this account; `detail` says why.
+             */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    adminDeleteUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeleteUserRequest"];
+            };
+        };
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /**
              * @description `wrong_password` — `password` is not the caller's current password, or it changed

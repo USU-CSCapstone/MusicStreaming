@@ -260,6 +260,16 @@ pub fn audit(conn: &rusqlite::Connection) -> Vec<(String, i64, i64, Value)> {
 /// Holds the writer inside the next write that changes a password, until the sender is
 /// dropped; the receiver hears when it is held.
 pub async fn hold_next_password_write(db: &Database) -> (oneshot::Receiver<()>, mpsc::Sender<()>) {
+    hold_next(db, "AFTER UPDATE OF password ON users").await
+}
+
+/// Holds the writer inside the next write that fires a trigger on `event`, such as `AFTER
+/// UPDATE OF password ON users`, until the sender is dropped; the receiver hears when it is
+/// held. Once per test: the trigger is the writer's own and keeps its first event.
+pub async fn hold_next(
+    db: &Database,
+    event: &'static str,
+) -> (oneshot::Receiver<()>, mpsc::Sender<()>) {
     let (entered, held) = oneshot::channel();
     let (release, released) = mpsc::channel();
     let hold = Mutex::new(Some((entered, released)));
@@ -271,10 +281,9 @@ pub async fn hold_next_password_write(db: &Database) -> (oneshot::Receiver<()>, 
             }
             Ok(0)
         })?;
-        tx.execute_batch(
-            "CREATE TEMP TRIGGER IF NOT EXISTS hold AFTER UPDATE OF password ON users \
-             BEGIN SELECT hold(); END",
-        )
+        tx.execute_batch(&format!(
+            "CREATE TEMP TRIGGER IF NOT EXISTS hold {event} BEGIN SELECT hold(); END"
+        ))
     })
     .await
     .unwrap();

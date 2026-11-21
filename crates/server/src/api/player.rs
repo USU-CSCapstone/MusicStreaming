@@ -170,6 +170,11 @@ impl Players {
         hub.broadcast(user, &ServerMessage::Player { state: state.clone() });
     }
 
+    /// Drops `user`'s state, as when the account is deleted, so it is never saved again.
+    pub fn forget(&self, user: i64) {
+        self.lock().remove(&user);
+    }
+
     /// Each account's playback state, locked.
     fn lock(&self) -> MutexGuard<'_, HashMap<i64, PlayerState>> {
         self.accounts.lock().recover()

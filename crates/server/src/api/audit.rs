@@ -54,6 +54,8 @@ pub enum Action {
     PasswordResetIssued,
     /// An account's password was set with its reset link.
     PasswordResetUsed,
+    /// An account was deleted.
+    Deleted,
 }
 
 impl Action {
@@ -67,6 +69,7 @@ impl Action {
             Self::DevicesSignedOut { .. } => "devices_signed_out",
             Self::PasswordResetIssued => "password_reset_issued",
             Self::PasswordResetUsed => "password_reset_used",
+            Self::Deleted => "deleted",
         }
     }
 
@@ -85,7 +88,8 @@ impl Action {
             Self::Suspended
             | Self::Restored
             | Self::PasswordResetIssued
-            | Self::PasswordResetUsed => json!({}),
+            | Self::PasswordResetUsed
+            | Self::Deleted => json!({}),
             Self::DevicesSignedOut { device: Some((id, name)) } => {
                 json!({ "deviceId": id.to_string(), "deviceName": name })
             }

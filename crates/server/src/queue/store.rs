@@ -172,6 +172,12 @@ impl Queues {
         self.lock().get(&user).is_some_and(|account| account.state.holds_item(&item))
     }
 
+    /// Drops `user`'s queues and the lists held for them, as when the account is deleted, so
+    /// they are never saved again.
+    pub fn forget(&self, user: i64) {
+        self.lock().remove(&user);
+    }
+
     /// Each account's queues, locked.
     pub(super) fn lock(&self) -> MutexGuard<'_, HashMap<i64, Account>> {
         self.accounts.lock().recover()
