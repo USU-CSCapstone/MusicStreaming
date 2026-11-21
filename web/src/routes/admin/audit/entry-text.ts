@@ -23,13 +23,13 @@ const ids = (value: unknown): string[] => (Array.isArray(value) ? (value as stri
  */
 export function entryText(entry: AuditEntry, libraryNames: Map<string, string>): string {
 	const { actor, target, detail } = entry;
-	const by = actor ? account(actor) : null;
+	const by = actor ? account(actor) : 'someone';
 	const to = account(target);
 	const names = (value: unknown) =>
 		join(ids(value).map((id) => libraryNames.get(id) ?? 'a library'));
 	switch (entry.action) {
 		case 'account_created':
-			return by ? `${to} joined with an invite from ${by}` : `${to} joined with an invite`;
+			return actor ? `${to} joined with an invite from ${by}` : `${to} joined with an invite`;
 		case 'access_changed': {
 			const granted = ids(detail.granted).length > 0;
 			const revoked = ids(detail.revoked).length > 0;
@@ -37,30 +37,30 @@ export function entryText(entry: AuditEntry, libraryNames: Map<string, string>):
 			const took = revoked
 				? `took away ${granted ? '' : `${to}'s access to `}${names(detail.revoked)}`
 				: '';
-			return `${by ?? 'someone'} ${[gave, took].filter(Boolean).join(' and ') || `changed ${to}'s access`}`;
+			return `${by} ${[gave, took].filter(Boolean).join(' and ') || `changed ${to}'s access`}`;
 		}
 		case 'suspended':
-			return `${by ?? 'someone'} suspended ${to}`;
+			return `${by} suspended ${to}`;
 		case 'restored':
-			return `${by ?? 'someone'} restored ${to}`;
+			return `${by} restored ${to}`;
 		case 'devices_signed_out':
-			return `${by ?? 'someone'} signed ${to} out of ${
+			return `${by} signed ${to} out of ${
 				detail.all === true
 					? 'every device'
 					: ((detail.deviceName as string | undefined) ?? 'a device')
 			}`;
 		case 'password_reset_issued':
-			return by
+			return actor
 				? `${by} made a password reset link for ${to}`
 				: `a reset link for ${to} was made on the server`;
 		case 'password_reset_used':
 			return `someone used a reset link for ${to}`;
 		case 'role_changed':
-			return `${by ?? 'someone'} made ${to} ${detail.to === 'admin' ? 'an admin' : 'a user'}`;
+			return `${by} made ${to} ${detail.to === 'admin' ? 'an admin' : 'a user'}`;
 		case 'ownership_transferred':
-			return `${by ?? 'someone'} handed ownership to ${to}`;
+			return `${by} handed ownership to ${to}`;
 		case 'deleted':
 			// The target is always deleted, so the mark would say nothing.
-			return `${by ?? 'someone'} deleted ${account(target, false)}`;
+			return `${by} deleted ${account(target, false)}`;
 	}
 }
