@@ -73,7 +73,7 @@ async fn sign_out_of(
         let signed_out = db
             .try_write(move |tx| {
                 authorize(tx, actor, user)?;
-                let signed_out = devices::sign_out(tx, user, which)?;
+                let signed_out = devices::sign_out(tx, user, which, Revoked::LoggedOut)?;
                 if one && signed_out.is_empty() {
                     return Err(Problem::not_found());
                 }

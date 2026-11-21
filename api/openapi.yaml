@@ -332,6 +332,44 @@ paths:
               schema: { $ref: '#/components/schemas/User' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /me/password:
+    put:
+      tags: [Auth]
+      summary: Change the caller's password
+      description: |
+        Changes the caller's password, given their current one (`requirements/users.md` §3), and
+        clears any reset link. Every other device of the caller is signed out: each later request
+        with its token is `401 session_revoked` with `credentials_changed`, its realtime
+        connections are sent `sessionRevoked` and closed, and the remaining connections are sent
+        the new device list. The calling device stays signed in with the same token.
+
+        The current password is checked as a login's is, and counts against the same limits
+        (`requirements/users.md` §3.1): a wrong one is `403 wrong_password`, never `401`, and past
+        the limits the request is `429` without its password being checked. Not recorded in the
+        audit log.
+      operationId: changeMyPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangePasswordRequest' }
+      responses:
+        '204': { description: Changed. }
+        '403':
+          description: |
+            `wrong_password` — `currentPassword` is not the caller's current password, or the
+            password changed while the request was handled; `detail` says so.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: '`weak_password` — the new password is too easy to guess; `detail` says why.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Problem' }
+
   /me/changes:
     get:
       tags: [Account]
@@ -2977,6 +3015,7 @@ components:
             - method_not_allowed
             - validation_failed
             - weak_password
+            - wrong_password
             - plugin_invalid
             - plugin_exists
             - permissions_required
@@ -3285,6 +3324,13 @@ components:
         password: { type: string, format: password }
         device: { $ref: '#/components/schemas/DeviceRegistration' }
         deviceId: { $ref: '#/components/schemas/ReclaimedDeviceId' }
+
+    ChangePasswordRequest:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword: { type: string, format: password }
+        newPassword: { type: string, format: password }
 
     ReclaimedDeviceId:
       type: string

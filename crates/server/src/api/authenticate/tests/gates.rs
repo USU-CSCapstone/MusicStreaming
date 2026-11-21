@@ -27,6 +27,7 @@ pub(super) const ROUTES: &[(&str, &str)] = &[
     ("GET", "/me/devices"),
     ("DELETE", "/me/devices"),
     ("DELETE", "/me/devices/2"),
+    ("PUT", "/me/password"),
     ("GET", "/me/player"),
     ("POST", "/me/player/commands"),
     ("POST", "/me/plays"),

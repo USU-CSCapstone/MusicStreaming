@@ -173,6 +173,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/me/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change the caller's password
+         * @description Changes the caller's password, given their current one (`requirements/users.md` §3), and
+         *     clears any reset link. Every other device of the caller is signed out: each later request
+         *     with its token is `401 session_revoked` with `credentials_changed`, its realtime
+         *     connections are sent `sessionRevoked` and closed, and the remaining connections are sent
+         *     the new device list. The calling device stays signed in with the same token.
+         *
+         *     The current password is checked as a login's is, and counts against the same limits
+         *     (`requirements/users.md` §3.1): a wrong one is `403 wrong_password`, never `401`, and past
+         *     the limits the request is `429` without its password being checked. Not recorded in the
+         *     audit log.
+         */
+        put: operations["changeMyPassword"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me/changes": {
         parameters: {
             query?: never;
@@ -2068,7 +2097,7 @@ export interface components {
              * @description `unsupported_media` comes only from planned operations.
              * @enum {string}
              */
-            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "queue_changed" | "queue_active" | "anchor_gone" | "play_gone" | "duplicate_key" | "version_conflict" | "id_taken" | "username_taken" | "cursor_expired" | "setup_required" | "catalog_building" | "unsupported_media" | "device_unavailable" | "plugin_settings_invalid" | "internal";
+            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "wrong_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "queue_changed" | "queue_active" | "anchor_gone" | "play_gone" | "duplicate_key" | "version_conflict" | "id_taken" | "username_taken" | "cursor_expired" | "setup_required" | "catalog_building" | "unsupported_media" | "device_unavailable" | "plugin_settings_invalid" | "internal";
             /**
              * @description With `session_revoked`. `credentials_changed` — the device keeps its downloads and
              *     logs in again with its `deviceId`; `logged_out` — the device removes them
@@ -2276,6 +2305,12 @@ export interface components {
             password: string;
             device: components["schemas"]["DeviceRegistration"];
             deviceId?: components["schemas"]["ReclaimedDeviceId"];
+        };
+        ChangePasswordRequest: {
+            /** Format: password */
+            currentPassword: string;
+            /** Format: password */
+            newPassword: string;
         };
         /**
          * @description The device's ID from before it was logged out with `credentials_changed`. The device
@@ -4437,6 +4472,51 @@ export interface operations {
                     "application/json": components["schemas"]["User"];
                 };
             };
+            default: components["responses"]["Problem"];
+        };
+    };
+    changeMyPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Changed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /**
+             * @description `wrong_password` — `currentPassword` is not the caller's current password, or the
+             *     password changed while the request was handled; `detail` says so.
+             */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description `weak_password` — the new password is too easy to guess; `detail` says why. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
             default: components["responses"]["Problem"];
         };
     };
