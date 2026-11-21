@@ -18,6 +18,9 @@ const fake = vi.hoisted(() => ({
 	set: [] as [string, string][],
 	issued: [] as [string, string][],
 	deleted: [] as [string, string][],
+	roles: [] as [string, string, string][],
+	transfers: [] as [string, string][],
+	invalidated: 0,
 	answer: null as unknown,
 	fail: null as Error | null,
 	went: [] as string[],
@@ -43,7 +46,9 @@ vi.mock('$app/navigation', () => ({
 		fake.went.push(url);
 	},
 	invalidate: async () => {},
-	invalidateAll: async () => {},
+	invalidateAll: async () => {
+		fake.invalidated++;
+	},
 	beforeNavigate: () => {},
 	afterNavigate: () => {},
 	onNavigate: () => {}
@@ -61,6 +66,15 @@ vi.mock('$lib/api/client', async (original) => ({
 	},
 	adminDeleteUser: async (_f: unknown, id: string, body: { password: string }) => {
 		fake.deleted.push([id, body.password]);
+		if (fake.fail) throw fake.fail;
+	},
+	adminSetUserRole: async (_f: unknown, id: string, body: { role: string; password: string }) => {
+		fake.roles.push([id, body.role, body.password]);
+		if (fake.fail) throw fake.fail;
+		return fake.answer;
+	},
+	transferOwnership: async (_f: unknown, body: { userId: string; password: string }) => {
+		fake.transfers.push([body.userId, body.password]);
 		if (fake.fail) throw fake.fail;
 	},
 	adminSetUserStatus: async (_f: unknown, id: string, status: string) => {
@@ -143,6 +157,9 @@ beforeEach(() => {
 	fake.set = [];
 	fake.issued = [];
 	fake.deleted = [];
+	fake.roles = [];
+	fake.transfers = [];
+	fake.invalidated = 0;
 	fake.asked = [];
 	fake.fail = null;
 	fake.went = [];
@@ -215,8 +232,9 @@ it('offers actions only on accounts the viewer outranks', async () => {
 	render(Accounts, open([...rows.slice(0, 1), ...rows.slice(1)], as('owner')) as never);
 	await expect.element(page.getByText('bob Display')).toBeVisible();
 	expect(buttonsOn('olga')).toBe(0);
-	expect(buttonsOn('ada')).toBe(5);
-	expect(buttonsOn('bob')).toBe(5);
+	// The owner also gets Remove admin and Make owner on an admin, Make admin on a user.
+	expect(buttonsOn('ada')).toBe(7);
+	expect(buttonsOn('bob')).toBe(6);
 });
 
 it('asks for the admin’s password, then shows the reset link once and the account as having a reset pending', async () => {
@@ -312,6 +330,21 @@ it('drops a reset link shown for an account once that account is deleted, which 
 	await page.getByLabelText('Your password').fill('pw');
 	await page.getByRole('dialog').getByRole('button', { name: 'Delete' }).click();
 	await expect.element(page.getByText('bob Display')).not.toBeInTheDocument();
+	expect(document.body.textContent).not.toContain('reset-code');
+});
+
+it('drops a reset link shown for an account once its role changes, which cancelled it', async () => {
+	fake.answer = account('3', 'bob', { role: 'admin' });
+	render(Accounts, open([account('3', 'bob')], as('owner')) as never);
+	await page.getByRole('button', { name: 'Reset password' }).click();
+	await page.getByLabelText('Your password').fill('pw');
+	await page.getByRole('dialog').getByRole('button', { name: 'Reset password' }).click();
+	await expect.element(page.getByText(`${location.origin}/jc/reset#reset-code`)).toBeVisible();
+
+	await rowOf('bob').getByRole('button', { name: 'Make admin' }).click();
+	await page.getByLabelText('Your password').fill('pw');
+	await page.getByRole('dialog').getByRole('button', { name: 'Make admin' }).click();
+	await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
 	expect(document.body.textContent).not.toContain('reset-code');
 });
 
@@ -602,4 +635,198 @@ it('shows the grants a bulk change just made in an open Libraries panel, so Save
 	await expect.element(page.getByRole('checkbox', { name: 'Beta' })).toBeChecked();
 	await page.getByRole('button', { name: 'Save libraries' }).click();
 	await vi.waitFor(() => expect(fake.libraries).toEqual([['3', ['lib-a', 'lib-b']]]));
+});
+
+const ROLE_ACTIONS = /^(Make admin|Remove admin|Make owner)$/;
+
+it('offers Make admin, Remove admin and Make owner to the owner only, and only where they apply', async () => {
+	const rows = [
+		account('3', 'bob'),
+		account('4', 'ann', { role: 'admin' }),
+		account('5', 'sus', { status: 'suspended' }),
+		account('6', 'sad', { role: 'admin', status: 'suspended' })
+	];
+	const owner = render(Accounts, open(rows, as('owner')) as never);
+	await expect.element(rowOf('bob').getByRole('button', { name: 'Make admin' })).toBeVisible();
+	await expect
+		.element(rowOf('bob').getByRole('button', { name: 'Make owner' }))
+		.not.toBeInTheDocument();
+	await expect.element(rowOf('ann').getByRole('button', { name: 'Remove admin' })).toBeVisible();
+	await expect.element(rowOf('ann').getByRole('button', { name: 'Make owner' })).toBeVisible();
+	await expect
+		.element(rowOf('ann').getByRole('button', { name: 'Make admin' }))
+		.not.toBeInTheDocument();
+	// A suspended account is restored first, as the server insists.
+	await expect
+		.element(rowOf('sus').getByRole('button', { name: 'Make admin' }))
+		.not.toBeInTheDocument();
+	await expect
+		.element(rowOf('sad').getByRole('button', { name: 'Make owner' }))
+		.not.toBeInTheDocument();
+	await owner.unmount();
+
+	render(Accounts, open(rows, as('admin')) as never);
+	await expect.element(rowOf('bob').getByRole('button', { name: 'Delete' })).toBeVisible();
+	expect(
+		[...document.querySelectorAll('button')].filter((b) => ROLE_ACTIONS.test(b.textContent!.trim()))
+	).toEqual([]);
+});
+
+it('asks for the password and says what making an admin and removing one change', async () => {
+	fake.answer = account('3', 'bob', { role: 'admin' });
+	render(Accounts, open([account('3', 'bob')], as('owner')) as never);
+	await rowOf('bob').getByRole('button', { name: 'Make admin' }).click();
+	const dialog = page.getByRole('dialog', { name: 'Make bob an admin?' });
+	await expect.element(dialog).toHaveTextContent(/every library and the admin pages/);
+	await expect.element(dialog).toHaveTextContent(/pending reset link/);
+	expect(fake.roles).toEqual([]);
+	await dialog.getByLabelText('Your password').fill('pw');
+	await dialog.getByRole('button', { name: 'Make admin' }).click();
+	await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
+	expect(fake.roles).toEqual([['3', 'admin', 'pw']]);
+
+	fake.answer = account('3', 'bob');
+	await rowOf('bob').getByRole('button', { name: 'Remove admin' }).click();
+	const removing = page.getByRole('dialog', { name: 'Remove admin from bob?' });
+	await expect.element(removing).toHaveTextContent(/libraries they were granted before/);
+	await expect.element(removing).toHaveTextContent(/pending invites/);
+	await expect.element(removing).toHaveTextContent(/pending reset link/);
+	await removing.getByLabelText('Your password').fill('pw2');
+	await removing.getByRole('button', { name: 'Remove admin' }).click();
+	expect(fake.roles).toEqual([
+		['3', 'admin', 'pw'],
+		['3', 'user', 'pw2']
+	]);
+});
+
+it('replaces the row with the server’s answer when promoting and demoting, clearing a pending reset', async () => {
+	fake.answer = account('3', 'bob', { role: 'admin', resetPending: false });
+	render(
+		Accounts,
+		open([account('3', 'bob', { resetPending: true }), account('4', 'cy')], as('owner')) as never
+	);
+	await expect.element(rowOf('bob').getByText('Reset pending')).toBeVisible();
+	await rowOf('bob').getByRole('button', { name: 'Make admin' }).click();
+	await page.getByLabelText('Your password').fill('pw');
+	await page.getByRole('dialog').getByRole('button', { name: 'Make admin' }).click();
+	await expect.element(rowOf('bob').getByText('Admin', { exact: true })).toBeVisible();
+	await expect.element(page.getByText('Reset pending')).not.toBeInTheDocument();
+	await expect.element(rowOf('bob').getByRole('button', { name: 'Remove admin' })).toBeVisible();
+	await expect.element(rowOf('cy').getByText('User', { exact: true })).toBeVisible();
+
+	fake.answer = account('3', 'bob', { role: 'user' });
+	await rowOf('bob').getByRole('button', { name: 'Remove admin' }).click();
+	await page.getByLabelText('Your password').fill('pw');
+	await page.getByRole('dialog').getByRole('button', { name: 'Remove admin' }).click();
+	await expect.element(rowOf('bob').getByText('User', { exact: true })).toBeVisible();
+	await expect.element(rowOf('bob').getByRole('button', { name: 'Make admin' })).toBeVisible();
+});
+
+it('keeps the dialog and the row, and shows the server’s detail, when a role change or transfer is refused', async () => {
+	render(
+		Accounts,
+		open([account('3', 'bob'), account('4', 'ann', { role: 'admin' })], as('owner')) as never
+	);
+	const cases: [string, string, ApiError][] = [
+		[
+			'bob',
+			'Make admin',
+			new ApiError(403, 'wrong_password', 'Your current password is not correct.')
+		],
+		[
+			'bob',
+			'Make admin',
+			new ApiError(422, 'validation_failed', 'Restore this account before changing its role.')
+		],
+		[
+			'ann',
+			'Remove admin',
+			new ApiError(403, 'forbidden', "Only the owner can change an account's role.")
+		],
+		[
+			'ann',
+			'Make owner',
+			new ApiError(422, 'validation_failed', 'Only an active admin can become the owner.')
+		],
+		[
+			'ann',
+			'Make owner',
+			new ApiError(403, 'wrong_password', 'Your current password is not correct.')
+		]
+	];
+	for (const [name, action, error] of cases) {
+		fake.fail = error;
+		await rowOf(name).getByRole('button', { name: action }).click();
+		const dialog = page.getByRole('dialog');
+		await dialog.getByLabelText('Your password').fill('wrong');
+		await dialog.getByRole('button', { name: action }).click();
+		await expect.element(dialog.getByRole('alert')).toHaveTextContent(error.message);
+		await expect.element(dialog).toBeVisible();
+		await userEvent.keyboard('{Escape}');
+		await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
+		await expect.element(rowOf('bob').getByText('User', { exact: true })).toBeVisible();
+		await expect.element(rowOf('ann').getByText('Admin', { exact: true })).toBeVisible();
+	}
+	expect(fake.invalidated).toBe(0);
+});
+
+it('says the account becomes the owner, the viewer an admin, and that only the new owner can undo it', async () => {
+	render(Accounts, open([account('4', 'ann', { role: 'admin' })], as('owner')) as never);
+	await rowOf('ann').getByRole('button', { name: 'Make owner' }).click();
+	const dialog = page.getByRole('dialog', { name: 'Make ann the owner?' });
+	await expect.element(dialog).toHaveTextContent(/ann becomes the owner/);
+	await expect.element(dialog).toHaveTextContent(/You become an admin/);
+	await expect.element(dialog).toHaveTextContent(/cannot undo it yourself/);
+	await expect.element(dialog).toHaveTextContent(/only ann can/i);
+	expect(fake.transfers).toEqual([]);
+});
+
+it('shows what an admin sees once ownership has moved', async () => {
+	const rows = [account('3', 'bob'), account('4', 'ann', { role: 'admin' })];
+	const view = render(Accounts, open(rows, as('owner')) as never);
+	await rowOf('ann').getByRole('button', { name: 'Make owner' }).click();
+	await page.getByLabelText('Your password').fill('pw');
+	await page.getByRole('dialog').getByRole('button', { name: 'Make owner' }).click();
+	await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
+	expect(fake.transfers).toEqual([['4', 'pw']]);
+	expect(fake.invalidated).toBe(1);
+
+	// The reloaded root data now names the viewer an admin and ann the owner.
+	await view.rerender(
+		open([account('3', 'bob'), account('4', 'ann', { role: 'owner' })], as('admin')) as never
+	);
+	await expect.element(rowOf('ann').getByText('Owner', { exact: true })).toBeVisible();
+	expect(buttonsOn('ann')).toBe(0);
+	await expect.element(rowOf('bob').getByRole('button', { name: 'Delete' })).toBeVisible();
+	expect(
+		[...document.querySelectorAll('button')].filter((b) => ROLE_ACTIONS.test(b.textContent!.trim()))
+	).toEqual([]);
+});
+
+it('keeps the role actions usable at phone width and by keyboard', async () => {
+	document.body.style.cssText = 'width: 343px; margin: 0';
+	fake.answer = account('3', 'bob', { role: 'admin' });
+	render(
+		Accounts,
+		open([account('3', 'bob'), account('4', 'ann', { role: 'admin' })], as('owner')) as never
+	);
+	const make = rowOf('bob').getByRole('button', { name: 'Make admin' });
+	await expect.element(make).toBeVisible();
+	for (const b of rowOf('ann').getByRole('button').elements()) {
+		expect(b.getBoundingClientRect().right).toBeLessThanOrEqual(343);
+	}
+	for (let i = 0; i < 20 && document.activeElement !== make.element(); i++) {
+		await userEvent.tab();
+	}
+	expect(document.activeElement).toBe(make.element());
+	await userEvent.keyboard('{Enter}');
+	const dialog = page.getByRole('dialog', { name: 'Make bob an admin?' });
+	await expect.element(dialog).toBeVisible();
+	await expect.element(dialog.getByLabelText('Your password')).toHaveFocus();
+	await userEvent.keyboard('pw{Enter}');
+	await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
+	expect(fake.roles).toEqual([['3', 'admin', 'pw']]);
+	const width = document.body.scrollWidth;
+	expect(width).toBeLessThanOrEqual(343);
+	document.body.style.cssText = '';
 });

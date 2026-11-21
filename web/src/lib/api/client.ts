@@ -614,6 +614,20 @@ export const adminIssuePasswordReset = (f: Fetch, userId: string, request: { pas
 export const adminDeleteUser = (f: Fetch, userId: string, request: { password: string }) =>
 	send<void>(f, 'POST', `/admin/users/${encodeURIComponent(userId)}/delete`, request);
 
+/**
+ * Makes the account an admin or a user again; only the owner may, with their own password.
+ * Answers the account as it now is.
+ */
+export const adminSetUserRole = (
+	f: Fetch,
+	userId: string,
+	request: { role: 'admin' | 'user'; password: string }
+) => send<AdminUser>(f, 'PUT', `/admin/users/${encodeURIComponent(userId)}/role`, request);
+
+/** Hands ownership to an active admin, who becomes the owner as the caller becomes an admin. */
+export const transferOwnership = (f: Fetch, request: { userId: string; password: string }) =>
+	send<void>(f, 'POST', '/admin/ownership-transfer', request);
+
 const adminUser = (userId: string) => `/admin/users/${encodeURIComponent(userId)}`;
 
 /** Replaces the account's library grants with exactly `libraryIds`, and answers the account. */
