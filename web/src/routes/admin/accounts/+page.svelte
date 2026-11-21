@@ -104,9 +104,13 @@
 		if (issued?.username === row.username) issued = null;
 	}
 
-	/** Gives the account `role` and shows it as the server answers, which also clears its reset link. */
+	/**
+	 * Gives the account `role` and shows it as the server answers, dropping a reset link shown for
+	 * it, which the change cancelled.
+	 */
 	async function setRole(row: AdminUser, role: 'admin' | 'user', password: string) {
 		list.replace(await adminSetUserRole(fetch, row.id, { role, password }), (r) => r.id === row.id);
+		if (issued?.username === row.username) issued = null;
 	}
 
 	/** Hands ownership to the account, then reloads so the page shows the viewer as an admin. */
