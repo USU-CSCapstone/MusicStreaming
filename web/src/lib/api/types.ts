@@ -9,6 +9,13 @@ export type Id = Schemas['Id'];
 export type Library = Schemas['Library'];
 /** One scan of a library and its progress, as admins see it. */
 export type Scan = Schemas['Scan'];
+/** A single-use link that creates an account, as admins see it. */
+export type Invite = Schemas['Invite'];
+export type InviteAccount = Schemas['InviteAccount'];
+export type InvitePage = Schemas['InvitePage'];
+export type InviteCreate = Schemas['InviteCreate'];
+/** A new invite with its code, which is shown only this once. */
+export type CreatedInvite = Schemas['CreatedInvite'];
 export type ImageRef = Schemas['ImageRef'];
 export type ArtistRef = Schemas['ArtistRef'];
 export type AlbumRef = Schemas['AlbumRef'];

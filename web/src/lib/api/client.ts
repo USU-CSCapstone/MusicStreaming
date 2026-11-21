@@ -17,6 +17,10 @@ import type {
 	ArtistPage,
 	EditQueue,
 	ImageRef,
+	CreatedInvite,
+	InviteCreate,
+	Invite,
+	InvitePage,
 	KeptQueue,
 	Library,
 	LoginRequest,
@@ -551,6 +555,20 @@ export const adminListScans = (f: Fetch, libraryId: string) =>
 
 /** Queues a scan of the whole library; answers the scan that will do it, which may be one already queued. */
 export const startScan = (f: Fetch, libraryId: string) => send<Scan>(f, 'POST', scans(libraryId));
+
+// ───────────────────────────── Invite administration ─────────────────────────────
+
+/** Every invite, newest first. */
+export const adminListInvites = (f: Fetch, cursor?: string) =>
+	get<InvitePage>(f, '/admin/invites', { cursor });
+
+/** Makes an invite for the libraries; its code is in the answer and nowhere else. */
+export const adminCreateInvite = (f: Fetch, request: InviteCreate) =>
+	send<CreatedInvite>(f, 'POST', '/admin/invites', request);
+
+/** Revokes a pending invite; answers the invite as it now stands. */
+export const adminRevokeInvite = (f: Fetch, inviteId: string) =>
+	send<Invite>(f, 'DELETE', `/admin/invites/${encodeURIComponent(inviteId)}`);
 
 // ───────────────────────────── Plugin administration ─────────────────────────────
 
