@@ -1,14 +1,15 @@
-//! Accounts, for admins: `adminListUsers`, `adminSetUserLibraries` and
-//! `adminChangeLibraryAccess` (`api/openapi.yaml`, Admin). An admin sees every account, whatever its role (`requirements/users.md` §8), and acts
-//! on those the rank rule allows ([`authorize`]). Admins and the owner only, as everything under
-//! `/admin` is (`authenticate`).
+//! Accounts, for admins: `adminListUsers`, `adminSetUserLibraries`, `adminChangeLibraryAccess`
+//! and `adminSetUserStatus` (`api/openapi.yaml`, Admin). An admin sees every account, whatever its
+//! role (`requirements/users.md` §8), and acts on those the rank rule allows ([`authorize`]).
+//! Admins and the owner only, as everything under `/admin` is (`authenticate`).
 
 pub(super) mod access;
 mod authorize;
+pub(super) mod status;
 #[cfg(test)]
 mod tests;
 
-pub(super) use authorize::authorize;
+pub(super) use authorize::{authorize, manager_rank};
 
 use std::sync::Arc;
 
@@ -43,7 +44,7 @@ const SELECT: &[&str] = &[
 ];
 
 /// Whether an account can sign in.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum Status {
     Active,

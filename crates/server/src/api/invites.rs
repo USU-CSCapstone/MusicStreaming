@@ -16,6 +16,7 @@ use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
+use super::accounts::manager_rank;
 use super::extract::{self, Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Total, Unknown};
 use super::session::{new_token, token_hash};
@@ -28,6 +29,9 @@ const DEFAULT_DAYS: i64 = 7;
 
 /// The most days an invite may last.
 const MAX_DAYS: i64 = 30;
+
+/// Whether an invite is pending at `?2`: neither redeemed nor revoked, and not yet expired.
+const PENDING: &str = "redeemed_at IS NULL AND revoked_at IS NULL AND expires_at > ?2";
 
 const DAY_MS: i64 = 86_400_000;
 
@@ -146,7 +150,8 @@ pub struct Created {
 }
 
 /// `adminCreateInvite`: makes an invite for the libraries, which must all exist, and answers it
-/// with its code. Only the code's hash is stored.
+/// with its code. Only the code's hash is stored. A creator who is no longer an active admin or
+/// the owner when the invite is written is `403`, so no invite outlives their authority.
 pub async fn create(
     State(db): State<Arc<Database>>,
     Caller { user, .. }: Caller,
@@ -160,6 +165,7 @@ pub async fn create(
     let hash = token_hash(&code);
     let invite = db
         .try_write(move |tx| {
+            manager_rank(tx, user)?;
             for &Id(library) in &request.library_ids {
                 let exists = tx
                     .prepare_cached("SELECT 1 FROM libraries WHERE id = ?1")?
@@ -226,13 +232,23 @@ pub async fn revoke(
     let invite = db
         .write(move |tx| {
             let now = now_ms();
-            tx.prepare_cached(
-                "UPDATE invites SET revoked_at = ?2 WHERE id = ?1 AND redeemed_at IS NULL \
-                 AND revoked_at IS NULL AND expires_at > ?2",
-            )?
+            tx.prepare_cached(&format!(
+                "UPDATE invites SET revoked_at = ?2 WHERE id = ?1 AND {PENDING}"
+            ))?
             .execute([id, now])?;
             find(tx, id, now)
         })
         .await?;
     invite.map(Json).ok_or_else(Problem::not_found)
+}
+
+/// Revokes every invite `user` made that is pending at `now`, for when their authority to
+/// invite ends: a link made under authority that no longer exists is not left live
+/// (`requirements/users.md` §2.2).
+pub fn revoke_pending_of(conn: &Connection, user: i64, now: i64) -> rusqlite::Result<()> {
+    conn.prepare_cached(&format!(
+        "UPDATE invites SET revoked_at = ?2 WHERE created_by = ?1 AND {PENDING}"
+    ))?
+    .execute([user, now])
+    .map(drop)
 }

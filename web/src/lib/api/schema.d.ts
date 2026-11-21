@@ -1663,6 +1663,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/users/{userId}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Suspend or restore an account
+         * @description Suspends (`suspended`) or restores (`active`) the account, and answers it. A suspended
+         *     account cannot sign in, and its token and password answer exactly as an unknown
+         *     account's would. Suspending signs out every device of the account (each later request
+         *     with its token is `401 session_revoked` with `logged_out` once it is restored), clears
+         *     its password reset link and revokes the invites it made that are still pending, all at
+         *     once; then its realtime connections are sent `sessionRevoked` and closed, which stops
+         *     its playback. Its playlists, plays and everything else it owns are kept. Restoring lets
+         *     it sign in again and changes nothing else, so no device signed out by the suspension
+         *     returns. An admin suspends or restores a user; the owner an admin or a user. No one
+         *     suspends the owner or themselves: `403`. An account that does not exist or is being
+         *     deleted is `404`. Each change is recorded in the audit log; setting the status the
+         *     account already has changes nothing and records nothing.
+         */
+        put: operations["adminSetUserStatus"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/audit-log": {
         parameters: {
             query?: never;
@@ -2195,6 +2228,13 @@ export interface components {
         UserLibraries: {
             /** @description Every library the account is to be granted. */
             libraryIds: components["schemas"]["Id"][];
+        };
+        UserStatus: {
+            /**
+             * @description Whether the account can sign in.
+             * @enum {string}
+             */
+            status: "active" | "suspended";
         };
         LibraryAccessChange: {
             userIds: components["schemas"]["Id"][];
@@ -6343,6 +6383,33 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["UserLibraries"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUser"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    adminSetUserStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserStatus"];
             };
         };
         responses: {

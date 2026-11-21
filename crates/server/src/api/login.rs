@@ -71,9 +71,14 @@ pub async fn login(
     let hash = session::token_hash(&token);
     let session = state
         .db
-        .write(move |tx| {
+        .try_write(move |tx| {
+            // A suspension committed while the password was checked has signed out every
+            // device it found, so this one must not be added after it.
+            if !may_sign_in(tx, user)? {
+                return Err(Problem::new(Code::InvalidCredentials));
+            }
             limits::succeeded(tx, attempt)?;
-            session::register(tx, user, &device, &hash)
+            Ok(session::register(tx, user, &device, &hash)?)
         })
         .await?;
     devices::changed(state.db.clone(), state.hub.clone(), user);
@@ -85,6 +90,14 @@ fn account(conn: &Connection, username: &str) -> rusqlite::Result<Option<(i64, S
     conn.prepare_cached("SELECT id, password, status = 'active' FROM users WHERE username = ?1")?
         .query_row([username], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
         .optional()
+}
+
+/// Whether account `user` still exists and is active.
+fn may_sign_in(conn: &Connection, user: i64) -> rusqlite::Result<bool> {
+    conn.prepare_cached("SELECT status = 'active' FROM users WHERE id = ?1")?
+        .query_row([user], |row| row.get(0))
+        .optional()
+        .map(|active| active.unwrap_or(false))
 }
 
 #[cfg(test)]

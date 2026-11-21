@@ -89,9 +89,21 @@ impl Hub {
     /// Tells every connection `device` of `user` holds that it was signed out, and closes it.
     /// Call it once the sign-out is committed: a connection that joins after this checks then.
     pub fn revoke(&self, user: i64, device: i64, reason: Revoked) {
+        self.revoke_where(user, reason, |connection| connection.device == device);
+    }
+
+    /// Tells every connection of `user` that it was signed out, and closes it. Call it once the
+    /// sign-out is committed: a connection that joins after this checks then.
+    pub fn revoke_all(&self, user: i64, reason: Revoked) {
+        self.revoke_where(user, reason, |_| true);
+    }
+
+    /// Tells each connection of `user` that `revoked` is true for that it was signed out, and
+    /// closes it.
+    fn revoke_where(&self, user: i64, reason: Revoked, revoked: impl Fn(&Connection) -> bool) {
         let message = encode(&ServerMessage::SessionRevoked { reason });
         self.retain(user, |connection| {
-            if connection.device != device {
+            if !revoked(connection) {
                 return true;
             }
             // A full outbox loses the message, but the connection still closes, and the
