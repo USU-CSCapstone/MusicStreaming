@@ -56,6 +56,8 @@ pub enum Action {
     PasswordResetUsed,
     /// An account's role was changed, from and to `admin` or `user`.
     RoleChanged { from: &'static str, to: &'static str },
+    /// The actor handed ownership to the account.
+    OwnershipTransferred,
     /// An account was deleted.
     Deleted,
 }
@@ -72,6 +74,7 @@ impl Action {
             Self::PasswordResetIssued => "password_reset_issued",
             Self::PasswordResetUsed => "password_reset_used",
             Self::RoleChanged { .. } => "role_changed",
+            Self::OwnershipTransferred => "ownership_transferred",
             Self::Deleted => "deleted",
         }
     }
@@ -92,6 +95,7 @@ impl Action {
             | Self::Restored
             | Self::PasswordResetIssued
             | Self::PasswordResetUsed
+            | Self::OwnershipTransferred
             | Self::Deleted => json!({}),
             Self::DevicesSignedOut { device: Some((id, name)) } => {
                 json!({ "deviceId": id.to_string(), "deviceName": name })

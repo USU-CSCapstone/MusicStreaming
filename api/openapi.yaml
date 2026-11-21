@@ -2610,6 +2610,46 @@ paths:
         '429': { $ref: '#/components/responses/RateLimited' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /admin/ownership-transfer:
+    post:
+      tags: [Admin]
+      summary: Transfer ownership
+      description: |
+        Makes the account the owner and the caller an admin, at once and together: there is
+        always exactly one owner. The owner's alone: an admin is `403`. `password` is the owner's
+        own current password, checked as `changeMyPassword` checks it: a wrong one is `403
+        wrong_password`, and past the sign-in limits the request is `429`.
+
+        The account must be an active admin: a user or a suspended admin is `422`. The owner
+        cannot transfer to themselves (`403`), and an account that does not exist or is being
+        deleted is `404`. The transfer clears both accounts' password reset links, and both
+        accounts' realtime connections are sent `accessChanged`. Recorded in the audit log as
+        `ownership_transferred`, with the former owner as the actor.
+      operationId: transferOwnership
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OwnershipTransfer' }
+      responses:
+        '204': { description: Transferred. }
+        '403':
+          description: |
+            `wrong_password` — `password` is not the caller's current password, or it changed
+            while the request was handled. `forbidden` — the caller is not the owner, or the
+            account is their own; `detail` says why.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: |
+            `validation_failed` — the account is not an active admin; `detail` says so.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Problem' }
+
   # ───────────────────────────── Admin: audit log ─────────────────────────────
   /admin/audit-log:
     get:
@@ -3550,6 +3590,13 @@ components:
       required: [password]
       properties:
         password: { type: string, format: password, description: "The caller's own current password." }
+
+    OwnershipTransfer:
+      type: object
+      required: [userId, password]
+      properties:
+        userId: { type: string, description: The admin to make the owner. }
+        password: { type: string, format: password, description: "The owner's own current password." }
 
     IssuedPasswordReset:
       type: object
