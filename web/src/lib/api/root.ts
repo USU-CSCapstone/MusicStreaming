@@ -21,7 +21,9 @@ export class ApiError extends Error {
 		readonly code: string | undefined,
 		message: string,
 		/** Seconds until trying again is worth it, with `rate_limited`. */
-		readonly retryAfter?: number
+		readonly retryAfter?: number,
+		/** The server's own account of this refusal, when it gave one. */
+		readonly detail?: string
 	) {
 		super(message);
 	}

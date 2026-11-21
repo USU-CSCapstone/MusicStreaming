@@ -4,7 +4,7 @@ import { render } from 'vitest-browser-svelte';
 const state = vi.hoisted(() => ({
 	page: { status: 500, error: undefined, data: {} } as {
 		status: number;
-		error?: { message: string; code?: string };
+		error?: { message: string; code?: string; detail?: string };
 		data: object;
 	}
 }));
@@ -22,6 +22,19 @@ describe('the error page', () => {
 		await expect
 			.element(screen.getByText('This page is for the admins of this server.'))
 			.toBeVisible();
+	});
+
+	it("shows the server's reason under Admins only when it gave one", async () => {
+		state.page.status = 403;
+		state.page.error = {
+			message: 'Only the owner can read the audit log.',
+			code: 'forbidden',
+			detail: 'Only the owner can read the audit log.'
+		};
+		const screen = await render(ErrorPage);
+		await expect.element(screen.getByRole('heading', { name: 'Admins only' })).toBeVisible();
+		await expect.element(screen.getByText('Only the owner can read the audit log.')).toBeVisible();
+		expect(document.body.textContent).not.toContain('for the admins of this server');
 	});
 
 	it('still reports any other error as before', async () => {

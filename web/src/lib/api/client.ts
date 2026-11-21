@@ -12,6 +12,7 @@ import { API, ApiError, loginUrl } from './root';
 import type {
 	AdminUser,
 	AdminUserPage,
+	AuditPage,
 	LibraryAccessChange,
 	Album,
 	AlbumPage,
@@ -114,7 +115,7 @@ async function body<T>(res: Response): Promise<T> {
 		}
 		const message = problem?.detail ?? problem?.title ?? res.statusText;
 		const retryAfter = Number(res.headers.get('Retry-After')) || undefined;
-		throw new ApiError(res.status, problem?.code, message, retryAfter);
+		throw new ApiError(res.status, problem?.code, message, retryAfter, problem?.detail);
 	}
 	return res.json();
 }
@@ -663,6 +664,12 @@ export const adminCreateInvite = (f: Fetch, request: InviteCreate) =>
 /** Revokes a pending invite; answers the invite as it now stands. */
 export const adminRevokeInvite = (f: Fetch, inviteId: string) =>
 	send<Invite>(f, 'DELETE', `/admin/invites/${encodeURIComponent(inviteId)}`);
+
+// ───────────────────────────── Audit log ─────────────────────────────
+
+/** What admins and the owner did to accounts, newest first; the owner's alone. */
+export const adminListAuditLog = (f: Fetch, query: { cursor?: string } = {}) =>
+	get<AuditPage>(f, '/admin/audit-log', query);
 
 // ───────────────────────────── Plugin administration ─────────────────────────────
 
