@@ -6063,7 +6063,11 @@ export interface operations {
                  *     which has no `order`.
                  */
                 sort?: string;
-                order?: components["parameters"]["Order"];
+                /**
+                 * @description The order of `sort`, `asc` if left out. Only a sorted section has one: `order`
+                 *     without `sort` is `422`.
+                 */
+                order?: "asc" | "desc";
                 cursor?: components["parameters"]["Cursor"];
                 limit?: components["parameters"]["Limit"];
                 /**

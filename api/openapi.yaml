@@ -1468,7 +1468,14 @@ paths:
             ones answering `422` as there. Left out, the matches come in the search's ranking,
             which has no `order`.
           schema: { type: string }
-        - $ref: '#/components/parameters/Order'
+        - name: order
+          in: query
+          description: |
+            The order of `sort`, `asc` if left out. Only a sorted section has one: `order`
+            without `sort` is `422`.
+          schema:
+            type: string
+            enum: [asc, desc]
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/TagAll'
