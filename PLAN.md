@@ -45,7 +45,7 @@ Built: the scanner crate with discovery, every supported format, multi-value tag
 Built: an OpenAPI spec written before the server. Endpoints for libraries, tracks, albums, artists, images with ThumbHash placeholders, lyrics, and waveforms, with keyset paging. Fuzzy search in `crates/core` over an in-memory index per library. Direct streaming with range requests. A SvelteKit web client with album, artist, song, and search views, plus a player with a waveform, lyrics, and Media Session.
 
 **Still open from this stage:**
-1. The web client doesn't draw ThumbHash placeholders yet. Also decide whether the spec should drop `x-status: draft` on `ImageRef.placeholder`.
+1. ~~The web client doesn't draw ThumbHash placeholders yet.~~ **Built:** the web client draws them (`web/src/lib/placeholder.ts`), and the spec no longer marks `ImageRef.placeholder` as a draft.
 
 **End goal (reached):** A signed-in user can browse, search, and play a library in the web app. [`tracks.md`](requirements/tracks.md), [`albums.md`](requirements/albums.md), and [`artists.md`](requirements/artists.md) are met at the API level, along with server-side matching ([`search.md` §3](requirements/search.md#3-matching)) and direct delivery ([`playback.md` §1](requirements/playback.md#1-delivery)).
 
@@ -56,7 +56,7 @@ Built: first-run owner setup, and login and logout with argon2 and zxcvbn. Sessi
 **Still open from this stage:**
 1. ~~`session_revoked` can't be sent over HTTP.~~ **Decided, built:** a signed-out device keeps its token hash and answers `401 session_revoked`.
 2. ~~Nothing reclaims a `deviceId` after `credentials_changed`.~~ **Decided, built:** login honours `deviceId` for a `credentials_changed` device of the same account (Stage 7).
-3. `login_attempts` is never pruned.
+3. ~~`login_attempts` is never pruned.~~ **Built:** the retention sweep deletes old sign-in attempts, and deleting an account unlinks its attempts.
 
 **End goal (reached):** Only the owner can exist, and every request is scoped to what the caller may reach. [`users.md` §2.1, §3, §10](requirements/users.md) and [`libraries.md` §4](requirements/libraries.md#4-isolation) are met.
 
@@ -107,6 +107,7 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 - **Built: the account side.** Invites are single-use and last 1–30 days. The Accounts page lists accounts and sets each one's library access. Accounts can be suspended, and deleted. Devices are signed out by an admin, and by people for their own. People change their own password, and admins issue reset links. Whoever runs the server can recover the owner's password from the host. Roles follow the rank rule, and the owner can hand ownership to an admin. The owner reads an audit log of admin actions, kept for a year ([`users.md` §1–3, §8–9](requirements/users.md), [`design/database.md` §9](design/database.md#9-retention)).
 - Library management: create, rename, roots, exclude rules, delete, repointing a moved root, access grants, and a health view.
 - Admin views for scan progress and problems, missing tracks and cleanup, and the duplicate report.
+  - **Built:** the Libraries page starts a scan with *Scan now*, follows its progress, and summarizes what each scan added, updated, found missing and logged as a problem. Missing tracks, cleanup and the duplicate report are not built.
 - Exporting a user's data, account preferences that sync across devices, and the admin's view of sign-in attempts ([`users.md` §3.1](requirements/users.md#31-protection)).
 - Asking plugins to forget a deleted account (Stage 12's questions), and a sweep of device rows revoked long ago.
 
@@ -122,6 +123,7 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 
 ### Stage 8 — Browsing, search & playlists
 
+- **Built so far:** tag pages, tag types (mood among them) and tag filters; sorting and filtering on track lists; an artist's discography versus appearances; incomplete albums; search with a top result, sections for tracks, albums and artists, type and tag filters, and recent searches; playlists with create, edit and delete, version-checked edits, client-side undo, generated mosaic artwork, Liked Songs and hidden tracks. Not built: a library switcher, virtualized lists, playlists and lyric matches in search, near misses, scoping search to a container, custom artwork, pinning and export.
 - Tag pages and filters, plus [`conventions.md`](requirements/conventions.md) sorting, filtering, and actions everywhere. A library switcher, discography versus appearances, incomplete albums, and virtualized lists.
 - Search with a top result, sections, lyric matches, scoping, filters, and recent searches.
 - Playlists: CRUD, bulk and non-contiguous edits, version-checked edits, undo, generated artwork, custom artwork, pinning, and export.
@@ -141,6 +143,7 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 - A server-owned queue with the Manual Queue, Context Queue, and History. Seeded shuffle in `crates/core`, repeat, and kept sessions. Move player state onto the queue.
   - **Built:** all of this, online: the core's queue rules, the server's queue, kept queues and player state on items, and the web's queue panel, player and queueing ([`design/queue.md`](design/queue.md), [`design/web.md`](design/web.md#queue-worker)). Views start and queue by recipe (album, artist, songs, search and playlist, with their tag filters), and the playlist and track sorts are the core's. Endless play is not; kept queues work offline (Stage 10).
 - The web client side of realtime: connection, progress, a device picker, and remote control. Then Shift, waking, and per-device volume.
+  - **Built:** all of this except waking. The device list moves playback with *Play here*, and the web client carries out remote commands, transfers and volume changes (`web/src/lib/remote.ts`).
 - Transcoding with a cache and seekable streams. Gapless playback, normalization, crossfade, silence skipping, and failure handling.
 
 **Open questions:**
