@@ -28,7 +28,7 @@ pub fn plain_lines(plain: &str) -> impl Iterator<Item = &str> {
 }
 
 /// Whether `line` is a section label alone on its line, such as `[Chorus]` or `[Verse 2]`.
-fn is_label(line: &str) -> bool {
+pub(super) fn is_label(line: &str) -> bool {
     let line = line.trim();
     line.len() >= 2 && line.starts_with('[') && line.ends_with(']')
 }
@@ -172,14 +172,18 @@ impl LyricIndex {
         self.line_numbers.len()
     }
 
+    /// Every distinct word, sorted.
+    pub(super) fn vocabulary(&self) -> &[String] {
+        &self.vocabulary
+    }
+
     /// The number of `word`, if any line has it.
-    #[cfg_attr(not(test), expect(dead_code, reason = "read by lyric matching, built next"))]
+    #[cfg(test)]
     pub(super) fn word(&self, word: &str) -> Option<u32> {
         self.vocabulary.binary_search_by(|w| w.as_str().cmp(word)).ok().map(|w| w as u32)
     }
 
     /// The lines word `w` is in, ascending.
-    #[cfg_attr(not(test), expect(dead_code, reason = "read by lyric matching, built next"))]
     pub(super) fn lines_of(&self, w: u32) -> impl Iterator<Item = u32> + '_ {
         let range =
             self.posting_starts[w as usize] as usize..self.posting_starts[w as usize + 1] as usize;
@@ -191,16 +195,44 @@ impl LyricIndex {
     }
 
     /// How many words line `l` has, up to 255.
-    #[cfg_attr(not(test), expect(dead_code, reason = "read by lyric matching, built next"))]
     pub(super) fn length(&self, l: u32) -> u8 {
         self.line_lengths[l as usize]
     }
 
     /// The track line `l` is of, by its ID, and the line's place among the track's lines.
-    #[cfg_attr(not(test), expect(dead_code, reason = "read by lyric matching, built next"))]
+    #[cfg(test)]
     pub(super) fn place(&self, l: u32) -> (i64, u16) {
-        let t = self.track_starts.partition_point(|&start| start <= l) - 1;
-        (self.track_ids[t], self.line_numbers[l as usize])
+        self.tracks_from(0).place(l)
+    }
+
+    /// A walk through the tracks, from the first, for lines asked for in ascending order.
+    pub(super) fn tracks_from(&self, t: usize) -> Tracks<'_> {
+        Tracks { index: self, t }
+    }
+}
+
+/// A walk through an index's tracks for its lines in ascending order: each line's track is found
+/// from the last one's, so a whole walk reads each track once.
+pub(super) struct Tracks<'a> {
+    index: &'a LyricIndex,
+    t: usize,
+}
+
+impl Tracks<'_> {
+    /// The track line `l` is of, by its ID, and the line's place among the track's lines. Lines
+    /// are asked for in ascending order.
+    pub(super) fn place(&mut self, l: u32) -> (i64, u16) {
+        let starts = &self.index.track_starts;
+        if starts[self.t + 1] <= l {
+            // Galloping, as for postings: the next line's track is usually this one or near.
+            let rest = &starts[self.t + 1..];
+            let mut step = 1;
+            while step < rest.len() && rest[step] <= l {
+                step *= 2;
+            }
+            self.t += rest[..(step + 1).min(rest.len())].partition_point(|&start| start <= l);
+        }
+        (self.index.track_ids[self.t], self.index.line_numbers[l as usize])
     }
 }
 
@@ -215,7 +247,6 @@ fn put_varint(out: &mut Vec<u8>, mut n: u32) {
 }
 
 /// The numbers in bytes [`put_varint`] wrote.
-#[cfg_attr(not(test), expect(dead_code, reason = "read by lyric matching, built next"))]
 struct Varints<'a>(&'a [u8]);
 
 impl Iterator for Varints<'_> {
