@@ -44,13 +44,13 @@ fn best(hits: &mut Vec<(Score, u32)>, n: usize) {
 
 /// How well a document matched the whole query: lower is better.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct Score {
-    pub(super) inexact: bool,
-    pub(super) typos: u32,
+pub struct Score {
+    pub inexact: bool,
+    pub typos: u32,
     /// The query's leading article went unmatched.
-    pub(super) skipped: bool,
-    pub(super) prefixes: u32,
-    pub(super) extra_words: u32,
+    pub skipped: bool,
+    pub prefixes: u32,
+    pub extra_words: u32,
 }
 
 impl Index {

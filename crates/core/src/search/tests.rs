@@ -357,20 +357,8 @@ fn a_page_continues_in_an_index_rebuilt_since() {
 }
 
 #[test]
-fn a_rank_reads_back_from_its_bytes() {
+fn an_empty_page_continues_after_nothing() {
     let index = library();
     let next = index.page("say it", Kind::Track, None, 0, |_, _| true).next;
-    assert_eq!(next, None, "an empty page continues after nothing");
-    let index = Index::build([doc(Kind::Track, -4, "Ça va"), doc(Kind::Track, 9, "Ça va mieux")]);
-    let rank = index.page("ca", Kind::Track, None, 1, |_, _| true).next.unwrap();
-    assert_eq!(Rank::from_bytes(&rank.to_bytes()), Some(rank.clone()));
-    let bytes = rank.to_bytes();
-    assert_eq!(Rank::from_bytes(&bytes[..bytes.len() - 1]), None, "truncated");
-    assert_eq!(Rank::from_bytes(&[]), None);
-    let mut flag = bytes.clone();
-    flag[0] = 2;
-    assert_eq!(Rank::from_bytes(&flag), None, "a flag that is neither 0 nor 1");
-    let mut text = bytes;
-    *text.last_mut().unwrap() = 0xff;
-    assert_eq!(Rank::from_bytes(&text), None, "a word that is not UTF-8");
+    assert_eq!(next, None);
 }

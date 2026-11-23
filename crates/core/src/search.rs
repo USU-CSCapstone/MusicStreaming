@@ -36,6 +36,7 @@ mod tests;
 mod words;
 
 pub use build::{Finishing, IndexBuilder};
+pub use query::Score;
 pub use rank::Rank;
 pub use words::words;
 

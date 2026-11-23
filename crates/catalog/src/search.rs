@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 
 use jewelcase_core::{
-    Document, Index, IndexBuilder, Kind, Rank, Section as Found, SectionPage as FoundPage,
+    Document, Index, IndexBuilder, Kind, Rank, Score, Section as Found, SectionPage as FoundPage,
 };
 use rusqlite::types::Value;
 use rusqlite::{Connection, params};
@@ -79,12 +79,56 @@ impl SectionType {
 /// section, or none of ours, is [`Invalid`].
 pub fn after(cursor: Option<&str>, kind: Kind) -> Result<Option<Rank>, Invalid> {
     let Some(cursor) = cursor else { return Ok(None) };
-    match cursor::decode(cursor, &label(kind), 1)?.as_slice() {
-        [Value::Blob(bytes)] => Rank::from_bytes(bytes),
+    rank(&cursor::decode(cursor, &label(kind), RANK_VALUES)?)
+        .map(Some)
+        .ok_or_else(|| Invalid("cursor is not valid for this list".to_owned()))
+}
+
+/// How many values a rank is written as in a cursor.
+const RANK_VALUES: usize = 7;
+
+/// `rank` as a cursor's values: its score's, its name's words between spaces, which no folded
+/// word holds, then its ID.
+fn rank_values(rank: &Rank) -> [Value; RANK_VALUES] {
+    let Score { inexact, typos, skipped, prefixes, extra_words } = rank.score;
+    [
+        Value::Integer(inexact.into()),
+        Value::Integer(typos.into()),
+        Value::Integer(skipped.into()),
+        Value::Integer(prefixes.into()),
+        Value::Integer(extra_words.into()),
+        Value::Text(rank.words.join(" ")),
+        Value::Integer(rank.id),
+    ]
+}
+
+/// The rank [`rank_values`] wrote, or `None` for values it could not have.
+fn rank(values: &[Value]) -> Option<Rank> {
+    let flag = |value: &Value| match value {
+        Value::Integer(0) => Some(false),
+        Value::Integer(1) => Some(true),
         _ => None,
-    }
-    .map(Some)
-    .ok_or_else(|| Invalid("cursor is not valid for this list".to_owned()))
+    };
+    let count = |value: &Value| match value {
+        Value::Integer(n) => u32::try_from(*n).ok(),
+        _ => None,
+    };
+    let [inexact, typos, skipped, prefixes, extra_words, Value::Text(words), Value::Integer(id)] =
+        values
+    else {
+        return None;
+    };
+    Some(Rank {
+        score: Score {
+            inexact: flag(inexact)?,
+            typos: count(typos)?,
+            skipped: flag(skipped)?,
+            prefixes: count(prefixes)?,
+            extra_words: count(extra_words)?,
+        },
+        words: words.split(' ').filter(|word| !word.is_empty()).map(str::to_owned).collect(),
+        id: *id,
+    })
 }
 
 /// The label of `kind`'s section's cursors, so one is only accepted where it came from.
@@ -108,8 +152,7 @@ pub fn section_page(
         return Ok(SectionPage { query: q, items: Vec::new(), next_cursor: None, total: 0 });
     };
     let label = label(kind);
-    let next_cursor =
-        found.next.map(|rank| cursor::encode(&label, &[Value::Blob(rank.to_bytes())]));
+    let next_cursor = found.next.map(|rank| cursor::encode(&label, &rank_values(&rank)));
     let FoundPage { ids, total, .. } = found;
     let items = sections(conn, user, library, vec![Found { kind, ids, total }], &hid.losses)?
         .pop()
@@ -387,4 +430,31 @@ fn sections(
         }
     }
     Ok(sections)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rank() -> Rank {
+        let score = Score { inexact: true, typos: 2, skipped: false, prefixes: 1, extra_words: 3 };
+        Rank { score, words: vec!["ca".to_owned(), "va".to_owned()], id: -4 }
+    }
+
+    #[test]
+    fn a_rank_reads_back_from_its_cursor() {
+        let cursor = cursor::encode(&label(Kind::Track), &rank_values(&rank()));
+        assert_eq!(after(Some(&cursor), Kind::Track).unwrap(), Some(rank()));
+        assert!(after(Some(&cursor), Kind::Album).is_err(), "another section's");
+    }
+
+    #[test]
+    fn values_no_rank_has_are_refused() {
+        for (at, value) in [(0, Value::Integer(2)), (1, Value::Integer(-1)), (5, Value::Null)] {
+            let mut values = rank_values(&rank());
+            values[at] = value;
+            let cursor = cursor::encode(&label(Kind::Track), &values);
+            assert!(after(Some(&cursor), Kind::Track).is_err(), "{values:?}");
+        }
+    }
 }
