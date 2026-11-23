@@ -1414,6 +1414,11 @@ paths:
         until they are built, so no playlists section comes back. A track the caller hid is not
         found, nor counted in its section's `total`, and nor is an album or artist every track of
         which they hid (`requirements/conventions.md` §8).
+
+        Search is not filtered by year or listening data, and the shipped apps do not filter it by
+        tag either: they find tags by name, and narrow to one by searching within it
+        (`requirements/search.md` §5). `tagAll` and `tagAny` stay for clients that narrow a
+        search by tag all the same, and for a search's queue recipe.
       operationId: search
       parameters:
         - $ref: '#/components/parameters/Query'
@@ -1421,12 +1426,6 @@ paths:
         - $ref: '#/components/parameters/Within'
         - $ref: '#/components/parameters/TagAll'
         - $ref: '#/components/parameters/TagAny'
-        - $ref: '#/components/parameters/YearFrom'
-        - $ref: '#/components/parameters/YearTo'
-        - $ref: '#/components/parameters/Played'
-        - $ref: '#/components/parameters/LastPlayedBefore'
-        - $ref: '#/components/parameters/LastPlayedAfter'
-        - $ref: '#/components/parameters/MinPlayCount'
         - name: sectionLimit
           in: query
           description: Results shown per section before expanding.
