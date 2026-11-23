@@ -42,8 +42,10 @@ mod union;
 mod words;
 
 pub use build::{Finishing, IndexBuilder};
-pub use lyric_query::{LyricHit, PHRASE_TRACKS, lift_phrases};
-pub use lyrics::{LyricIndex, LyricIndexBuilder, plain_lines};
+pub use lyric_query::{
+    LyricHit, LyricScore, PHRASE_TRACKS, lift_phrases, lyrics_place, wants_phrases,
+};
+pub use lyrics::{LyricIndex, LyricIndexBuilder, is_lyric_line, plain_lines};
 pub use query::Score;
 pub use rank::Rank;
 pub use union::Union;
@@ -119,6 +121,9 @@ pub struct Section {
     pub ids: Vec<i64>,
     /// How many matched in all.
     pub total: usize,
+    /// How well the best match matched: sections are ordered by it, and a section of lyrics is
+    /// placed among them by it ([`lyrics_place`]).
+    pub best: Score,
 }
 
 /// A page of one kind's matches, best first.

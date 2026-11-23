@@ -342,7 +342,7 @@ pub fn answer(
             // Found nothing, what was nearly found (`requirements/search.md` §8).
             let misses = search::misses(&both, &p.q, &kinds, &found, &keep);
             let search = search::Search { user, library, q: p.q, keep };
-            json(search::response(conn, search, found, &misses, tag_type)?)
+            json(search::response(conn, search, found, &misses, tag_type, None)?)
         }
         "searchSection" => {
             let p: SectionParams = serde_json::from_str(params)?;
