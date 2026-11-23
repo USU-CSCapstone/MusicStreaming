@@ -242,6 +242,9 @@ fn searches() -> Vec<Value> {
         "calm",
         "quiet",
         "theirs",
+        // Nothing found, so what was nearly found: a wrong first letter, and a word too many.
+        "xome together",
+        "come together now",
     ] {
         searches.push(json!({ "q": q, "sectionLimit": 5 }));
     }

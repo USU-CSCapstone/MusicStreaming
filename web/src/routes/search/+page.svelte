@@ -217,7 +217,8 @@
 					Did you mean
 					{#each nearMisses as miss, i (miss)}
 						{#if i > 0},
-						{/if}<a href="{resolve('/search')}?{new URLSearchParams({ q: miss })}">{miss}</a>
+						{/if}<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- resolved in search-tabs.ts -->
+						<a href={tabHref(miss, data.tab, scope)}>{miss}</a>
 					{/each}?
 				</p>
 			{:else}
