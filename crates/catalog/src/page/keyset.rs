@@ -60,8 +60,9 @@ pub struct Source {
     /// `select` and `joins` to the page's rows after, so it costs the rows' keys, not their
     /// columns. `from` must name the table by that alias and its ID.
     pub back: Option<(&'static str, &'static str)>,
-    /// How a page that walks a sort's index checks its rows, and how far it may read.
-    pub(crate) walk: Option<Box<Walk>>,
+    /// How a page that walks a sort's index checks its rows, and how far it may read. Only the
+    /// catalog makes one; a list made elsewhere has none.
+    pub walk: Option<Box<Walk>>,
 }
 
 /// How much larger a walk's first window is than the rows it is expected to need, and each window
@@ -77,7 +78,7 @@ const WINDOW_GROWTH: i64 = 4;
 /// the index where those that pass sort last. So a walk reads only so far, and a page still short
 /// then is read from the walk's lead instead, whose cost is the rows that pass, not the index's.
 /// How a walk checks its rows says how it reads them.
-pub(crate) enum Walk {
+pub enum Walk {
     /// In SQL: a tag filter's, whose links are indexed.
     Sql(SqlWalk),
     /// In memory, by ID: a search's matches, which may be hundreds of thousands.
@@ -86,7 +87,7 @@ pub(crate) enum Walk {
 
 /// A walk that checks its rows in SQL reads the index in windows of rows, each larger than the
 /// last, and runs over when the windows have covered [`WALK_BUDGET`] rows for each row it asks for.
-pub(crate) struct SqlWalk {
+pub struct SqlWalk {
     /// The walk's own condition, such as being in the library, without the tags', and its
     /// parameters: what a window's edge is found by.
     pub(crate) filter: String,
@@ -103,9 +104,9 @@ pub(crate) struct SqlWalk {
 /// pass, so it reads about as many rows as it keeps over the share that pass, where they are
 /// spread through the sort. Where they are not, such as titles matching a word that starts them,
 /// read by name, it runs over after `budget` rows.
-pub(crate) struct IdWalk {
+pub struct IdWalk {
     /// Whether the row with this ID passes. A sort's last column is the row's ID.
-    pub(crate) keeps: Box<dyn Fn(i64) -> bool>,
+    pub(crate) keeps: Box<dyn Fn(i64) -> bool + Send>,
     /// About how many rows there are for each one that passes, so each read is enough for the
     /// rest of the page.
     pub(crate) spread: u32,
@@ -116,8 +117,10 @@ pub(crate) struct IdWalk {
     pub(crate) lead: Box<MakeLead>,
 }
 
-/// Makes the source a walk that checks by ID reads instead when it runs over.
-pub(crate) type MakeLead = dyn Fn(&Connection) -> rusqlite::Result<Source>;
+/// Makes the source a walk that checks by ID reads instead when it runs over. Like the rest of a
+/// source, it may be read on another thread than the one that made it, such as the server's
+/// database's.
+pub(crate) type MakeLead = dyn Fn(&Connection) -> rusqlite::Result<Source> + Send;
 
 /// The rows a page's walk may read for each row it asks for before the page leads instead: twice
 /// [`LEAD_SHARE`](crate::tag_filter::LEAD_SHARE). Measured on the generated library of 500,000
