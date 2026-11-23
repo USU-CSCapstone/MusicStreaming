@@ -362,7 +362,7 @@ async fn a_search_within_what_is_not_there_resolves_to_nothing() {
     let recipe: Recipe =
         serde_json::from_value(json!({ "type": "search", "q": "song", "within": "playlist:999" }))
             .unwrap();
-    let caller = Caller { user: 1, device: 1, admin: true };
+    let caller = Caller { user: 1, device: 1, admin: true, owner: true };
     let problem = resolve(&state.db, &state.indexes, &caller, Id(1), &recipe).await.unwrap_err();
     assert_eq!(serde_json::to_value(problem).unwrap()["code"], "not_found");
 }
