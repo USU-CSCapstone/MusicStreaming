@@ -261,6 +261,8 @@ fn read_chunks<T>(
     let mut walked: u32 = 0;
     let mut rows: Rows<T> = Vec::new();
     let after = request.after.as_deref();
+    // A sort's last column is the row's ID, which is all a row the walk passes over needs read.
+    let id_column = source.select.len() + request.sort.columns.len() - 1;
     for &part in parts(request.sort, after) {
         // Where the next read of this part starts: the cursor, then the last row read.
         let mut from = after.map(<[Value]>::to_vec);
@@ -277,15 +279,22 @@ fn read_chunks<T>(
                 && let Some(row) = result.next()?
             {
                 read += 1;
-                let key = sort_values(row, source, request.sort)?;
-                let Some(&Value::Integer(id)) = key.last() else {
-                    unreachable!("a sort ends with the row's ID")
-                };
-                last = Some(key.clone());
-                if (checks.keeps)(id) {
-                    rows.push((map(row)?, key));
-                    left -= 1;
+                let kept = (checks.keeps)(row.get(id_column)?);
+                // A full read's last row is where the next one starts, kept or not.
+                let edge = read == want;
+                if !kept && !edge {
+                    continue;
                 }
+                let key = sort_values(row, source, request.sort)?;
+                if !kept {
+                    last = Some(key);
+                    continue;
+                }
+                if edge {
+                    last = Some(key.clone());
+                }
+                rows.push((map(row)?, key));
+                left -= 1;
             }
             // A short read is the end of the part; a full one continues after its last row.
             if read < want {
