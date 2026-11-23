@@ -337,8 +337,8 @@ pub fn answer(
             };
             let hid = search::Hid::read(conn, user, library, &filter)?;
             let keep = search::Keep::new(&hid, tagged.as_ref());
-            let index = built(index)?;
-            json(search::section(conn, user, library, p.q, kind, reading, index, &keep)?)
+            let search = search::Search { user, library, q: p.q, keep };
+            json(search::section(conn, search, kind, reading, built(index)?)?)
         }
         "listHiddenTracks" => {
             let p: HiddenParams = serde_json::from_str(params)?;

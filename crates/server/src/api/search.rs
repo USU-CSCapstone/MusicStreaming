@@ -10,8 +10,8 @@ use axum::Json;
 use axum::extract::State;
 use jewelcase_catalog::page::Order;
 use jewelcase_catalog::search::{
-    self, Hid, Keep, SearchResponse, SectionPage, SectionReading, SectionType, kinds, response,
-    section_limit,
+    self, Hid, Keep, Search, SearchResponse, SectionPage, SectionReading, SectionType, kinds,
+    response, section_limit,
 };
 use jewelcase_core::Kind;
 use serde::Deserialize;
@@ -104,7 +104,7 @@ pub async fn section(
         .read(move |conn| {
             let hid = Hid::read(conn, user, library, &filter)?;
             let keep = Keep::new(&hid, tagged.as_deref());
-            search::section(conn, user, library, q, kind, reading, &index, &keep)
+            search::section(conn, Search { user, library, q, keep }, kind, reading, &index)
         })
         .await?;
     Ok(Json(page))

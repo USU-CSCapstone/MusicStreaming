@@ -197,23 +197,25 @@ impl SectionPage {
     }
 }
 
-/// A page of the section of `kind` of a search for `q` in `library` with `index`, of what `keep`
-/// keeps, read as `reading` says, as the browse lists show it to `user`, with the cursor to the
-/// next.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "a search's caller, query, index and what it keeps, as the server and a device each hold them"
-)]
+/// A search: who searches, in which library, for what, and what it shows them. The server and a
+/// device each make one for a search's response or one of its sections.
+pub struct Search<'a> {
+    pub user: i64,
+    pub library: i64,
+    pub q: String,
+    pub keep: Keep<'a>,
+}
+
+/// A page of the section of `kind` of `search` with `index`, read as `reading` says, as the
+/// browse lists show it to the searcher, with the cursor to the next.
 pub fn section(
     conn: &Connection,
-    user: i64,
-    library: i64,
-    q: String,
+    search: Search,
     kind: Kind,
     reading: SectionReading,
     index: &Index,
-    keep: &Keep,
 ) -> rusqlite::Result<SectionPage> {
+    let Search { user, library, q, keep } = search;
     let losses = &keep.hid.losses;
     match reading {
         SectionReading::Ranked { after, limit } => {
