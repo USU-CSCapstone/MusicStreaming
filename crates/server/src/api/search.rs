@@ -12,16 +12,14 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
-use jewelcase_catalog::cursor;
 use jewelcase_catalog::page::{self, Order};
 use jewelcase_catalog::search::{
     self, Hid, Keep, Lyrics, MUSIC, SEARCHED, Search, SearchResponse, SectionPage, SectionReading,
     SectionType, kinds, response, section_limit,
 };
 use jewelcase_catalog::within::Within;
-use jewelcase_core::{Index, Kind, LyricHit, Union};
+use jewelcase_core::{Index, Kind, Union};
 use lyrics::Ranked;
-use rusqlite::types::Value;
 use serde::Deserialize;
 
 pub use indexes::Indexes;
@@ -211,8 +209,7 @@ async fn lyric_section(
         return Err(Problem::invalid("this section has no sorts"));
     }
     let limit = page::limit(query.limit)?;
-    let label = format!("search.{LYRICS}");
-    let after = query.cursor.as_deref().map(|cursor| lyric_place(cursor, &label)).transpose()?;
+    let after = search::lyric_after(query.cursor.as_deref())?;
     let within = container(query.within.as_deref())?;
     let filter = TagFilter::new(query.tag_all.as_deref(), query.tag_any.as_deref())?;
     let tagged = indexes.tagged.get(&db, library, &filter, &[Kind::Track]).await?;
@@ -224,25 +221,11 @@ async fn lyric_section(
     let ranked = lyrics::ranked(&db, &indexes, library, &query.q, keep).await?;
     let start = after.map_or(0, |place| ranked.after(&place));
     let end = ranked.hits.len().min(start + limit as usize);
-    let next_cursor = (end < ranked.hits.len()).then(|| {
-        let (rest, hit) = ranked.place(end - 1);
-        cursor::encode(&label, &[Value::Integer(i64::from(rest)), Value::Blob(hit.to_bytes())])
-    });
+    let next_cursor =
+        (end < ranked.hits.len()).then(|| search::lyric_cursor(&ranked.place(end - 1)));
     let page = ranked.hits[start..end].to_vec();
     let matches = db.read(move |conn| lyrics::matches(conn, user, library, &page)).await?;
     Ok(SectionPage::lyrics(query.q, matches, next_cursor, ranked.hits.len()))
-}
-
-/// The place in the lyrics section a `cursor` continues after. A cursor of another section, or
-/// none of ours, is `422 validation_failed`.
-fn lyric_place(cursor: &str, label: &str) -> Result<lyrics::Place, Problem> {
-    match cursor::decode(cursor, label, 2)?.as_slice() {
-        [Value::Integer(rest @ (0 | 1)), Value::Blob(bytes)] => {
-            LyricHit::from_bytes(bytes).map(|hit| (*rest == 1, hit))
-        }
-        _ => None,
-    }
-    .ok_or_else(|| Problem::invalid("cursor is not valid for this list"))
 }
 
 /// The spec's name for the lyrics section.

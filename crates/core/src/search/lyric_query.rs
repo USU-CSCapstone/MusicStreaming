@@ -23,53 +23,13 @@ use crate::fold::ARTICLES;
 
 /// How well a line matched the query: lower is better.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct LyricScore {
-    pub(super) typos: u32,
+pub struct LyricScore {
+    pub typos: u32,
     /// The query's leading article went unmatched.
-    pub(super) skipped: bool,
-    pub(super) prefixes: u32,
+    pub skipped: bool,
+    pub prefixes: u32,
     /// Words in the line beyond those the query matched.
-    pub(super) extra_words: u32,
-}
-
-impl LyricHit {
-    /// The hit as bytes, for a client to hand back as a cursor.
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let LyricScore { typos, skipped, prefixes, extra_words } = self.score;
-        let mut bytes = vec![u8::from(skipped)];
-        for n in [typos, prefixes, extra_words] {
-            bytes.extend(n.to_be_bytes());
-        }
-        bytes.extend(self.track.to_be_bytes());
-        bytes.extend(self.line.to_be_bytes());
-        bytes
-    }
-
-    /// The hit [`LyricHit::to_bytes`] wrote, or `None` for anything else. A hit made up rather
-    /// than read back only chooses where a page starts.
-    pub fn from_bytes(bytes: &[u8]) -> Option<LyricHit> {
-        let (&[skipped], rest) = bytes.split_first_chunk::<1>()?;
-        let skipped = match skipped {
-            0 => false,
-            1 => true,
-            _ => return None,
-        };
-        let (typos, rest) = rest.split_first_chunk::<4>()?;
-        let (prefixes, rest) = rest.split_first_chunk::<4>()?;
-        let (extra_words, rest) = rest.split_first_chunk::<4>()?;
-        let (track, rest) = rest.split_first_chunk::<8>()?;
-        let line: [u8; 2] = rest.try_into().ok()?;
-        Some(LyricHit {
-            score: LyricScore {
-                typos: u32::from_be_bytes(*typos),
-                skipped,
-                prefixes: u32::from_be_bytes(*prefixes),
-                extra_words: u32::from_be_bytes(*extra_words),
-            },
-            track: i64::from_be_bytes(*track),
-            line: u16::from_be_bytes(line),
-        })
-    }
+    pub extra_words: u32,
 }
 
 impl LyricScore {
@@ -88,10 +48,12 @@ impl LyricScore {
     }
 }
 
-/// A track a search of its lyrics found, by its best line. Hits order as the section does.
+/// A track a search of its lyrics found, by its best line. Hits order as the section does. Its
+/// parts are plain values, for a caller to hand out in a cursor and read back; one made up rather
+/// than read back only chooses where a page starts.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LyricHit {
-    pub(super) score: LyricScore,
+    pub score: LyricScore,
     /// The track, by its ID.
     pub track: i64,
     /// The line's place among the track's lines, as they were given to the index.
@@ -532,20 +494,6 @@ mod tests {
         // When as good, after the names.
         assert_eq!(placed(&["Other Side Now"], "other side now", "other side"), 1);
         assert_eq!(placed(&[], "other side", "other side"), 0);
-    }
-
-    #[test]
-    fn a_hit_reads_back_from_its_bytes() {
-        let index = songs();
-        for hit in
-            index.search("the times", |_| true).into_iter().chain(index.search("so", |_| true))
-        {
-            assert_eq!(LyricHit::from_bytes(&hit.to_bytes()), Some(hit));
-        }
-        let bytes = index.search("so", |_| true)[0].to_bytes();
-        assert_eq!(LyricHit::from_bytes(&bytes[..bytes.len() - 1]), None);
-        assert_eq!(LyricHit::from_bytes(&[bytes.as_slice(), &[0]].concat()), None);
-        assert_eq!(LyricHit::from_bytes(&[[2].as_slice(), &bytes[1..]].concat()), None);
     }
 
     #[test]

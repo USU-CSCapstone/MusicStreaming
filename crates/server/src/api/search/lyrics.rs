@@ -97,7 +97,7 @@ pub struct Ranked {
 
 /// Where a match is in a section's order, which a page continues after: lifted or not, then the
 /// match, as [`Ranked`] orders them.
-pub type Place = (bool, LyricHit);
+pub use jewelcase_catalog::search::LyricPlace as Place;
 
 impl Ranked {
     /// The place of `hits[i]`.

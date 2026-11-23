@@ -7,7 +7,7 @@ use std::cmp::Reverse;
 use std::collections::HashSet;
 
 use jewelcase_core::{
-    Document, Index, IndexBuilder, Kind, LyricHit, Rank, Score, Section as Found,
+    Document, Index, IndexBuilder, Kind, LyricHit, LyricScore, Rank, Score, Section as Found,
     SectionPage as FoundPage, Union, lyrics_place,
 };
 use rusqlite::types::Value;
@@ -156,17 +156,25 @@ fn rank_values(rank: &Rank) -> [Value; RANK_VALUES] {
     ]
 }
 
-/// The rank [`rank_values`] wrote, or `None` for values it could not have.
-fn rank(values: &[Value]) -> Option<Rank> {
-    let flag = |value: &Value| match value {
+/// A cursor's true or false, as 1 or 0.
+fn flag(value: &Value) -> Option<bool> {
+    match value {
         Value::Integer(0) => Some(false),
         Value::Integer(1) => Some(true),
         _ => None,
-    };
-    let count = |value: &Value| match value {
-        Value::Integer(n) => u32::try_from(*n).ok(),
+    }
+}
+
+/// A cursor's count, or a number as small.
+fn count<N: TryFrom<i64>>(value: &Value) -> Option<N> {
+    match value {
+        Value::Integer(n) => N::try_from(*n).ok(),
         _ => None,
-    };
+    }
+}
+
+/// The rank [`rank_values`] wrote, or `None` for values it could not have.
+fn rank(values: &[Value]) -> Option<Rank> {
     let [
         inexact,
         typos,
@@ -197,6 +205,58 @@ fn rank(values: &[Value]) -> Option<Rank> {
 /// The label of `kind`'s section's cursors, so one is only accepted where it came from.
 fn label(kind: Kind) -> String {
     format!("search.{}", section_type(kind))
+}
+
+/// Where a page of the lyrics section stands: whether past the tracks lifted for holding the
+/// query as a phrase, and the last match.
+pub type LyricPlace = (bool, LyricHit);
+
+/// The label of the lyrics section's cursors.
+const LYRICS_LABEL: &str = "search.lyrics";
+
+/// How many values a lyric place is written as in a cursor.
+const LYRIC_VALUES: usize = 7;
+
+/// The place a page of the lyrics section continues after, from its `cursor`: a cursor of another
+/// section, or none of ours, is [`Invalid`]. Only the server searches lyrics.
+pub fn lyric_after(cursor: Option<&str>) -> Result<Option<LyricPlace>, Invalid> {
+    let Some(cursor) = cursor else { return Ok(None) };
+    lyric_place(&cursor::decode(cursor, LYRICS_LABEL, LYRIC_VALUES)?)
+        .map(Some)
+        .ok_or_else(|| Invalid("cursor is not valid for this list".to_owned()))
+}
+
+/// The cursor of the lyrics section's page after `place`.
+pub fn lyric_cursor(place: &LyricPlace) -> String {
+    cursor::encode(LYRICS_LABEL, &lyric_values(place))
+}
+
+/// `place` as a cursor's values: past the lifted or not, the line's score, the track and the line.
+fn lyric_values((rest, hit): &LyricPlace) -> [Value; LYRIC_VALUES] {
+    let LyricScore { typos, skipped, prefixes, extra_words } = hit.score;
+    [
+        Value::Integer((*rest).into()),
+        Value::Integer(typos.into()),
+        Value::Integer(skipped.into()),
+        Value::Integer(prefixes.into()),
+        Value::Integer(extra_words.into()),
+        Value::Integer(hit.track),
+        Value::Integer(hit.line.into()),
+    ]
+}
+
+/// The place [`lyric_values`] wrote, or `None` for values it could not have.
+fn lyric_place(values: &[Value]) -> Option<LyricPlace> {
+    let [rest, typos, skipped, prefixes, extra_words, Value::Integer(track), line] = values else {
+        return None;
+    };
+    let score = LyricScore {
+        typos: count(typos)?,
+        skipped: flag(skipped)?,
+        prefixes: count(prefixes)?,
+        extra_words: count(extra_words)?,
+    };
+    Some((flag(rest)?, LyricHit { score, track: *track, line: count(line)? }))
 }
 
 /// The keyset of the list sort `name` of the section of `kind`: one of `listTracks`',
@@ -899,6 +959,29 @@ mod tests {
             values[at] = value;
             let cursor = cursor::encode(&label(Kind::Track), &values);
             assert!(after(Some(&cursor), Kind::Track).is_err(), "{values:?}");
+        }
+    }
+
+    fn place() -> LyricPlace {
+        let score = LyricScore { typos: 1, skipped: true, prefixes: 0, extra_words: 4 };
+        (true, LyricHit { score, track: 9, line: 3 })
+    }
+
+    #[test]
+    fn a_lyric_place_reads_back_from_its_cursor() {
+        assert_eq!(lyric_after(Some(&lyric_cursor(&place()))).unwrap(), Some(place()));
+        let cursor = cursor::encode(&label(Kind::Track), &rank_values(&rank()));
+        assert!(lyric_after(Some(&cursor)).is_err(), "another section's");
+    }
+
+    #[test]
+    fn values_no_lyric_place_has_are_refused() {
+        let line = Value::Integer(i64::from(u16::MAX) + 1);
+        for (at, value) in [(0, Value::Integer(2)), (1, Value::Integer(-1)), (6, line)] {
+            let mut values = lyric_values(&place());
+            values[at] = value;
+            let cursor = cursor::encode(LYRICS_LABEL, &values);
+            assert!(lyric_after(Some(&cursor)).is_err(), "{values:?}");
         }
     }
 }

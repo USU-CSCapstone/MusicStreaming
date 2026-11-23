@@ -42,7 +42,9 @@ mod union;
 mod words;
 
 pub use build::{Finishing, IndexBuilder};
-pub use lyric_query::{LyricHit, PHRASE_TRACKS, lift_phrases, lyrics_place, wants_phrases};
+pub use lyric_query::{
+    LyricHit, LyricScore, PHRASE_TRACKS, lift_phrases, lyrics_place, wants_phrases,
+};
 pub use lyrics::{LyricIndex, LyricIndexBuilder, is_lyric_line, plain_lines};
 pub use query::Score;
 pub use rank::Rank;
