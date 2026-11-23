@@ -90,7 +90,10 @@ pub async fn section(
         SectionType::Playlists => None,
         SectionType::Lyrics => return Err(Problem::invalid("lyrics cannot be searched yet")),
     };
-    let after = after(query.cursor.as_deref(), &section)?;
+    let after = match kind {
+        Some(kind) => after(query.cursor.as_deref(), kind)?,
+        None => None,
+    };
 
     let filter = TagFilter::new(query.tag_all.as_deref(), query.tag_any.as_deref())?;
     let kinds: Vec<Kind> = kind.into_iter().collect();

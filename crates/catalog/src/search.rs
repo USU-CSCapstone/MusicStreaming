@@ -75,11 +75,11 @@ impl SectionType {
     }
 }
 
-/// The rank a page of the section `section` continues after, from its `cursor`: a cursor of
-/// another section, or none of ours, is [`Invalid`].
-pub fn after(cursor: Option<&str>, section: &str) -> Result<Option<Rank>, Invalid> {
+/// The rank a page of `kind`'s section continues after, from its `cursor`: a cursor of another
+/// section, or none of ours, is [`Invalid`].
+pub fn after(cursor: Option<&str>, kind: Kind) -> Result<Option<Rank>, Invalid> {
     let Some(cursor) = cursor else { return Ok(None) };
-    match cursor::decode(cursor, &label(section), 1)?.as_slice() {
+    match cursor::decode(cursor, &label(kind), 1)?.as_slice() {
         [Value::Blob(bytes)] => Rank::from_bytes(bytes),
         _ => None,
     }
@@ -87,9 +87,9 @@ pub fn after(cursor: Option<&str>, section: &str) -> Result<Option<Rank>, Invali
     .ok_or_else(|| Invalid("cursor is not valid for this list".to_owned()))
 }
 
-/// The label of a section's cursors, so one is only accepted where it came from.
-fn label(section: &str) -> String {
-    format!("search.{section}")
+/// The label of `kind`'s section's cursors, so one is only accepted where it came from.
+fn label(kind: Kind) -> String {
+    format!("search.{}", section_type(kind))
 }
 
 /// A page of the section of `kind` that a search for `q` in `library` found as `found`, as the
@@ -107,7 +107,7 @@ pub fn section_page(
     let Some(kind) = kind else {
         return Ok(SectionPage { query: q, items: Vec::new(), next_cursor: None, total: 0 });
     };
-    let label = label(section_type(kind));
+    let label = label(kind);
     let next_cursor =
         found.next.map(|rank| cursor::encode(&label, &[Value::Blob(rank.to_bytes())]));
     let FoundPage { ids, total, .. } = found;

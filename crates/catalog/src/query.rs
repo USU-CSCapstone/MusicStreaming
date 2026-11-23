@@ -324,7 +324,6 @@ pub fn answer(
                 }
                 None => return Err(Error(format!("no section {}", p.section))),
             };
-            let after = search::after(p.cursor.as_deref(), &p.section)?;
             let filter = TagFilter::new(p.tag_all.as_deref(), p.tag_any.as_deref())?;
             let kinds: Vec<Kind> = kind.into_iter().collect();
             let tagged = if filter.is_empty() {
@@ -335,6 +334,7 @@ pub fn answer(
             let hid = search::Hid::read(conn, user, library, &filter)?;
             let found = match kind {
                 Some(kind) => {
+                    let after = search::after(p.cursor.as_deref(), kind)?;
                     built(index)?.page(&p.q, kind, after.as_ref(), limit as usize, |kind, id| {
                         !hid.contains(kind, id)
                             && tagged.as_ref().is_none_or(|sets| sets[kind as usize].contains(&id))
