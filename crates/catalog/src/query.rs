@@ -6,14 +6,14 @@
 use std::collections::HashMap;
 use std::fmt::{self, Write};
 
-use jewelcase_core::{Index, Kind, list_hash};
+use jewelcase_core::{Index, Kind, Union, list_hash};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 use crate::albums::{self, AlbumSort};
 use crate::artists::{self, ArtistSort};
 use crate::credit::ArtistCredit;
-use crate::page::{self, Order, Request, Totals};
+use crate::page::{Order, Request, Totals};
 use crate::playlists::{self, PlaylistSort};
 use crate::recipes::{self, Recipe};
 use crate::tag_filter::{TagFilter, Tags};
@@ -309,9 +309,15 @@ pub fn answer(
                 Some(search::tagged(conn, library, &filter, &kinds)?)
             };
             let hid = search::Hid::read(conn, user, library, &filter)?;
+            // And the caller's own playlists, which no one else's search finds.
+            let mine = if kinds.contains(&Kind::Playlist) {
+                search::mine(conn, user, library)?
+            } else {
+                Index::default()
+            };
+            let both = Union(&[built(index)?, &mine]);
             let keep = search::Keep::new(&hid, tagged.as_ref());
-            let found =
-                built(index)?.search_within(&p.q, &kinds, limit, |kind, id| keep.keeps(kind, id));
+            let found = both.search_within(&p.q, &kinds, limit, |kind, id| keep.keeps(kind, id));
             let found = search::of_tag_type(found, p.tag_type.as_deref());
             json(search::response(conn, user, library, p.q, found, &hid)?)
         }
@@ -322,10 +328,6 @@ pub fn answer(
             }
             let kind = match search::SectionType::named(&p.section) {
                 Some(search::SectionType::Kind(kind)) => kind,
-                Some(search::SectionType::Playlists) => {
-                    page::limit(p.limit)?;
-                    return json(search::SectionPage::empty(p.q));
-                }
                 Some(search::SectionType::Lyrics) => {
                     return Err(Error("lyrics cannot be searched yet".to_owned()));
                 }
@@ -348,9 +350,15 @@ pub fn answer(
             };
             let hid = search::Hid::read(conn, user, library, &filter)?;
             let keep = search::Keep::new(&hid, tagged.as_ref());
+            let mine = if kind == Kind::Playlist {
+                search::mine(conn, user, library)?
+            } else {
+                Index::default()
+            };
+            let both = Union(&[built(index)?, &mine]);
             let search = search::Search { user, library, q: p.q, keep };
             let group = group.as_deref();
-            json(search::section(conn, search, kind, group, reading, built(index)?)?)
+            json(search::section(conn, search, kind, group, reading, &both)?)
         }
         "listHiddenTracks" => {
             let p: HiddenParams = serde_json::from_str(params)?;
