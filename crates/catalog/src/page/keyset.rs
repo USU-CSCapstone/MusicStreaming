@@ -674,4 +674,88 @@ mod tests {
         };
         assert_eq!(count(&conn, &source(Some(counting))).unwrap(), 1);
     }
+
+    /// A list of `t`, sorted by `k` and then ID, as a list's sort is.
+    static BY_K: Sort = Sort { label: "t.k", columns: &["t.k", "t.id"], unknown: Unknown::Never };
+
+    /// A thousand rows whose `k` puts them in an order of their own, apart from their IDs.
+    fn rows() -> (Connection, Source) {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, k INTEGER NOT NULL);
+             CREATE INDEX t_k ON t (k, id);
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000)
+             INSERT INTO t SELECT i, i * 37 % 101 FROM n;",
+        )
+        .unwrap();
+        let source = Source {
+            select: &["t.id"],
+            from: "t".to_owned(),
+            joins: "",
+            filter: "1".to_owned(),
+            params: Vec::new(),
+            total: Total::Stored(1000),
+            counting: None,
+            back: None,
+            walk: None,
+        };
+        (conn, source)
+    }
+
+    /// The IDs of `t` in `BY_K`'s order that `keeps` keeps: what a walk should find.
+    fn sorted(conn: &Connection, keeps: impl Fn(i64) -> bool) -> Vec<i64> {
+        let mut statement = conn.prepare("SELECT id FROM t ORDER BY k, id").unwrap();
+        let ids = statement.query_map([], |row| row.get(0)).unwrap();
+        ids.map(Result::unwrap).filter(|&id| keeps(id)).collect()
+    }
+
+    /// A walk that keeps every seventh ID, `budget` rows long.
+    fn sevenths(budget: u32) -> IdWalk {
+        IdWalk {
+            keeps: Box::new(|id| id % 7 == 0),
+            // Too few, so each page takes several chunks.
+            spread: 1,
+            budget,
+            lead: Box::new(|_| unreachable!("the walk is read alone")),
+        }
+    }
+
+    #[test]
+    fn a_walk_by_id_pages_through_its_rows_a_chunk_at_a_time() {
+        let (conn, source) = rows();
+        // The whole table, so a walk that went wrong ends.
+        let walk = sevenths(1000);
+        let (mut found, mut cursor) = (Vec::new(), None);
+        loop {
+            let request = Request::new(&BY_K, Order::Asc, cursor, Some(10)).unwrap();
+            let map = &mut |row: &Row| row.get::<_, i64>(0);
+            let (ids, next) = read_chunks(&conn, &source, &walk, &request, map).unwrap().unwrap();
+            assert!(ids.len() == 10 || next.is_none(), "a full page but the last");
+            found.extend(ids);
+            cursor = next;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        // Each page takes several chunks, each continuing after the last.
+        assert_eq!(found, sorted(&conn, |id| id % 7 == 0));
+    }
+
+    #[test]
+    fn a_walk_by_id_runs_over_once_it_passes_its_budget() {
+        let (conn, source) = rows();
+        let request = Request::new(&BY_K, Order::Asc, None, Some(10)).unwrap();
+        let read = |walk: &IdWalk| {
+            let map = &mut |row: &Row| row.get::<_, i64>(0);
+            read_chunks(&conn, &source, walk, &request, map).unwrap()
+        };
+        // The page and the row after it, the first eleven sevenths, sort within the first 74
+        // rows, which a walk of 80 reaches and one of 64 does not.
+        let page = read(&sevenths(80)).expect("the page fits the budget");
+        assert_eq!(page.0, sorted(&conn, |id| id % 7 == 0)[..10]);
+        assert_eq!(read(&sevenths(64)), None, "64 rows read and the page still short");
+        // Rows that all sort last are passed over until the budget runs out, however big.
+        let last = IdWalk { keeps: Box::new(|id| id * 37 % 101 == 100), ..sevenths(500) };
+        assert_eq!(read(&last), None);
+    }
 }
