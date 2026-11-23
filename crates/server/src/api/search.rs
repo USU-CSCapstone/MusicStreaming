@@ -9,7 +9,7 @@ use std::sync::Arc;
 use axum::Json;
 use axum::extract::State;
 use jewelcase_catalog::search::{
-    Hid, SearchResponse, SectionPage, SectionType, after, kinds, response, section_limit,
+    Hid, Keep, SearchResponse, SectionPage, SectionType, after, kinds, response, section_limit,
     section_page,
 };
 use jewelcase_core::Kind;
@@ -52,10 +52,8 @@ pub async fn search(
     // What the caller hid is gone from their library, so a search finds it nowhere.
     let tags = filter.clone();
     let hid = db.read(move |conn| Hid::read(conn, user, library, &tags)).await?;
-    let found = index.search_within(&query.q, &kinds, limit, |kind, id| {
-        !hid.contains(kind, id)
-            && tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
-    });
+    let keep = Keep::new(&hid, tagged.as_deref());
+    let found = index.search_within(&query.q, &kinds, limit, |kind, id| keep.keeps(kind, id));
     let response = db.read(move |conn| response(conn, user, library, query.q, found, &hid)).await?;
     Ok(Json(response))
 }
@@ -101,11 +99,11 @@ pub async fn section(
     let index = indexes.index(&db, library).await?;
     let tags = filter.clone();
     let hid = db.read(move |conn| Hid::read(conn, user, library, &tags)).await?;
+    let keep = Keep::new(&hid, tagged.as_deref());
     let found = kind
         .map(|kind| {
             index.page(&query.q, kind, after.as_ref(), limit as usize, |kind, id| {
-                !hid.contains(kind, id)
-                    && tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
+                keep.keeps(kind, id)
             })
         })
         .unwrap_or(jewelcase_core::SectionPage { ids: Vec::new(), total: 0, next: None });

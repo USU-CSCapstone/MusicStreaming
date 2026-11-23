@@ -304,10 +304,9 @@ pub fn answer(
                 Some(search::tagged(conn, library, &filter, &kinds)?)
             };
             let hid = search::Hid::read(conn, user, library, &filter)?;
-            let found = built(index)?.search_within(&p.q, &kinds, limit, |kind, id| {
-                !hid.contains(kind, id)
-                    && tagged.as_ref().is_none_or(|sets| sets[kind as usize].contains(&id))
-            });
+            let keep = search::Keep::new(&hid, tagged.as_ref());
+            let found =
+                built(index)?.search_within(&p.q, &kinds, limit, |kind, id| keep.keeps(kind, id));
             json(search::response(conn, user, library, p.q, found, &hid)?)
         }
         "searchSection" => {
@@ -335,9 +334,9 @@ pub fn answer(
             let found = match kind {
                 Some(kind) => {
                     let after = search::after(p.cursor.as_deref(), kind)?;
+                    let keep = search::Keep::new(&hid, tagged.as_ref());
                     built(index)?.page(&p.q, kind, after.as_ref(), limit as usize, |kind, id| {
-                        !hid.contains(kind, id)
-                            && tagged.as_ref().is_none_or(|sets| sets[kind as usize].contains(&id))
+                        keep.keeps(kind, id)
                     })
                 }
                 None => SectionPage { ids: Vec::new(), total: 0, next: None },
