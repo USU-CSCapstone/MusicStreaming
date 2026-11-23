@@ -9,10 +9,12 @@ Search is how a user reaches anything in a large library without navigating to i
 
 ## 1. What Is Searched
 
-- **Names** — tracks, albums, artists, and playlists.
+- **Names** — tracks, albums, artists, playlists, and tags of every type, such as genres and moods.
 - **Lyrics** — find a song by a line half-remembered.
 
-A track the user hid is not found ([`conventions.md` §8](conventions.md#8-hidden-tracks)).
+**A tag is found by its name, like anything else.** `rock` finds Rock, Punk Rock, and Alt Rock, because each name holds the word. That is matching, not a hierarchy ([`tags.md` §5](tags.md#5-flat-not-hierarchical)): Punk Rock appears because of what it is called, never because it is a kind of rock, and a genre whose name does not hold the word is not found.
+
+What the user hid is not found ([`conventions.md` §8](conventions.md#8-hidden-tracks)).
 
 Nothing else in the library. File paths and folder names are **not** searched: the path carries no meaning in Jewelcase ([`scanning.md` §2](scanning.md#2-tags-are-the-only-truth)), and matching on it would produce results a user cannot explain.
 
@@ -62,10 +64,11 @@ Nothing else in the library. File paths and folder names are **not** searched: t
 **The single best match is shown first, on its own**, above everything else and large enough to act on immediately. Searching `Say It Ain't So` puts that track at the top, ready to play.
 
 - **The top result also appears in its section.** It is a shortcut, not a relocation.
-- **Everything else is grouped by type** — tracks, albums, artists, playlists, and lyric matches — each showing its strongest results.
+- **Everything else is grouped by type** — tracks, albums, artists, playlists, each type of tag, and lyric matches — each showing its strongest results. Each type of tag is its own section, as it is its own place to browse ([`tags.md` §2](tags.md#2-tag-types)), so a genre and a mood never share a list.
 - **Sections are ordered by how well they match.** A query that overwhelmingly matches artists puts artists first.
-- **Ties break toward the more specific thing: tracks, then albums, then artists.** Searching the name of a single shows the track before the release that shares its name.
-- **Lyric matches show their line in context**, so a user sees the words they remembered.
+- **Ties break toward the more specific thing: tracks, then albums, then artists, then playlists, then tags.** Searching the name of a single shows the track before the release that shares its name, and a song called *Rock* before the genre.
+- **Tags that match equally well put the one with more music first.** Searching `rock` lists the Punk Rock that fills a shelf before the Alt Rock on three tracks, since the larger is the likelier meant. The trade is that the order moves as the library does, and a device must hold how much music each tag has to rank the same offline ([§2.1](#21-one-search-two-places-to-run-it)); a list in name order would be steadier, and less use.
+- **Lyric matches are their own section, and show their line in context**, so a user sees the words they remembered. **A lyric never outranks a name matched exactly**: someone who typed a title meant the title, and the song whose chorus repeats it comes after.
 - **Each section expands to a full list**, sortable per [`conventions.md` §4](conventions.md#4-sorting--browsing).
 - **Every result is actionable in place** — playable, queueable, addable to a playlist — without opening it first ([`conventions.md` §2](conventions.md#2-actions)).
 
@@ -78,9 +81,9 @@ Nothing else in the library. File paths and folder names are **not** searched: t
 - **Switching library switches the search.** Users move between libraries freely ([`users.md` §5](users.md#5-library-access)), and search follows without being told to.
 - **Cross-library search is supported but not surfaced in v1.** The capability exists for later versions and for third-party clients ([`general.md` §4](general.md#4-target-platforms)). The shipped apps keep to one library, because merged results raise "which library is this from?" on every row.
 - **Never beyond access.** Content a user cannot reach is indistinguishable from content that does not exist ([`users.md` §10](users.md#10-access-semantics)).
-- **Narrowable to a container** — within an artist, an album, or a playlist, without leaving it ([`playlists.md` §7](playlists.md#7-organization)).
+- **Narrowable to a container** — an artist, an album, a playlist, or a tag ([`playlists.md` §7](playlists.md#7-organization)). **The choice is made from the results, not from a search field on each page.** A search started from a container's page offers to keep to that container, and searching everywhere stays one step away. There is one search box, so one place to learn, and its recent searches are always the same list; a field on every page would be a second search that knows less.
 - **Filterable by type**, so someone looking only for albums is not shown tracks.
-- **Composable with filters** — tags, year, and listening data ([`tags.md` §7](tags.md#7-browsing-and-filtering)).
+- **Not filtered by tag, year, or listening data.** Tags are found rather than applied: typing a genre's name shows the genre, its page is where its music is browsed and filtered ([`tags.md` §7](tags.md#7-browsing-and-filtering)), and searching within a genre is searching within its tag, as with any container. A row of filters above the results would compete with them for a query that is usually a few letters long.
 
 ---
 

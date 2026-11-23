@@ -123,14 +123,14 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 ### Stage 8 — Browsing, search & playlists
 
 - Tag pages and filters, plus [`conventions.md`](requirements/conventions.md) sorting, filtering, and actions everywhere. A library switcher, discography versus appearances, incomplete albums, and virtualized lists.
-- Search with a top result, sections, lyric matches, scoping, filters, and recent searches.
+- Search with a top result, sections for every type including tags, playlists, and lyric matches, scoping to a container, and recent searches.
 - Playlists: CRUD, bulk and non-contiguous edits, version-checked edits, undo, generated artwork, custom artwork, pinning, and export.
 
 **Open questions:**
 1. ~~How playlist undo works.~~ Decided: undo is the client's. An edit is undone by a further edit that reverses it, and a deletion by holding the `DELETE` back until its Undo toast is gone (`web/src/lib/deletions.svelte.ts`). The server keeps no trash.
 2. The format of the complete playlist export ([`playlists.md` §9](requirements/playlists.md#9-export)).
 3. How lyric matching and ranking fit into the core search index, without breaking parity with client search.
-4. How long recent searches are kept ([`search.md` §6](requirements/search.md#6-recent-searches)).
+4. ~~How long recent searches are kept ([`search.md` §6](requirements/search.md#6-recent-searches)).~~ Decided: 30 days ([`design/database.md` §9](design/database.md#9-retention)).
 5. How "near misses" are chosen when a search finds nothing.
 6. What a playlist keeps of an external entry: probably a display snapshot the playlist owns (`design/exports.md` §5, Stage 12).
 
