@@ -10,9 +10,10 @@ use axum::Json;
 use axum::extract::State;
 use jewelcase_catalog::page::Order;
 use jewelcase_catalog::search::{
-    self, Hid, Keep, SEARCHED, Search, SearchResponse, SectionPage, SectionReading, SectionType,
-    kinds, response, section_limit,
+    self, Hid, Keep, MUSIC, SEARCHED, Search, SearchResponse, SectionPage, SectionReading,
+    SectionType, kinds, response, section_limit,
 };
+use jewelcase_core::Kind;
 use serde::Deserialize;
 
 pub use indexes::Indexes;
@@ -30,6 +31,8 @@ pub struct SearchQuery {
     q: String,
     /// Comma-separated section types.
     types: Option<String>,
+    /// Only tags of this type, of the tags sections.
+    tag_type: Option<String>,
     tag_all: Option<String>,
     tag_any: Option<String>,
     section_limit: Option<usize>,
@@ -54,6 +57,7 @@ pub async fn search(
     let hid = db.read(move |conn| Hid::read(conn, user, library, &tags)).await?;
     let keep = Keep::new(&hid, tagged.as_deref());
     let found = index.search_within(&query.q, &kinds, limit, |kind, id| keep.keeps(kind, id));
+    let found = search::of_tag_type(found, query.tag_type.as_deref());
     let response = db.read(move |conn| response(conn, user, library, query.q, found, &hid)).await?;
     Ok(Json(response))
 }
@@ -63,6 +67,8 @@ pub async fn search(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SectionQuery {
     q: String,
+    /// The type of tag of the tags section.
+    tag_type: Option<String>,
     sort: Option<String>,
     order: Option<Order>,
     cursor: Option<String>,
@@ -93,7 +99,12 @@ pub async fn section(
         }
         SectionType::Lyrics => return Err(Problem::invalid("lyrics cannot be searched yet")),
     };
-    let SectionQuery { q, sort, order, cursor, limit, tag_all, tag_any } = query;
+    let SectionQuery { q, tag_type, sort, order, cursor, limit, tag_all, tag_any } = query;
+    // Each type of tag is a section of its own, so the tags section is one type.
+    let group = match kind {
+        Kind::Tag => Some(tag_type.ok_or_else(|| Problem::invalid("tags need a tagType"))?),
+        _ => None,
+    };
     let reading = SectionReading::new(kind, sort.as_deref(), order, cursor, limit)?;
 
     let filter = TagFilter::new(tag_all.as_deref(), tag_any.as_deref())?;
@@ -103,7 +114,8 @@ pub async fn section(
         .read(move |conn| {
             let hid = Hid::read(conn, user, library, &filter)?;
             let keep = Keep::new(&hid, tagged.as_deref());
-            search::section(conn, Search { user, library, q, keep }, kind, reading, &index)
+            let group = group.as_deref();
+            search::section(conn, Search { user, library, q, keep }, kind, group, reading, &index)
         })
         .await?;
     Ok(Json(page))
@@ -118,8 +130,8 @@ pub async fn totals(
     q: &str,
 ) -> Result<[usize; 3], Problem> {
     let index = indexes.index(db, library).await?;
-    let found = index.search(q, &SEARCHED, 1);
-    Ok(SEARCHED.map(|kind| {
+    let found = index.search(q, &MUSIC, 1);
+    Ok(MUSIC.map(|kind| {
         found.iter().find(|section| section.kind == kind).map_or(0, |section| section.total)
     }))
 }

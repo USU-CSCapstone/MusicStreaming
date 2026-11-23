@@ -1038,11 +1038,13 @@ export interface paths {
         /**
          * Search a library
          * @description Names, with typo tolerance, diacritic and case folding, word-order independence, and
-         *     exact-match precedence (`requirements/search.md` §3). Results are identical to on-device
-         *     search over the same corpus (`requirements/search.md` §2.1). Playlists are not searched
-         *     until they are built, so no playlists section comes back. A track the caller hid is not
-         *     found, nor counted in its section's `total`, and nor is an album or artist every track of
-         *     which they hid (`requirements/conventions.md` §8).
+         *     exact-match precedence (`requirements/search.md` §3): of tracks, albums, artists, and
+         *     tags of every type, by their names (`requirements/search.md` §1). Results are identical
+         *     to on-device search over the same corpus (`requirements/search.md` §2.1). Playlists are
+         *     not searched until they are built, so no playlists section comes back. A track the caller
+         *     hid is not found, nor counted in its section's `total`, and nor is an album, artist or
+         *     tag every track of which they hid (`requirements/conventions.md` §8); a tag's counts are
+         *     of what they see, as `listTags` gives them.
          *
          *     Search is not filtered by year or listening data, and the shipped apps do not filter it by
          *     tag either: they find tags by name, and narrow to one by searching within it
@@ -1074,9 +1076,10 @@ export interface paths {
          *     (`requirements/search.md` §4): in the same ranking, or by `sort` as the section's own
          *     list sorts it. A ranked page continues after the last match of the one before, so a
          *     library that changes between pages neither repeats a match nor passes over one still
-         *     there. What the caller hid is left out as `search` leaves it out. The `playlists`
-         *     section is empty until playlists are searched, and `lyrics` answers `422` until they are
-         *     indexed. A section that is none of these is `404`.
+         *     there. What the caller hid is left out as `search` leaves it out. The `tags` section is
+         *     one type of tag, which `tagType` names; without it, `422`. The `playlists` section is
+         *     empty until playlists are searched, and `lyrics` answers `422` until they are indexed. A
+         *     section that is none of these is `404`.
          */
         get: operations["searchSection"];
         put?: never;
@@ -3080,7 +3083,7 @@ export interface components {
             items: components["schemas"]["ArtistSummary"][];
         };
         /** @enum {string} */
-        SearchSectionType: "tracks" | "albums" | "artists" | "playlists" | "lyrics";
+        SearchSectionType: "tracks" | "albums" | "artists" | "playlists" | "tags" | "lyrics";
         LyricMatch: {
             track: components["schemas"]["TrackSummary"];
             line: {
@@ -3093,11 +3096,12 @@ export interface components {
         };
         SearchResult: {
             /** @enum {string} */
-            type: "track" | "album" | "artist" | "playlist" | "lyric";
+            type: "track" | "album" | "artist" | "playlist" | "tag" | "lyric";
             track?: components["schemas"]["TrackSummary"];
             album?: components["schemas"]["AlbumSummary"];
             artist?: components["schemas"]["ArtistSummary"];
             playlist?: components["schemas"]["Playlist"];
+            tag?: components["schemas"]["Tag"];
             lyric?: components["schemas"]["LyricMatch"];
         };
         SearchResponse: {
@@ -3105,9 +3109,18 @@ export interface components {
             query: string;
             /** @description The single best match, also present in its section (`requirements/search.md` §4). */
             top: components["schemas"]["SearchResult"] | null;
-            /** @description Ordered by how well each matches; ties break tracks, then albums, then artists. A section with no match is left out. */
+            /**
+             * @description Ordered by how well each matches; ties break tracks, then albums, then artists, then
+             *     playlists, then tags (`requirements/search.md` §4). Each type of tag is a section of
+             *     its own, ties between them by `tagType`. A section with no match is left out.
+             */
             sections: {
                 type: components["schemas"]["SearchSectionType"];
+                /**
+                 * @description On a `tags` section, and only there: its tags' type (`TagType.key`). Its tags
+                 *     that match equally well come with the most tracks first.
+                 */
+                tagType?: string;
                 items: components["schemas"]["SearchResult"][];
                 total: number;
             }[];
@@ -4478,6 +4491,11 @@ export interface components {
         Query: string;
         /** @description Sections to include. Defaults to all but `lyrics`, which is planned. */
         SearchTypes: components["schemas"]["SearchSectionType"][];
+        /**
+         * @description With the `tags` section, only tags of this type (`TagType.key`), such as `genre`. A type
+         *     the library lacks finds none.
+         */
+        SearchTagType: string;
         /** @description Narrow to a container, as `artist:ID`, `album:ID`, or `playlist:ID` (`requirements/search.md` §5). Planned. */
         Within: string;
         /** @description Longest edge in pixels. The server rounds up to one of a fixed set of sizes, and never enlarges an image. */
@@ -6015,6 +6033,11 @@ export interface operations {
                 q: components["parameters"]["Query"];
                 /** @description Sections to include. Defaults to all but `lyrics`, which is planned. */
                 types?: components["parameters"]["SearchTypes"];
+                /**
+                 * @description With the `tags` section, only tags of this type (`TagType.key`), such as `genre`. A type
+                 *     the library lacks finds none.
+                 */
+                tagType?: components["parameters"]["SearchTagType"];
                 /** @description Narrow to a container, as `artist:ID`, `album:ID`, or `playlist:ID` (`requirements/search.md` §5). Planned. */
                 within?: components["parameters"]["Within"];
                 /**
@@ -6060,10 +6083,15 @@ export interface operations {
                 /** @description Search text, from the first character typed. */
                 q: components["parameters"]["Query"];
                 /**
+                 * @description With the `tags` section, only tags of this type (`TagType.key`), such as `genre`. A type
+                 *     the library lacks finds none.
+                 */
+                tagType?: components["parameters"]["SearchTagType"];
+                /**
                  * @description One of the sorts the section's list takes, as it takes them: `listTracks`' for
                  *     `tracks`, `listAlbums`' for `albums`, and `listArtists`' for `artists`, the planned
-                 *     ones answering `422` as there. Left out, the matches come in the search's ranking,
-                 *     which has no `order`.
+                 *     ones answering `422` as there; `playlists` and `tags` have none. Left out, the matches
+                 *     come in the search's ranking, which has no `order`.
                  */
                 sort?: string;
                 /**

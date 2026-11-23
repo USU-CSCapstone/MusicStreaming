@@ -33,6 +33,7 @@
 		albums: 'Albums',
 		artists: 'Artists',
 		playlists: 'Playlists',
+		tags: 'Tags',
 		lyrics: 'Lyrics'
 	};
 
@@ -63,8 +64,14 @@
 			? paged.total
 				? [{ type: data.tab, items: paged.items, total: paged.total }]
 				: []
-			: (data.results?.sections ?? [])
+			: // A section of a type this page does not show yet, such as tags, is left out.
+				(data.results?.sections ?? []).filter((section) => section.type in titles)
 	);
+	// The top result is a song, an album or an artist; one of another type is not shown yet.
+	const top = $derived.by(() => {
+		const top = data.results?.top;
+		return top && (top.track || top.album || top.artist) ? top : null;
+	});
 	const libraryEmpty = $derived(data.results?.libraryEmpty ?? data.library?.trackCount === 0);
 	const nearMisses = $derived(data.results?.nearMisses ?? []);
 	// What nothing found on a tab is called, as the tab is.
@@ -179,9 +186,9 @@
 		{/if}
 	</div>
 {:else}
-	{#if !data.tab && data.results?.top}
+	{#if !data.tab && top}
 		<TopResult
-			result={data.results.top}
+			result={top}
 			{context}
 			from={ranked}
 			onact={(selected) => settler.settle(selected)}
