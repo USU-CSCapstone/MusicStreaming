@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 pub use filter::{Check, Lead, Table};
 #[cfg(any(test, feature = "testing"))]
 pub use keyset::assert_indexed;
-pub use keyset::{Counting, Sort, Source, Total, Unknown, Walk, ids};
+pub use keyset::{Counting, Sort, Source, Total, Unknown, ids};
+pub(crate) use keyset::{IdWalk, SqlWalk, Walk};
 pub use totals::{Memo, Totals};
 
 use crate::Invalid;

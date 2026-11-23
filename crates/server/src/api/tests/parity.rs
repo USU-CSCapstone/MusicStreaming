@@ -619,6 +619,26 @@ async fn every_list_sort_and_filter_and_every_get_give_identical_json_on_the_ser
             }
         }
     }
+    // Sorted as each section's list sorts, both ways, a page at a time.
+    for (section, q, sort) in
+        [("albums", "a", "name"), ("albums", "a", "dateAdded"), ("tracks", "come", "name")]
+    {
+        for order in ["asc", "desc"] {
+            let mut next: Option<String> = None;
+            loop {
+                let params = json!({
+                    "section": section, "q": q, "sort": sort, "order": order, "limit": 1,
+                    "cursor": next,
+                });
+                let answer = ask(&db, &device, "searchSection", params.clone()).await;
+                next = answer["nextCursor"].as_str().map(str::to_owned);
+                cases.push(case("searchSection", params, answer));
+                if next.is_none() {
+                    break;
+                }
+            }
+        }
+    }
     let first = json!({ "section": "albums", "q": "a", "limit": 1 });
     let albums = ask(&db, &device, "searchSection", first).await;
     let cursor = albums["nextCursor"].as_str().unwrap().to_owned();
@@ -629,6 +649,9 @@ async fn every_list_sort_and_filter_and_every_get_give_identical_json_on_the_ser
         json!({ "section": "songs", "q": "a" }),
         json!({ "section": "tracks", "q": "a", "cursor": cursor }),
         json!({ "section": "albums", "q": "" }),
+        json!({ "section": "albums", "q": "a", "sort": "trackNumber" }),
+        json!({ "section": "albums", "q": "a", "order": "desc" }),
+        json!({ "section": "albums", "q": "a", "sort": "name", "cursor": cursor }),
     ] {
         let answer = ask(&db, &device, "searchSection", params.clone()).await;
         cases.push(case("searchSection", params, answer));

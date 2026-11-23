@@ -9,18 +9,22 @@ use jewelcase_core::{
     Document, Index, IndexBuilder, Kind, Rank, Score, Section as Found, SectionPage as FoundPage,
 };
 use rusqlite::types::Value;
-use rusqlite::{Connection, params};
-use serde::Serialize;
+use rusqlite::{Connection, Row, params};
+use serde::de::IntoDeserializer;
+use serde::de::value::StrDeserializer;
+use serde::{Deserialize, Serialize};
 
 use crate::Invalid;
-use crate::albums::{self, AlbumSummary};
-use crate::artists::{self, ArtistSummary};
+use crate::albums::{self, AlbumSort, AlbumSummary};
+use crate::artists::{self, ArtistSort, ArtistSummary};
 use crate::by_ids::by_ids;
 use crate::cursor;
 use crate::hidden::{self, Losses};
-use crate::page::library_number;
-use crate::tag_filter::{TagFilter, Tagged, Tags};
-use crate::tracks::{self, TrackSummary};
+use crate::page::{
+    self, IdWalk, Lead, Order, Page, Request, Sort, Source, Table, Total, Walk, library_number,
+};
+use crate::tag_filter::{LEAD_SHARE, TagFilter, Tagged, Tags};
+use crate::tracks::{self, TrackSort, TrackSummary};
 
 /// The spec's `SearchResponse`.
 #[derive(Serialize)]
@@ -75,9 +79,47 @@ impl SectionType {
     }
 }
 
+/// How a section is read: in the search's ranking, `limit` matches continuing after a match's
+/// rank, or as its list sorts it.
+pub enum SectionReading<'a> {
+    Ranked { after: Option<Rank>, limit: u32 },
+    Sorted(Request<'a>),
+}
+
+impl SectionReading<'_> {
+    /// How the section of `kind` is read for a `sort` and `order` (the list's, or the
+    /// ranking without them), continuing after `cursor`, `limit` matches at a time. A sort the
+    /// section's list does not take, an `order` with no sort, and a cursor of another section or
+    /// sort, are [`Invalid`].
+    pub fn new(
+        kind: Kind,
+        sort: Option<&str>,
+        order: Option<Order>,
+        cursor: Option<String>,
+        limit: Option<u32>,
+    ) -> Result<Self, Invalid> {
+        match sort {
+            None if order.is_some() => Err(Invalid("order needs a sort".to_owned())),
+            None => {
+                let limit = page::limit(limit)?;
+                Ok(SectionReading::Ranked { after: after(cursor.as_deref(), kind)?, limit })
+            }
+            Some(sort) => {
+                let order = order.unwrap_or_default();
+                Ok(SectionReading::Sorted(Request::new(
+                    list_sort(kind, sort)?,
+                    order,
+                    cursor,
+                    limit,
+                )?))
+            }
+        }
+    }
+}
+
 /// The rank a page of `kind`'s section continues after, from its `cursor`: a cursor of another
 /// section, or none of ours, is [`Invalid`].
-pub fn after(cursor: Option<&str>, kind: Kind) -> Result<Option<Rank>, Invalid> {
+fn after(cursor: Option<&str>, kind: Kind) -> Result<Option<Rank>, Invalid> {
     let Some(cursor) = cursor else { return Ok(None) };
     rank(&cursor::decode(cursor, &label(kind), RANK_VALUES)?)
         .map(Some)
@@ -136,28 +178,149 @@ fn label(kind: Kind) -> String {
     format!("search.{}", section_type(kind))
 }
 
-/// A page of the section of `kind` that a search for `q` in `library` found as `found`, as the
-/// browse lists show it to `user`, whose hidden tracks `hid` says, with the cursor to the next.
-/// No `kind` is a section with nothing in it yet.
-pub fn section_page(
+/// The keyset of the list sort `name` of the section of `kind`: one of `listTracks`',
+/// `listAlbums`', or `listArtists`'. Any other is [`Invalid`].
+fn list_sort(kind: Kind, name: &str) -> Result<&'static Sort, Invalid> {
+    let name: StrDeserializer<serde::de::value::Error> = name.into_deserializer();
+    match kind {
+        Kind::Track => TrackSort::deserialize(name).map(TrackSort::sort),
+        Kind::Album => AlbumSort::deserialize(name).map(AlbumSort::sort),
+        Kind::Artist => ArtistSort::deserialize(name).map(ArtistSort::sort),
+    }
+    .map_err(|_| Invalid(format!("sort must be one the {} list takes", section_type(kind))))
+}
+
+impl SectionPage {
+    /// The page of a section that has nothing in it yet, for a search for `q`.
+    pub fn empty(q: String) -> SectionPage {
+        SectionPage { query: q, items: Vec::new(), next_cursor: None, total: 0 }
+    }
+}
+
+/// A search: who searches, in which library, for what, and what it shows them. The server and a
+/// device each make one for a search's response or one of its sections.
+pub struct Search<'a> {
+    pub user: i64,
+    pub library: i64,
+    pub q: String,
+    pub keep: Keep<'a>,
+}
+
+/// A page of the section of `kind` of `search` with `index`, read as `reading` says, as the
+/// browse lists show it to the searcher, with the cursor to the next.
+pub fn section(
+    conn: &Connection,
+    search: Search,
+    kind: Kind,
+    reading: SectionReading,
+    index: &Index,
+) -> rusqlite::Result<SectionPage> {
+    let Search { user, library, q, keep } = search;
+    let losses = &keep.hid.losses;
+    match reading {
+        SectionReading::Ranked { after, limit } => {
+            let found = index
+                .page(&q, kind, after.as_ref(), limit as usize, |kind, id| keep.keeps(kind, id));
+            let label = label(kind);
+            let next_cursor = found.next.map(|rank| cursor::encode(&label, &rank_values(&rank)));
+            let FoundPage { ids, total, .. } = found;
+            let items = sections(conn, user, library, vec![Found { kind, ids, total }], losses)?
+                .pop()
+                .map_or_else(Vec::new, |section| section.items);
+            Ok(SectionPage { query: q, items, next_cursor, total })
+        }
+        SectionReading::Sorted(request) => {
+            // Every match, unranked: the sort orders them.
+            let ids = index.matching(&q, kind, |kind, id| keep.keeps(kind, id));
+            let page = sorted(conn, user, library, kind, request, &ids, losses)?;
+            let total = usize::try_from(page.total).unwrap_or(0);
+            Ok(SectionPage { query: q, items: page.items, next_cursor: page.next_cursor, total })
+        }
+    }
+}
+
+/// The page `request` asks for of the matches `ids` of `kind`, sorted as their list sorts
+/// them, as `user` sees them, whose hidden tracks take `losses` from albums and artists. The
+/// matches are already only what the search keeps. Only their IDs and sort keys are read, their
+/// summaries after, by ID, as a ranked section's are.
+fn sorted(
     conn: &Connection,
     user: i64,
     library: i64,
-    q: String,
-    kind: Option<Kind>,
-    found: FoundPage,
-    hid: &Hid,
-) -> rusqlite::Result<SectionPage> {
-    let Some(kind) = kind else {
-        return Ok(SectionPage { query: q, items: Vec::new(), next_cursor: None, total: 0 });
+    kind: Kind,
+    request: Request,
+    ids: &[i64],
+    losses: &Losses,
+) -> rusqlite::Result<Page<SearchResult>> {
+    let (table, id): (&Table, &'static [&'static str]) = match kind {
+        Kind::Track => (&tracks::TRACKS, &["t.id"]),
+        Kind::Album => (&albums::ALBUMS, &["al.id"]),
+        Kind::Artist => (&artists::ARTISTS, &["ar.id"]),
     };
-    let label = label(kind);
-    let next_cursor = found.next.map(|rank| cursor::encode(&label, &rank_values(&rank)));
-    let FoundPage { ids, total, .. } = found;
-    let items = sections(conn, user, library, vec![Found { kind, ids, total }], &hid.losses)?
-        .pop()
-        .map_or_else(Vec::new, |section| section.items);
-    Ok(SectionPage { query: q, items, next_cursor, total })
+    let page = read_matches(conn, library, table, id, request, ids)?;
+    let found = Found { kind, ids: page.items, total: ids.len() };
+    let items = sections(conn, user, library, vec![found], losses)?.pop();
+    let items = items.map_or_else(Vec::new, |section| section.items);
+    Ok(Page { items, next_cursor: page.next_cursor, total: page.total })
+}
+
+/// The fewest rows a sorted section's walk reads before it gives up and leads: a few
+/// milliseconds' worth, which leading a few thousand matches costs too.
+const MIN_WALK: u32 = 10_000;
+
+/// The IDs of the page `request` asks for of the rows of `table` that `ids` names, whose `id`
+/// column is the one selected (`design/database.md` §4). Only IDs and sort keys are read, so rows
+/// passed over cost little. Many of the table's rows, more than one in [`LEAD_SHARE`], walk the
+/// sort's index, keeping those named ([`IdWalk`]), which reads about a page's worth over the share
+/// named where they are spread through the sort. Few lead the page, as one JSON array, which
+/// sorts them all and so costs what they are; and so does a walk that has read as many rows as
+/// there are named, or [`MIN_WALK`] if more, without filling the page, since those named bunch
+/// together in the sort, so a page costs at most about twice what leading would.
+fn read_matches(
+    conn: &Connection,
+    library: i64,
+    table: &'static Table,
+    id: &'static [&'static str],
+    request: Request,
+    ids: &[i64],
+) -> rusqlite::Result<Page<i64>> {
+    let total = i64::try_from(ids.len()).unwrap_or(i64::MAX);
+    let rows = library_number(conn, library, table.count)?;
+    let id_of = |row: &Row| row.get::<_, i64>(0);
+    if total.saturating_mul(LEAD_SHARE) <= rows {
+        return request.read(conn, &led(conn, library, table, id, ids)?, id_of);
+    }
+    let named: HashSet<i64> = ids.iter().copied().collect();
+    let ids = ids.to_vec();
+    let walk = IdWalk {
+        keeps: Box::new(move |id| named.contains(&id)),
+        // More than none, or they would lead.
+        spread: u32::try_from((rows + total - 1) / total).unwrap_or(u32::MAX),
+        budget: u32::try_from(total).unwrap_or(u32::MAX).max(MIN_WALK),
+        lead: Box::new(move |conn| led(conn, library, table, id, &ids)),
+    };
+    let walking = table.source(conn, library, None, None)?;
+    let walk = Some(Box::new(Walk::Ids(walk)));
+    let walking = Source { select: id, joins: "", total: Total::Stored(total), walk, ..walking };
+    request.read(conn, &walking, id_of)
+}
+
+/// The rows of `table` that `ids` names, led as one JSON array, selecting only their `id`.
+fn led(
+    conn: &Connection,
+    library: i64,
+    table: &Table,
+    id: &'static [&'static str],
+    ids: &[i64],
+) -> rusqlite::Result<Source> {
+    let total = i64::try_from(ids.len()).unwrap_or(i64::MAX);
+    let lead = Lead {
+        ids: "SELECT value AS id FROM json_each(?)".to_owned(),
+        params: vec![Value::Text(serde_json::to_string(ids).expect("IDs are JSON"))],
+        size: total,
+    };
+    let source = table.source(conn, library, Some(lead), None)?;
+    Ok(Source { select: id, joins: "", total: Total::Stored(total), ..source })
 }
 
 /// The spec's `SearchResult`: `{"type": "track", "track": {…}}` and so on.

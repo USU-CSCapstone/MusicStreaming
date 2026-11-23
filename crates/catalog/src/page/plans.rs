@@ -4,7 +4,7 @@
 
 use rusqlite::Connection;
 
-use super::keyset::{Part, part_query, read_page};
+use super::keyset::{self, Part, part_query};
 use super::{Order, Total, assert_indexed};
 use crate::albums::{self, AlbumSort};
 use crate::artists::{self, ArtistSort};
@@ -271,7 +271,8 @@ fn pages(
     loop {
         let request = super::Request::new(sort.sort(), order, cursor, Some(limit)).unwrap();
         if read.totals.is_empty() && walk {
-            let walked = read_page(conn, &source, source.walk.as_deref(), &request, &mut { map });
+            let checks = source.walk.as_deref().expect("a walking source has a walk");
+            let walked = keyset::walk(conn, &source, checks, &request, &mut { map });
             read.led = walked.unwrap().is_none();
         }
         let page = request.read(conn, &source, map).unwrap();

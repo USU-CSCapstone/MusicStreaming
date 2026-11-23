@@ -109,7 +109,7 @@ pub fn album(
 }
 
 /// The albums a list reads.
-const ALBUMS: Table =
+pub(crate) const ALBUMS: Table =
     Table { name: "albums", alias: "al", select: SELECT, joins: "", count: "album_count" };
 
 /// An expression over `artists` (aliased `ar`) counting the albums a track credits the artist on

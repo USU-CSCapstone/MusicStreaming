@@ -14,7 +14,7 @@ pub use representation::{
 };
 
 use crate::credit::{ArtistCredit, Credits};
-use crate::page::{self, Check, Order, Page, Request, Sort, Source, Table, Total, Unknown};
+use crate::page::{self, Check, Order, Page, Request, Sort, Source, Table, Total, Unknown, Walk};
 use crate::tag_filter::{self, LEAD_SHARE, RESOLVE_SHARE, TagFilter, Tagged, Tags};
 use crate::{AnyId, hidden};
 
@@ -223,11 +223,12 @@ pub(crate) fn resolving(
     tags: &TagFilter,
 ) -> rusqlite::Result<(Source, Option<HashSet<i64>>)> {
     let mut source = source(conn, library, album, artist, credit, tags, RESOLVE_SHARE)?;
-    let tagged = match source.walk.take() {
-        Some(walk) => {
+    let tagged = match source.walk.take().map(|walk| *walk) {
+        Some(Walk::Sql(walk)) => {
             (source.filter, source.params) = (walk.filter, walk.params);
             Tags::read(conn, library, &TAGGED, tags)?.ids(conn, &TAGGED)?
         }
+        Some(Walk::Ids(_)) => unreachable!("a tag filter's walk checks its rows in SQL"),
         None => None,
     };
     // Only the IDs are wanted, so the columns and joins for summaries are left out, and with them

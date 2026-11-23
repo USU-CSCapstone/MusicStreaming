@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use rusqlite::Connection;
 use rusqlite::types::Value;
 
-use crate::page::{Order, Page, Request, Sort, Source, Total, Unknown};
+use crate::page::{Order, Page, Request, Sort, Source, Total, Unknown, Walk};
 use crate::tracks::{self, TrackSummary};
 
 mod losses;
@@ -119,8 +119,10 @@ pub fn leave_out_ids(
 fn exclude(source: &mut Source, column: &str, ids: &Value) {
     source.filter += &format!(" AND {column} NOT IN (SELECT value FROM json_each(?))");
     source.params.push(ids.clone());
-    if let Some(walk) = &mut source.walk {
-        exclude(&mut walk.lead, column, ids);
+    match source.walk.as_deref_mut() {
+        Some(Walk::Sql(walk)) => exclude(&mut walk.lead, column, ids),
+        Some(Walk::Ids(_)) => unreachable!("a search's walk keeps what the caller hid out itself"),
+        None => {}
     }
 }
 

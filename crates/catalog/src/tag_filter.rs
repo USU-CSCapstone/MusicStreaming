@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use rusqlite::types::Value;
 use rusqlite::{Connection, params, params_from_iter};
 
-use crate::page::{self, Check, Counting, Lead, Source, Table, Total, Walk};
+use crate::page::{self, Check, Counting, Lead, Source, SqlWalk, Table, Total, Walk};
 use crate::{AnyId, Invalid};
 
 /// How a group's rows carry its tags.
@@ -85,7 +85,8 @@ pub fn source(
         let lead = Check::all(check.into_iter().chain(instead.check));
         let lead = table.source(conn, library, Some(instead.lead), lead)?;
         let lead = Box::new(lead);
-        source.walk = Some(Box::new(Walk { filter, params, per_row: instead.per_row, lead }));
+        let walk = SqlWalk { filter, params, per_row: instead.per_row, lead };
+        source.walk = Some(Box::new(Walk::Sql(walk)));
     }
     Ok(source)
 }

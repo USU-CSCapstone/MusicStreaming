@@ -362,3 +362,16 @@ fn an_empty_page_continues_after_nothing() {
     let next = index.page("say it", Kind::Track, None, 0, |_, _| true).next;
     assert_eq!(next, None);
 }
+
+#[test]
+fn matching_finds_what_a_page_finds_in_any_order() {
+    let index = library();
+    let keep = |_: Kind, id: i64| id != 24;
+    let mut matching = index.matching("h", Kind::Track, keep);
+    matching.sort_unstable();
+    let mut paged = index.page("h", Kind::Track, None, 10, keep).ids;
+    paged.sort_unstable();
+    assert_eq!(matching, paged);
+    assert_eq!(matching, [23, 25]);
+    assert!(index.matching("", Kind::Track, keep).is_empty());
+}
