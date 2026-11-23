@@ -29,6 +29,7 @@ const SERVER_ONLY: &[(&str, &[&str])] = &[
             "duration_us",
             "excludes",
             "feed_head",
+            "lyrics_version",
             "name",
             "names_version",
             "scan_interval_minutes",

@@ -435,3 +435,22 @@ CREATE TRIGGER tags_recounted AFTER UPDATE OF track_count ON tags
 BEGIN
     UPDATE libraries SET names_version = names_version + 1 WHERE id = NEW.library_id;
 END;
+
+-- A library's lyrics_version counts the changes to the lyrics search indexes, apart from its
+-- names, so a lyric written rebuilds only the lyric index and a rename only the names one: a
+-- track's lyrics added, changed, or removed, as they are with their track.
+CREATE TRIGGER lyrics_added AFTER INSERT ON track_lyrics
+BEGIN
+    UPDATE libraries SET lyrics_version = lyrics_version + 1 WHERE id = NEW.library_id;
+END;
+
+CREATE TRIGGER lyrics_changed AFTER UPDATE OF plain, synced ON track_lyrics
+    WHEN NEW.plain IS NOT OLD.plain OR NEW.synced IS NOT OLD.synced
+BEGIN
+    UPDATE libraries SET lyrics_version = lyrics_version + 1 WHERE id = NEW.library_id;
+END;
+
+CREATE TRIGGER lyrics_removed AFTER DELETE ON track_lyrics
+BEGIN
+    UPDATE libraries SET lyrics_version = lyrics_version + 1 WHERE id = OLD.library_id;
+END;

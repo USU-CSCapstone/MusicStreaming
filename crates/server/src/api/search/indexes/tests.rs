@@ -5,7 +5,7 @@ use crate::api::testing::catalog;
 use crate::db::testing::{Album, Artist, Track};
 
 /// An empty index read at names `version`, just finished after taking `took`.
-fn built(version: i64, took: Duration) -> Built {
+fn built(version: i64, took: Duration) -> Built<Index> {
     Built { index: Arc::default(), version, ready: Instant::now(), took }
 }
 
@@ -144,13 +144,88 @@ async fn only_what_search_indexes_moves_the_names_version() {
     }
 }
 
+#[tokio::test]
+async fn only_lyrics_move_the_lyrics_version_and_they_move_nothing_else() {
+    let (_temp, db, _app) = catalog::app().await;
+    let versions = async || {
+        db.read(|conn| {
+            Ok((
+                library_number(conn, 1, "names_version")?,
+                library_number(conn, 1, "lyrics_version")?,
+            ))
+        })
+        .await
+        .unwrap()
+    };
+    let changes: [(&str, Write, bool); 7] = [
+        (
+            "lyrics added",
+            |tx| {
+                tx.execute_batch(
+                    "INSERT INTO track_lyrics (library_id, track_id, plain)
+                     VALUES (1, 1001, 'Hi'), (1, 1002, 'Hi')",
+                )
+            },
+            true,
+        ),
+        (
+            "lyrics rewritten as they were",
+            |tx| tx.execute_batch("UPDATE track_lyrics SET plain = plain"),
+            false,
+        ),
+        (
+            "lyrics changed",
+            |tx| tx.execute_batch("UPDATE track_lyrics SET plain = 'Bye' WHERE track_id = 1001"),
+            true,
+        ),
+        (
+            "plain lyrics made timed",
+            |tx| {
+                tx.execute_batch(
+                    r#"UPDATE track_lyrics SET plain = NULL,
+                           synced = '[{"startMs":0,"text":"Bye"}]' WHERE track_id = 1001"#,
+                )
+            },
+            true,
+        ),
+        (
+            "lyrics removed",
+            |tx| tx.execute_batch("DELETE FROM track_lyrics WHERE track_id = 1001"),
+            true,
+        ),
+        (
+            "a track with lyrics deleted",
+            |tx| tx.execute_batch("DELETE FROM tracks WHERE id = 1002"),
+            true,
+        ),
+        (
+            "another library's lyrics",
+            |tx| {
+                tx.execute_batch(
+                    "INSERT INTO track_lyrics (library_id, track_id, plain) VALUES (2, 2001, 'Hi')",
+                )
+            },
+            false,
+        ),
+    ];
+    for (change, write, moves) in changes {
+        let (names, lyrics) = versions().await;
+        db.write(write).await.unwrap();
+        let (names_after, lyrics_after) = versions().await;
+        assert_eq!(lyrics_after != lyrics, moves, "{change}");
+        if change != "a track with lyrics deleted" {
+            assert_eq!(names_after, names, "{change} names nothing");
+        }
+    }
+}
+
 /// Library 1's index before `change`, and after it, once any rebuild it makes due is done.
 async fn around(change: &'static str) -> (Arc<Index>, Arc<Index>) {
     let (_temp, db, _app) = catalog::app().await;
     let indexes = Indexes::default();
     let before = indexes.index(&db, 1).await.unwrap();
     db.write(move |tx| tx.execute_batch(change)).await.unwrap();
-    let slot = indexes.libraries.lock().unwrap()[&1].clone();
+    let slot = indexes.names.libraries.lock().unwrap()[&1].clone();
     let took = slot.built.read().unwrap().as_ref().unwrap().took;
     tokio::time::sleep(took * REBUILD_SPACING).await;
     // This starts a rebuild if the change calls for one, and the lock waits for it.
@@ -185,10 +260,10 @@ async fn a_deleted_librarys_index_goes_and_none_is_made_for_it() {
     indexes.index(&db, 2).await.unwrap();
     db.write(|tx| tx.execute_batch("DELETE FROM libraries WHERE id = 2")).await.unwrap();
     indexes.index(&db, 1).await.unwrap();
-    assert_eq!(indexes.libraries.lock().unwrap().keys().collect::<Vec<_>>(), [&1]);
+    assert_eq!(indexes.names.libraries.lock().unwrap().keys().collect::<Vec<_>>(), [&1]);
     let index = indexes.index(&db, 2).await.unwrap();
     assert!(index.search("elsewhere", &jewelcase_core::Kind::ALL, 1).is_empty());
-    assert_eq!(indexes.libraries.lock().unwrap().len(), 1);
+    assert_eq!(indexes.names.libraries.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -196,13 +271,102 @@ async fn every_library_is_indexed_at_startup() {
     let (_temp, db, _app) = catalog::app().await;
     let indexes = Arc::new(Indexes::default());
     indexes.build_all(&db);
-    crate::api::testing::eventually("both libraries are indexed", async || {
-        let libraries = indexes.libraries.lock().unwrap();
-        let built =
-            |id| libraries.get(&id).is_some_and(|slot| slot.built.read().unwrap().is_some());
-        (built(1) && built(2)).then_some(())
+    crate::api::testing::eventually("both libraries' names and lyrics are indexed", async || {
+        fn built<T>(libraries: &Libraries<T>, id: i64) -> bool {
+            let libraries = libraries.libraries.lock().unwrap();
+            libraries.get(&id).is_some_and(|slot| slot.built.read().unwrap().is_some())
+        }
+        let all =
+            [1, 2].into_iter().all(|id| built(&indexes.names, id) && built(&indexes.lyrics, id));
+        all.then_some(())
     })
     .await;
+}
+
+/// Library 1's tracks with lyrics: plain, with a label and a blank line; timed; and plain again,
+/// so that a lyric index is read in several batches. Library 2's track has lyrics of its own.
+const LYRICS: &str = r#"
+    INSERT INTO track_lyrics (library_id, track_id, plain, synced) VALUES
+        (1, 1001, '[Verse]
+Hello from the other side
+
+I must have called', NULL),
+        (1, 1002, NULL, '[{"startMs":0,"text":"Say it ain''t so"},{"startMs":900,"text":"I will not go"}]'),
+        (1, 1003, 'Turn the lights off', NULL),
+        (1, 1004, 'Other side of the world', NULL),
+        (1, 1005, 'So long', NULL),
+        (2, 2001, 'Hello from elsewhere', NULL);"#;
+
+/// The tracks `index` finds for `query`, each with its best line's place.
+fn lyrics_found(index: &LyricIndex, query: &str) -> Vec<(i64, u16)> {
+    index.search(query, |_| true).iter().map(|hit| (hit.track, hit.line)).collect()
+}
+
+#[tokio::test]
+async fn a_librarys_lyrics_are_indexed_by_their_lines() {
+    let (_temp, db, _app) = catalog::app().await;
+    db.write(|tx| tx.execute_batch(LYRICS)).await.unwrap();
+    let index = Indexes::default().lyrics(&db, 1).await.unwrap();
+    assert_eq!(index.tracks(), 5, "read in batches, library 1's only");
+    // Places count the label and the blank line, as the stored lyrics' lines do; lines as long
+    // tie by track.
+    assert_eq!(lyrics_found(&index, "other side"), [(1001, 1), (1004, 0)]);
+    assert_eq!(lyrics_found(&index, "called"), [(1001, 3)]);
+    assert_eq!(lyrics_found(&index, "aint"), [(1002, 0)], "a timed line");
+    assert_eq!(lyrics_found(&index, "so long"), [(1005, 0)]);
+    assert_eq!(lyrics_found(&index, "elsewhere"), []);
+    assert_eq!(lyrics_found(&index, "verse"), [], "a label is not a line");
+}
+
+#[tokio::test]
+async fn a_lyric_written_rebuilds_only_the_lyric_index_and_a_rename_only_the_names() {
+    let (_temp, db, _app) = catalog::app().await;
+    let indexes = Indexes::default();
+    db.write(|tx| tx.execute_batch(LYRICS)).await.unwrap();
+    let (names, lyrics) =
+        (indexes.index(&db, 1).await.unwrap(), indexes.lyrics(&db, 1).await.unwrap());
+
+    /// Both of library 1's indexes once any rebuild `indexes` has due is done.
+    async fn settled(indexes: &Indexes, db: &Arc<Database>) -> (Arc<Index>, Arc<LyricIndex>) {
+        let names = indexes.names.libraries.lock().unwrap()[&1].clone();
+        let lyrics = indexes.lyrics.libraries.lock().unwrap()[&1].clone();
+        let took = |took: Duration| took * REBUILD_SPACING;
+        let names_took = names.built.read().unwrap().as_ref().unwrap().took;
+        let lyrics_took = lyrics.built.read().unwrap().as_ref().unwrap().took;
+        tokio::time::sleep(took(names_took.max(lyrics_took))).await;
+        // These start any rebuild due, and the locks wait for them.
+        indexes.index(db, 1).await.unwrap();
+        indexes.lyrics(db, 1).await.unwrap();
+        drop(names.building.lock().await);
+        drop(lyrics.building.lock().await);
+        (indexes.index(db, 1).await.unwrap(), indexes.lyrics(db, 1).await.unwrap())
+    }
+
+    db.write(|tx| {
+        tx.execute_batch("UPDATE track_lyrics SET plain = 'Goodbye' WHERE track_id = 1005")
+    })
+    .await
+    .unwrap();
+    let (names_after, lyrics_after) = settled(&indexes, &db).await;
+    assert!(Arc::ptr_eq(&names, &names_after), "the names index kept");
+    assert!(!Arc::ptr_eq(&lyrics, &lyrics_after), "the lyric index rebuilt");
+    assert_eq!(lyrics_found(&lyrics_after, "goodbye"), [(1005, 0)]);
+    assert_eq!(lyrics_found(&lyrics_after, "so long"), []);
+
+    db.write(|tx| tx.execute_batch("UPDATE tracks SET title = 'Here' WHERE id = 1001"))
+        .await
+        .unwrap();
+    let (names_renamed, lyrics_renamed) = settled(&indexes, &db).await;
+    assert!(!Arc::ptr_eq(&names_after, &names_renamed), "the names index rebuilt");
+    assert!(Arc::ptr_eq(&lyrics_after, &lyrics_renamed), "the lyric index kept");
+}
+
+#[test]
+fn lyrics_are_lines_in_either_form() {
+    let synced = |text: &str| SyncedLine { start_ms: 0, text: text.to_owned() };
+    assert_eq!(lyric_lines(None, Some(vec![synced("one"), synced("")])), ["one", ""]);
+    assert_eq!(lyric_lines(Some("one\n\ntwo".to_owned()), None), ["one", "", "two"]);
+    assert!(lyric_lines(None, None).is_empty());
 }
 
 /// Library 1's tags matching `q` in a newly built index, as each section's type and IDs.

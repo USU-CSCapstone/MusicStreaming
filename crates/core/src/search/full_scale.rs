@@ -167,7 +167,12 @@ fn benchmark_lyrics_full_scale() {
     let given: usize = tracks.iter().map(|(_, lines)| lines.len()).sum();
 
     let started = std::time::Instant::now();
-    let index = LyricIndex::build(tracks.iter().map(|(id, lines)| (*id, lines.clone())));
+    // A track at a time, as the server reads them, so building holds no copy of the lyrics.
+    let mut builder = LyricIndexBuilder::default();
+    for (id, lines) in &tracks {
+        builder.add(*id, lines);
+    }
+    let index = builder.finish();
     let took = started.elapsed();
     println!(
         "{} tracks, {given} lines given, {} indexed, built in {took:?}: {:.1} MB",

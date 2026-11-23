@@ -342,6 +342,12 @@ mod tests {
     }
 
     #[test]
+    fn tracks_added_in_any_order_tie_by_their_ids() {
+        let index = LyricIndex::build([(9, vec!["so long"]), (2, vec!["so long"])]);
+        assert_eq!(find(&index, "so long"), [(2, 0), (9, 0)]);
+    }
+
+    #[test]
     fn what_keep_leaves_out_is_not_found() {
         let index = songs();
         assert_eq!(index.search("ain't", |track| track != 1).len(), 1);

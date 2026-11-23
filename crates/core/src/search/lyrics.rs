@@ -15,7 +15,7 @@
 //!
 //! - **a word's lines are ascending, kept as the gaps between them**, which are small for a
 //!   common word, in variable-length bytes (seven bits to a byte), most of them one;
-//! - **a line's track is found, not stored**: lines are in track order, and each track keeps
+//! - **a line's track is found, not stored**: lines are kept a track at a time, and each track keeps
 //!   where its lines start.
 
 use std::collections::{HashMap, HashSet};
@@ -32,9 +32,6 @@ pub(super) fn is_label(line: &str) -> bool {
     let line = line.trim();
     line.len() >= 2 && line.starts_with('[') && line.ends_with(']')
 }
-
-/// A track's ID and its distinct lines, each with its place among them, folded into words.
-type TrackLines = (i64, Vec<(u16, Vec<String>)>);
 
 /// Every track's lyrics by their lines, ready to search.
 #[derive(Debug, Default)]
@@ -54,74 +51,96 @@ pub struct LyricIndex {
     track_starts: Vec<u32>,
 }
 
-impl LyricIndex {
-    /// An index of `tracks`' lyrics, each a track's ID and its lines in order. A track with no
-    /// line to index is left out; past 65,535 lines, the rest of a track's are.
-    pub fn build<L: AsRef<str>>(tracks: impl IntoIterator<Item = (i64, Vec<L>)>) -> LyricIndex {
-        // Each track's distinct lines, folded, with their places.
-        let mut folded: Vec<TrackLines> = Vec::new();
-        for (id, lines) in tracks {
-            let mut seen: HashSet<Vec<String>> = HashSet::new();
-            let mut kept = Vec::new();
-            for (at, line) in lines.iter().enumerate() {
-                let Ok(at) = u16::try_from(at) else { break };
-                let line = line.as_ref();
-                if is_label(line) {
-                    continue;
-                }
-                let words = words(line);
-                if !words.is_empty() && seen.insert(words.clone()) {
-                    kept.push((at, words));
-                }
-            }
-            if !kept.is_empty() {
-                folded.push((id, kept));
-            }
-        }
-        folded.sort_unstable_by_key(|(id, _)| *id);
+/// A lyric index being built a track at a time, so that what building holds beyond the index is
+/// one track's lines, never every track's: the lyrics can be read a batch at a time and dropped.
+#[derive(Debug, Default)]
+pub struct LyricIndexBuilder {
+    /// The index so far, but for its vocabulary and postings, kept below until they are sorted.
+    index: LyricIndex,
+    /// Each word's number as it was first met, and its lines as gaps, and its last line.
+    numbers: HashMap<String, u32>,
+    postings: Vec<Vec<u8>>,
+    last_lines: Vec<u32>,
+}
 
+impl LyricIndexBuilder {
+    /// Adds track `id`'s lyrics, its lines in order. A track with no line to index is left out;
+    /// past 65,535 lines, the rest of a track's are. Each track is added once, in any order.
+    pub fn add<L: AsRef<str>>(&mut self, id: i64, lines: impl IntoIterator<Item = L>) {
+        let start = self.index.line_numbers.len() as u32;
+        let mut seen: HashSet<Vec<u32>> = HashSet::new();
+        for (at, line) in lines.into_iter().enumerate() {
+            let Ok(at) = u16::try_from(at) else { break };
+            let line = line.as_ref();
+            if is_label(line) {
+                continue;
+            }
+            let words: Vec<u32> = words(line).into_iter().map(|word| self.number(word)).collect();
+            if words.is_empty() || seen.contains(&words) {
+                continue;
+            }
+            let l = self.index.line_numbers.len() as u32;
+            self.index.line_numbers.push(at);
+            self.index.line_lengths.push(u8::try_from(words.len()).unwrap_or(u8::MAX));
+            for &w in &words {
+                let last = &mut self.last_lines[w as usize];
+                // A word twice in a line is one posting.
+                if *last != l {
+                    let gap = if *last == NONE { l } else { l - *last };
+                    put_varint(&mut self.postings[w as usize], gap);
+                    *last = l;
+                }
+            }
+            seen.insert(words);
+        }
+        if self.index.line_numbers.len() as u32 > start {
+            self.index.track_ids.push(id);
+            self.index.track_starts.push(start);
+        }
+    }
+
+    /// The number of `word`, given it if it is new.
+    fn number(&mut self, word: String) -> u32 {
+        if let Some(&w) = self.numbers.get(&word) {
+            return w;
+        }
+        let w = self.postings.len() as u32;
+        self.numbers.insert(word, w);
+        self.postings.push(Vec::new());
+        self.last_lines.push(NONE);
+        w
+    }
+
+    /// The index of every track added.
+    pub fn finish(self) -> LyricIndex {
+        let LyricIndexBuilder { mut index, numbers, mut postings, last_lines: _ } = self;
         // Sorted, so words are found by prefix in one range, as a name's are.
-        let distinct: HashSet<&str> = folded
-            .iter()
-            .flat_map(|(_, lines)| lines.iter().flat_map(|(_, words)| words.iter()))
-            .map(String::as_str)
-            .collect();
-        let mut vocabulary: Vec<&str> = distinct.into_iter().collect();
+        let mut vocabulary: Vec<(String, u32)> = numbers.into_iter().collect();
         vocabulary.sort_unstable();
-        let number: HashMap<&str, u32> =
-            vocabulary.iter().enumerate().map(|(n, word)| (*word, n as u32)).collect();
-
-        let mut index = LyricIndex::default();
-        let mut lines_of: Vec<Vec<u32>> = vec![Vec::new(); vocabulary.len()];
-        for (id, lines) in &folded {
-            index.track_ids.push(*id);
-            index.track_starts.push(index.line_numbers.len() as u32);
-            for (at, words) in lines {
-                let line = index.line_numbers.len() as u32;
-                index.line_numbers.push(*at);
-                index.line_lengths.push(u8::try_from(words.len()).unwrap_or(u8::MAX));
-                for word in words {
-                    let w = number[word.as_str()];
-                    // A word twice in a line is one posting.
-                    if lines_of[w as usize].last() != Some(&line) {
-                        lines_of[w as usize].push(line);
-                    }
-                }
-            }
-        }
-        index.track_starts.push(index.line_numbers.len() as u32);
-        for lines in lines_of {
+        for (_, w) in &vocabulary {
             index.posting_starts.push(index.postings.len() as u32);
-            let mut previous = 0;
-            for line in lines {
-                put_varint(&mut index.postings, line - previous);
-                previous = line;
-            }
+            index.postings.extend_from_slice(&std::mem::take(&mut postings[*w as usize]));
         }
         index.posting_starts.push(index.postings.len() as u32);
-        index.vocabulary = vocabulary.into_iter().map(str::to_owned).collect();
+        index.track_starts.push(index.line_numbers.len() as u32);
+        index.vocabulary = vocabulary.into_iter().map(|(word, _)| word).collect();
         index.shrink();
         index
+    }
+}
+
+/// No line yet, as a word's last line.
+const NONE: u32 = u32::MAX;
+
+impl LyricIndex {
+    /// An index of `tracks`' lyrics, each a track's ID and its lines in order, as
+    /// [`LyricIndexBuilder`] builds it.
+    pub fn build<L: AsRef<str>>(tracks: impl IntoIterator<Item = (i64, Vec<L>)>) -> LyricIndex {
+        let mut builder = LyricIndexBuilder::default();
+        for (id, lines) in tracks {
+            builder.add(id, lines);
+        }
+        builder.finish()
     }
 
     /// Lets go of what building left spare.
@@ -292,7 +311,7 @@ mod tests {
         assert_eq!((index.tracks(), index.lines()), (2, 3));
         assert_eq!(
             found(&index, "so"),
-            [(3, 2, 2), (7, 0, 4)],
+            [(7, 0, 4), (3, 2, 2)],
             "the repeated line once, at its first place; the blank and the label not at all"
         );
         assert_eq!(found(&index, "go"), [(7, 1, 4)]);
