@@ -13,8 +13,9 @@ use crate::api::AnyId;
 use crate::api::tag_filter::TagFilter;
 use crate::db::{Database, DbError};
 
-/// How many filters' rows are kept, the least recently used going first. One genre of a large
-/// library is a few megabytes, and a search typed a letter at a time keeps its filter.
+/// How many filters' or containers' rows are kept, the least recently used going first. One genre
+/// of a large library is a few megabytes, and a search typed a letter at a time keeps its filter
+/// and its container.
 const KEPT: usize = 4;
 
 /// For each kind in `Kind::ALL` order, the IDs of the rows of it that carry a search's tags: none
@@ -32,17 +33,59 @@ struct Key {
 }
 
 /// Rows read for searches, each with its key and the head of its library's change feed when it
-/// was read, the most recently used last.
+/// was read, the most recently used last: at most [`KEPT`] of them. Kept rows are used while the
+/// library's change feed has nothing newer than when they were read, since every change to what a
+/// row of the catalog holds or carries writes to it and its positions are never reused.
+pub struct Kept<K, V> {
+    kept: Arc<Mutex<Vec<(K, i64, V)>>>,
+}
+
+impl<K, V> Default for Kept<K, V> {
+    fn default() -> Self {
+        Kept { kept: Arc::default() }
+    }
+}
+
+impl<K, V> Clone for Kept<K, V> {
+    fn clone(&self) -> Self {
+        Kept { kept: self.kept.clone() }
+    }
+}
+
+impl<K: PartialEq, V: Clone> Kept<K, V> {
+    /// What is kept for `key` of `library` if its feed has not moved since, or else what `read`
+    /// reads, kept in its place: in `conn`'s snapshot, with the head it was read at.
+    pub fn get(
+        &self,
+        conn: &Connection,
+        library: i64,
+        key: K,
+        read: impl FnOnce(&Connection) -> rusqlite::Result<V>,
+    ) -> rusqlite::Result<V> {
+        let head = head(conn, library)?;
+        if let Some(value) = used(&mut self.kept.lock().recover(), &key, head) {
+            return Ok(value);
+        }
+        let value = read(conn)?;
+        let mut kept = self.kept.lock().recover();
+        kept.retain(|(kept, ..)| *kept != key);
+        if kept.len() == KEPT {
+            kept.remove(0);
+        }
+        kept.push((key, head, value.clone()));
+        Ok(value)
+    }
+}
+
+/// Rows read for searches by their tags.
 #[derive(Default)]
 pub struct TaggedSets {
-    kept: Arc<Mutex<Vec<(Key, i64, Sets)>>>,
+    kept: Kept<Key, Sets>,
 }
 
 impl TaggedSets {
     /// The rows of `library` of each of `kinds` that carry the tags `filter` names, or `None`
-    /// where it names none. Kept rows are used while the library's change feed has nothing newer
-    /// than when they were read, since every change to what a row carries writes to it and its
-    /// positions are never reused; otherwise they are read again, in one snapshot with the head.
+    /// where it names none, kept as [`Kept`] keeps them.
     pub async fn get(
         &self,
         db: &Database,
@@ -66,31 +109,23 @@ impl TaggedSets {
         let (kept, filter) = (self.kept.clone(), filter.clone());
         let sets = db
             .read(move |conn| {
-                let head = head(conn, library)?;
-                if let Some(sets) = used(&mut kept.lock().recover(), &key, head) {
-                    return Ok(sets);
-                }
-                let sets: Sets = Arc::new(search::tagged(conn, library, &filter, &key.kinds)?);
-                let mut kept = kept.lock().recover();
-                kept.retain(|(kept, ..)| *kept != key);
-                if kept.len() == KEPT {
-                    kept.remove(0);
-                }
-                kept.push((key, head, sets.clone()));
-                Ok(sets)
+                let kinds = key.kinds.clone();
+                kept.get(conn, library, key, |conn| {
+                    Ok(Arc::new(search::tagged(conn, library, &filter, &kinds)?))
+                })
             })
             .await?;
         Ok(Some(sets))
     }
 }
 
-/// The rows kept for `key` at feed head `head`, moved to most recently used.
-fn used(kept: &mut Vec<(Key, i64, Sets)>, key: &Key, head: i64) -> Option<Sets> {
+/// What is kept for `key` at feed head `head`, moved to most recently used.
+fn used<K: PartialEq, V: Clone>(kept: &mut Vec<(K, i64, V)>, key: &K, head: i64) -> Option<V> {
     let at = kept.iter().position(|(kept, at, _)| kept == key && *at == head)?;
     let entry = kept.remove(at);
-    let sets = entry.2.clone();
+    let value = entry.2.clone();
     kept.push(entry);
-    Some(sets)
+    Some(value)
 }
 
 /// The position of `library`'s latest change, 0 when it has none.

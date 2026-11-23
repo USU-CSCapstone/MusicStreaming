@@ -607,22 +607,30 @@ impl Hid {
 }
 
 /// Whether a search shows a match: what the caller hid is left out, and so, under a tag filter, is
-/// what lacks the tags. `search` and `searchSection` keep by it, on the server and on a device.
+/// what lacks the tags, and, narrowed to a container, what it does not hold. `search` and
+/// `searchSection` keep by it, on the server and on a device.
 pub struct Keep<'a> {
     hid: &'a Hid,
     /// By [`Kind`], what has the tags, under a tag filter.
     tagged: Option<&'a [HashSet<i64>; Kind::ALL.len()]>,
+    /// By [`Kind`], what the container holds, narrowed to one.
+    held: Option<&'a [HashSet<i64>; Kind::ALL.len()]>,
 }
 
 impl<'a> Keep<'a> {
-    pub fn new(hid: &'a Hid, tagged: Option<&'a [HashSet<i64>; Kind::ALL.len()]>) -> Keep<'a> {
-        Keep { hid, tagged }
+    pub fn new(
+        hid: &'a Hid,
+        tagged: Option<&'a [HashSet<i64>; Kind::ALL.len()]>,
+        held: Option<&'a [HashSet<i64>; Kind::ALL.len()]>,
+    ) -> Keep<'a> {
+        Keep { hid, tagged, held }
     }
 
     /// Whether the search shows the row `id` of `kind`.
     pub fn keeps(&self, kind: Kind, id: i64) -> bool {
         !self.hid.contains(kind, id)
             && self.tagged.is_none_or(|tagged| tagged[kind as usize].contains(&id))
+            && self.held.is_none_or(|held| held[kind as usize].contains(&id))
     }
 }
 
