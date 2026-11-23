@@ -494,3 +494,87 @@ fn a_page_of_weighed_tags_continues_where_it_left_off() {
     // whose sort value moved behind its cursor; nothing already shown comes again.
     assert_eq!(next.ids, [3]);
 }
+
+/// A corpus of every kind, two tag types, weights, and names that share words and tie, made the
+/// same way each time.
+fn corpus() -> Vec<Document> {
+    let words = ["rock", "blue", "love", "the", "song", "night", "rocket", "lov"];
+    let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = move |n: usize| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed % n as u64) as usize
+    };
+    (0..300)
+        .map(|id| {
+            let name = (0..1 + next(3)).map(|_| words[next(words.len())]).collect::<Vec<_>>();
+            let name = name.join(" ");
+            match id % 6 {
+                0 | 1 => Document::from_track(id, name),
+                2 => Document::from_album(id, Some(name)).unwrap(),
+                3 => Document::from_playlist(id, name),
+                4 => Document::from_tag(id, "genre".into(), name, next(4) as u64),
+                _ => Document::from_tag(id, "mood".into(), name, next(4) as u64),
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn indexes_searched_as_one_find_what_one_index_of_them_all_would() {
+    let documents = corpus();
+    let whole = Index::build(documents.clone());
+    let keep = |kind: Kind, id: i64| kind != Kind::Album || id % 4 != 2;
+    // Split by kind as the server splits them, and every other way.
+    let splits: [fn(&Document) -> bool; 3] =
+        [|doc| doc.kind == Kind::Playlist, |doc| doc.id % 2 == 0, |doc| doc.id < 10];
+    for split in splits {
+        let (one, other): (Vec<_>, Vec<_>) = documents.iter().cloned().partition(split);
+        let (one, other) = (Index::build(one), Index::build(other));
+        let union = Union(&[&one, &other]);
+        for query in ["rock", "lov", "the blue", "night song", "r", "zzz"] {
+            for limit in [1, 3, 50] {
+                assert_eq!(
+                    union.search_within(query, &Kind::ALL, limit, keep),
+                    whole.search_within(query, &Kind::ALL, limit, keep),
+                    "{query} {limit}"
+                );
+            }
+            let mut matching = union.matching(query, Kind::Tag, keep);
+            let mut expected = whole.matching(query, Kind::Tag, keep);
+            matching.sort_unstable();
+            expected.sort_unstable();
+            assert_eq!(matching, expected, "{query}");
+            for (kind, group) in
+                [(Kind::Track, None), (Kind::Playlist, None), (Kind::Tag, Some("mood"))]
+            {
+                let (mut paged, mut after) = (Vec::new(), None);
+                loop {
+                    let page = union.page(query, kind, group, after.as_ref(), 7, keep);
+                    let expected = whole.page(query, kind, group, after.as_ref(), 7, keep);
+                    assert_eq!(page, expected, "{query} {kind:?}");
+                    paged.extend(page.ids);
+                    match page.next {
+                        Some(next) => after = Some(next),
+                        None => break,
+                    }
+                }
+                let all = whole.search_within(query, &[kind], usize::MAX, keep);
+                let all = all.into_iter().find(|s| s.group.as_deref() == group);
+                assert_eq!(paged, all.map(|s| s.ids).unwrap_or_default(), "{query} {kind:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_union_of_one_is_that_index() {
+    let index = Index::build(corpus());
+    let union = Union(&[&index]);
+    assert_eq!(
+        union.search_within("rock", &Kind::ALL, 5, |_, _| true),
+        index.search("rock", &Kind::ALL, 5)
+    );
+    assert!(Union(&[]).search_within("rock", &Kind::ALL, 5, |_, _| true).is_empty());
+}
