@@ -4,7 +4,7 @@
 use std::ops::Range;
 
 use super::distance::distance;
-use super::{Index, Kind, Section, words};
+use super::{Index, Kind, Rank, Section, SectionPage, words};
 use crate::fold::ARTICLES;
 
 /// Words longer than this are matched exactly or as a prefix only, which bounds the typo check.
@@ -28,15 +28,29 @@ fn leading_article<T>(words: &[T], is_article: impl Fn(&T) -> bool) -> usize {
     usize::from(words.len() > 1 && is_article(&words[0]))
 }
 
+/// Keeps the best `n` of `hits`, best first. Document order is the tie-break order, so the
+/// order is total, and the same `hits` always rank the same.
+fn best(hits: &mut Vec<(Score, u32)>, n: usize) {
+    if n == 0 {
+        hits.clear();
+        return;
+    }
+    if hits.len() > n {
+        hits.select_nth_unstable(n - 1);
+        hits.truncate(n);
+    }
+    hits.sort_unstable();
+}
+
 /// How well a document matched the whole query: lower is better.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct Score {
-    inexact: bool,
-    typos: u32,
+pub struct Score {
+    pub inexact: bool,
+    pub typos: u32,
     /// The query's leading article went unmatched.
-    skipped: bool,
-    prefixes: u32,
-    extra_words: u32,
+    pub skipped: bool,
+    pub prefixes: u32,
+    pub extra_words: u32,
 }
 
 impl Index {
@@ -57,10 +71,86 @@ impl Index {
         limit: usize,
         keep: impl Fn(Kind, i64) -> bool,
     ) -> Vec<Section> {
+        if limit == 0 {
+            return Vec::new();
+        }
+        let mut sections: Vec<(Score, Section)> = Vec::new();
+        for (k, mut hits) in self.matches(query, kinds, keep).into_iter().enumerate() {
+            if hits.is_empty() {
+                continue;
+            }
+            let total = hits.len();
+            best(&mut hits, limit);
+            let section = Section { kind: Kind::ALL[k], ids: self.hit_ids(&hits), total };
+            sections.push((hits[0].0, section));
+        }
+        sections.sort_by(|(a, x), (b, y)| a.cmp(b).then(x.kind.cmp(&y.kind)));
+        sections.into_iter().map(|(_, section)| section).collect()
+    }
+
+    /// The best `limit` matches for `query` of `kind` that `keep` keeps and that rank after
+    /// `after`, ranked as [`Index::search_within`] ranks them, so a section can be read a page
+    /// at a time. `total` counts every match, and `next` is the last one's rank while more follow
+    /// it. A rank from an index since rebuilt continues where it left off.
+    pub fn page(
+        &self,
+        query: &str,
+        kind: Kind,
+        after: Option<&Rank>,
+        limit: usize,
+        keep: impl Fn(Kind, i64) -> bool,
+    ) -> SectionPage {
+        let mut hits = std::mem::take(&mut self.matches(query, &[kind], keep)[kind as usize]);
+        let total = hits.len();
+        if let Some(after) = after {
+            hits.retain(|&(score, d)| self.ranks_after(score, d, after));
+        }
+        let more = hits.len() > limit;
+        best(&mut hits, limit);
+        let next = hits.last().filter(|_| more).map(|&(score, d)| self.rank(score, d));
+        SectionPage { ids: self.hit_ids(&hits), total, next }
+    }
+
+    /// The IDs of the documents of `hits`, in their order.
+    fn hit_ids(&self, hits: &[(Score, u32)]) -> Vec<i64> {
+        hits.iter().map(|&(_, d)| self.ids[d as usize]).collect()
+    }
+
+    /// The words of document `d`, folded, in name order.
+    fn doc_words(&self, d: u32) -> impl Iterator<Item = &str> {
+        self.document_words(d as usize).iter().map(|&w| self.word(w as usize))
+    }
+
+    /// The rank of document `d`, scored `score`.
+    fn rank(&self, score: Score, d: u32) -> Rank {
+        let words = self.doc_words(d).map(str::to_owned).collect();
+        Rank { score, words, id: self.ids[d as usize] }
+    }
+
+    /// Whether document `d`, scored `score`, ranks after `after`. Its words are read only when
+    /// the scores tie.
+    fn ranks_after(&self, score: Score, d: u32, after: &Rank) -> bool {
+        score
+            .cmp(&after.score)
+            .then_with(|| self.doc_words(d).cmp(after.words.iter().map(String::as_str)))
+            .then_with(|| self.ids[d as usize].cmp(&after.id))
+            .is_gt()
+    }
+
+    /// Every document of each of `kinds` that matches `query` and that `keep` keeps, with its
+    /// score, by kind in the order of `Kind::ALL`. A leading article in a query of more than
+    /// one word need not match.
+    fn matches(
+        &self,
+        query: &str,
+        kinds: &[Kind],
+        keep: impl Fn(Kind, i64) -> bool,
+    ) -> [Vec<(Score, u32)>; 3] {
+        let mut scored: [Vec<(Score, u32)>; 3] = Default::default();
         let mut query_words = words(query);
         query_words.truncate(MAX_QUERY_WORDS);
-        if query_words.is_empty() || limit == 0 {
-            return Vec::new();
+        if query_words.is_empty() {
+            return scored;
         }
         let optional = leading_article(&query_words, |word| ARTICLES.contains(&word.as_str()));
 
@@ -92,9 +182,8 @@ impl Index {
         // Candidates are the documents the most selective required word matched, so an optional
         // article never picks them; `score` drops those that miss another required word.
         let Some(fewest) = matched[optional..].iter().min_by_key(|docs| docs.len()) else {
-            return Vec::new();
+            return scored;
         };
-        let mut scored: [Vec<(Score, u32)>; 3] = Default::default();
         for &d in fewest {
             let kind = self.kinds[d as usize];
             if !kinds.contains(&kind) || !keep(kind, self.ids[d as usize]) {
@@ -105,30 +194,7 @@ impl Index {
             };
             scored[kind as usize].push((score, d));
         }
-
-        let mut sections: Vec<(Score, Section)> = Vec::new();
-        for (k, mut hits) in scored.into_iter().enumerate() {
-            if hits.is_empty() {
-                continue;
-            }
-            let total = hits.len();
-            if hits.len() > limit {
-                hits.select_nth_unstable(limit - 1);
-                hits.truncate(limit);
-            }
-            // Document order is the tie-break order.
-            hits.sort_unstable();
-            sections.push((
-                hits[0].0,
-                Section {
-                    kind: Kind::ALL[k],
-                    ids: hits.iter().map(|&(_, d)| self.ids[d as usize]).collect(),
-                    total,
-                },
-            ));
-        }
-        sections.sort_by(|(a, x), (b, y)| a.cmp(b).then(x.kind.cmp(&y.kind)));
-        sections.into_iter().map(|(_, section)| section).collect()
+        scored
     }
 
     /// The document's score, if it matched every query word but the first `optional`. `exact` is

@@ -1,11 +1,14 @@
-//! Search: the documents a library's search index is built from, and the response a search
-//! gives (`search`, `api/openapi.yaml`). The index itself is the core's
+//! Search: the documents a library's search index is built from, and the responses a search
+//! gives (`search` and `searchSection`, `api/openapi.yaml`). The index itself is the core's
 //! (`jewelcase_core::Index`), which the server keeps in memory and a device builds from the same
 //! documents.
 
 use std::collections::HashSet;
 
-use jewelcase_core::{Document, Index, IndexBuilder, Kind, Section as Found};
+use jewelcase_core::{
+    Document, Index, IndexBuilder, Kind, Rank, Score, Section as Found, SectionPage as FoundPage,
+};
+use rusqlite::types::Value;
 use rusqlite::{Connection, params};
 use serde::Serialize;
 
@@ -13,6 +16,7 @@ use crate::Invalid;
 use crate::albums::{self, AlbumSummary};
 use crate::artists::{self, ArtistSummary};
 use crate::by_ids::by_ids;
+use crate::cursor;
 use crate::hidden::{self, Losses};
 use crate::page::library_number;
 use crate::tag_filter::{TagFilter, Tagged, Tags};
@@ -36,6 +40,124 @@ struct Section {
     kind: &'static str,
     items: Vec<SearchResult>,
     total: usize,
+}
+
+/// The spec's `SearchSectionPage`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SectionPage {
+    query: String,
+    items: Vec<SearchResult>,
+    next_cursor: Option<String>,
+    total: usize,
+}
+
+/// What a `searchSection` names: one kind's matches, or a section that has none yet.
+pub enum SectionType {
+    Kind(Kind),
+    /// The caller's playlists, which the index does not hold yet: an empty page.
+    Playlists,
+    /// Lyrics, which are not indexed yet: [`Invalid`].
+    Lyrics,
+}
+
+impl SectionType {
+    /// The section `name` names, as the spec's `SearchSectionType` spells it, if any.
+    pub fn named(name: &str) -> Option<SectionType> {
+        match name {
+            "playlists" => Some(SectionType::Playlists),
+            "lyrics" => Some(SectionType::Lyrics),
+            name => Kind::ALL
+                .into_iter()
+                .find(|&kind| section_type(kind) == name)
+                .map(SectionType::Kind),
+        }
+    }
+}
+
+/// The rank a page of `kind`'s section continues after, from its `cursor`: a cursor of another
+/// section, or none of ours, is [`Invalid`].
+pub fn after(cursor: Option<&str>, kind: Kind) -> Result<Option<Rank>, Invalid> {
+    let Some(cursor) = cursor else { return Ok(None) };
+    rank(&cursor::decode(cursor, &label(kind), RANK_VALUES)?)
+        .map(Some)
+        .ok_or_else(|| Invalid("cursor is not valid for this list".to_owned()))
+}
+
+/// How many values a rank is written as in a cursor.
+const RANK_VALUES: usize = 7;
+
+/// `rank` as a cursor's values: its score's, its name's words between spaces, which no folded
+/// word holds, then its ID.
+fn rank_values(rank: &Rank) -> [Value; RANK_VALUES] {
+    let Score { inexact, typos, skipped, prefixes, extra_words } = rank.score;
+    [
+        Value::Integer(inexact.into()),
+        Value::Integer(typos.into()),
+        Value::Integer(skipped.into()),
+        Value::Integer(prefixes.into()),
+        Value::Integer(extra_words.into()),
+        Value::Text(rank.words.join(" ")),
+        Value::Integer(rank.id),
+    ]
+}
+
+/// The rank [`rank_values`] wrote, or `None` for values it could not have.
+fn rank(values: &[Value]) -> Option<Rank> {
+    let flag = |value: &Value| match value {
+        Value::Integer(0) => Some(false),
+        Value::Integer(1) => Some(true),
+        _ => None,
+    };
+    let count = |value: &Value| match value {
+        Value::Integer(n) => u32::try_from(*n).ok(),
+        _ => None,
+    };
+    let [inexact, typos, skipped, prefixes, extra_words, Value::Text(words), Value::Integer(id)] =
+        values
+    else {
+        return None;
+    };
+    Some(Rank {
+        score: Score {
+            inexact: flag(inexact)?,
+            typos: count(typos)?,
+            skipped: flag(skipped)?,
+            prefixes: count(prefixes)?,
+            extra_words: count(extra_words)?,
+        },
+        words: words.split(' ').filter(|word| !word.is_empty()).map(str::to_owned).collect(),
+        id: *id,
+    })
+}
+
+/// The label of `kind`'s section's cursors, so one is only accepted where it came from.
+fn label(kind: Kind) -> String {
+    format!("search.{}", section_type(kind))
+}
+
+/// A page of the section of `kind` that a search for `q` in `library` found as `found`, as the
+/// browse lists show it to `user`, whose hidden tracks `hid` says, with the cursor to the next.
+/// No `kind` is a section with nothing in it yet.
+pub fn section_page(
+    conn: &Connection,
+    user: i64,
+    library: i64,
+    q: String,
+    kind: Option<Kind>,
+    found: FoundPage,
+    hid: &Hid,
+) -> rusqlite::Result<SectionPage> {
+    let Some(kind) = kind else {
+        return Ok(SectionPage { query: q, items: Vec::new(), next_cursor: None, total: 0 });
+    };
+    let label = label(kind);
+    let next_cursor = found.next.map(|rank| cursor::encode(&label, &rank_values(&rank)));
+    let FoundPage { ids, total, .. } = found;
+    let items = sections(conn, user, library, vec![Found { kind, ids, total }], &hid.losses)?
+        .pop()
+        .map_or_else(Vec::new, |section| section.items);
+    Ok(SectionPage { query: q, items, next_cursor, total })
 }
 
 /// The spec's `SearchResult`: `{"type": "track", "track": {…}}` and so on.
@@ -239,6 +361,26 @@ impl Hid {
     }
 }
 
+/// Whether a search shows a match: what the caller hid is left out, and so, under a tag filter, is
+/// what lacks the tags. `search` and `searchSection` keep by it, on the server and on a device.
+pub struct Keep<'a> {
+    hid: &'a Hid,
+    /// By [`Kind`], what has the tags, under a tag filter.
+    tagged: Option<&'a [HashSet<i64>; 3]>,
+}
+
+impl<'a> Keep<'a> {
+    pub fn new(hid: &'a Hid, tagged: Option<&'a [HashSet<i64>; 3]>) -> Keep<'a> {
+        Keep { hid, tagged }
+    }
+
+    /// Whether the search shows the row `id` of `kind`.
+    pub fn keeps(&self, kind: Kind, id: i64) -> bool {
+        !self.hid.contains(kind, id)
+            && self.tagged.is_none_or(|tagged| tagged[kind as usize].contains(&id))
+    }
+}
+
 /// The spec's name for the section of `kind`.
 fn section_type(kind: Kind) -> &'static str {
     match kind {
@@ -308,4 +450,31 @@ fn sections(
         }
     }
     Ok(sections)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rank() -> Rank {
+        let score = Score { inexact: true, typos: 2, skipped: false, prefixes: 1, extra_words: 3 };
+        Rank { score, words: vec!["ca".to_owned(), "va".to_owned()], id: -4 }
+    }
+
+    #[test]
+    fn a_rank_reads_back_from_its_cursor() {
+        let cursor = cursor::encode(&label(Kind::Track), &rank_values(&rank()));
+        assert_eq!(after(Some(&cursor), Kind::Track).unwrap(), Some(rank()));
+        assert!(after(Some(&cursor), Kind::Album).is_err(), "another section's");
+    }
+
+    #[test]
+    fn values_no_rank_has_are_refused() {
+        for (at, value) in [(0, Value::Integer(2)), (1, Value::Integer(-1)), (5, Value::Null)] {
+            let mut values = rank_values(&rank());
+            values[at] = value;
+            let cursor = cursor::encode(&label(Kind::Track), &values);
+            assert!(after(Some(&cursor), Kind::Track).is_err(), "{values:?}");
+        }
+    }
 }
