@@ -73,6 +73,38 @@ fn benchmark_full_scale() {
         println!("{query:>22}: {:>8.2?} per search, totals {totals:?}", started.elapsed() / rounds);
     }
 
+    // Near misses of queries that find nothing (the vocabulary has no `z`): a wrong first
+    // letter, a typo more than a search allows, a word matching nothing beside the commonest,
+    // which every one of its names nearly matches, and nothing near at all. Each matches the
+    // whole vocabulary again, whatever its first letter.
+    let mut wrong_first = long.clone();
+    wrong_first.replace_range(0..1, "z");
+    let mut three_typos = long.clone();
+    for at in [1, 3, 5] {
+        three_typos.replace_range(at..at + 1, "z");
+    }
+    let near = [
+        wrong_first,
+        three_typos,
+        format!("{common} zzzzzz"),
+        format!("{long} {common} zzzzzz"),
+        "zzzzzzzz".to_owned(),
+    ];
+    for query in &near {
+        assert!(index.search(query, &Kind::ALL, 5).is_empty(), "{query} found something");
+        let started = std::time::Instant::now();
+        let rounds = 10;
+        let mut misses = Vec::new();
+        for _ in 0..rounds {
+            misses = index.near_misses(query, &Kind::ALL, 3, |_, _| true);
+        }
+        println!(
+            "{query:>22}: {:>8.2?} per near miss, {} found",
+            started.elapsed() / rounds,
+            misses.len()
+        );
+    }
+
     // A page of tracks deep in the commonest word's, continuing after a rank, which compares
     // names wherever scores tie.
     for query in ["a", common.as_str()] {
