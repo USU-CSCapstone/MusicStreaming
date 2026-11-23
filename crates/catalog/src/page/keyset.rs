@@ -60,8 +60,8 @@ pub struct Source {
     /// `select` and `joins` to the page's rows after, so it costs the rows' keys, not their
     /// columns. `from` must name the table by that alias and its ID.
     pub back: Option<(&'static str, &'static str)>,
-    /// How far a page that walks a sort's index to check tags may read.
-    pub walk: Option<Box<Walk>>,
+    /// How a page that walks a sort's index checks its rows, and how far it may read.
+    pub(crate) walk: Option<Box<Walk>>,
 }
 
 /// How much larger a walk's first window is than the rows it is expected to need, and each window
@@ -72,23 +72,52 @@ pub struct Source {
 /// four needs the fewest windows.
 const WINDOW_GROWTH: i64 = 4;
 
-/// A page that walks a sort's index and checks each row for tags reads rows until a page's worth
-/// carry them: quick for a common tag, but all the way to the end of the index when the tag's rows
-/// sort last. The walk reads the index in windows of rows, each larger than the last, and a page
-/// that is still short when the windows have covered [`WALK_BUDGET`] rows for each row it asks for
-/// is read from `lead` instead, whose cost is its tag's rows, not the index's.
-pub struct Walk {
+/// A page that walks a sort's index and checks each row reads rows until a page's worth pass:
+/// quick where many rows pass and they are spread through the sort, but all the way to the end of
+/// the index where those that pass sort last. So a walk reads only so far, and a page still short
+/// then is read from the walk's lead instead, whose cost is the rows that pass, not the index's.
+/// How a walk checks its rows says how it reads them.
+pub(crate) enum Walk {
+    /// In SQL: a tag filter's, whose links are indexed.
+    Sql(SqlWalk),
+    /// In memory, by ID: a search's matches, which may be hundreds of thousands.
+    Ids(IdWalk),
+}
+
+/// A walk that checks its rows in SQL reads the index in windows of rows, each larger than the
+/// last, and runs over when the windows have covered [`WALK_BUDGET`] rows for each row it asks for.
+pub(crate) struct SqlWalk {
     /// The walk's own condition, such as being in the library, without the tags', and its
     /// parameters: what a window's edge is found by.
-    pub filter: String,
-    pub params: Vec<Value>,
+    pub(crate) filter: String,
+    pub(crate) params: Vec<Value>,
     /// How many rows the walk is expected to read for each row it returns, if each row were as
     /// likely as another to carry the smallest group's tags. It sizes the first window.
-    pub per_row: i64,
-    /// What the page reads when the walk runs over: the smallest group of tags leading, the others
-    /// checked.
-    pub lead: Box<Source>,
+    pub(crate) per_row: i64,
+    /// What the page reads when the walk runs over: the smallest group of tags leading, the
+    /// others checked.
+    pub(crate) lead: Box<Source>,
 }
+
+/// A walk that checks its rows by ID reads the index a chunk at a time and keeps the rows that
+/// pass, so it reads about as many rows as it keeps over the share that pass, where they are
+/// spread through the sort. Where they are not, such as titles matching a word that starts them,
+/// read by name, it runs over after `budget` rows.
+pub(crate) struct IdWalk {
+    /// Whether the row with this ID passes. A sort's last column is the row's ID.
+    pub(crate) keeps: Box<dyn Fn(i64) -> bool>,
+    /// About how many rows there are for each one that passes, so each read is enough for the
+    /// rest of the page.
+    pub(crate) spread: u32,
+    /// How many rows the walk reads for one page before it runs over.
+    pub(crate) budget: u32,
+    /// What the page reads when the walk runs over, made only then, since it costs what the rows
+    /// that pass are, which the walk is there to spare.
+    pub(crate) lead: Box<MakeLead>,
+}
+
+/// Makes the source a walk that checks by ID reads instead when it runs over.
+pub(crate) type MakeLead = dyn Fn(&Connection) -> rusqlite::Result<Source>;
 
 /// The rows a page's walk may read for each row it asks for before the page leads instead: twice
 /// [`LEAD_SHARE`](crate::tag_filter::LEAD_SHARE). Measured on the generated library of 500,000
@@ -151,8 +180,8 @@ impl Sort {
     }
 }
 
-/// Reads the page of `source` that `request` asks for. A source with a [`Walk`] is read a window
-/// of its index at a time, and from the walk's lead instead if it runs over its budget.
+/// Reads the page of `source` that `request` asks for. A source with a [`Walk`] walks its index,
+/// and reads from the walk's lead instead if it runs over.
 pub fn fetch<T>(
     conn: &Connection,
     source: &Source,
@@ -160,47 +189,72 @@ pub fn fetch<T>(
     mut map: impl FnMut(&Row) -> rusqlite::Result<T>,
 ) -> rusqlite::Result<(Vec<T>, Option<String>)> {
     if let Some(walk) = &source.walk {
-        if let Some(page) = read_page(conn, source, Some(walk), request, &mut map)? {
+        if let Some(page) = self::walk(conn, source, walk, request, &mut map)? {
             return Ok(page);
         }
-        let page = read_page(conn, &walk.lead, None, request, &mut map)?;
+        let made;
+        let lead = match &**walk {
+            Walk::Sql(walk) => &*walk.lead,
+            Walk::Ids(walk) => {
+                made = (walk.lead)(conn)?;
+                &made
+            }
+        };
+        let page = read_page(conn, lead, None, request, &mut map)?;
         return Ok(page.expect("a page read with no walk is always finished"));
     }
     Ok(read_page(conn, source, None, request, &mut map)?
         .expect("a page read with no walk is finished"))
 }
 
+/// The page of `source` that `request` asks for, walking its index as `walk` checks its rows, and
+/// `None` if the walk ran over without filling the page.
+pub(super) fn walk<T>(
+    conn: &Connection,
+    source: &Source,
+    walk: &Walk,
+    request: &Request,
+    map: &mut impl FnMut(&Row) -> rusqlite::Result<T>,
+) -> rusqlite::Result<Option<(Vec<T>, Option<String>)>> {
+    match walk {
+        Walk::Sql(walk) => read_page(conn, source, Some(walk), request, map),
+        Walk::Ids(walk) => read_chunks(conn, source, walk, request, map),
+    }
+}
+
 /// A page's rows so far, each with its sort values.
 type Rows<T> = Vec<(T, Vec<Value>)>;
 
-/// A check a page's rows must pass that SQL cannot make cheaply, such as being among a search's
-/// matches, which may be hundreds of thousands. The page walks the sort's index a chunk at a time
-/// and keeps the rows that pass, so it reads about as many rows as it keeps over the share that
-/// pass, where they are spread through the sort. Where they are not, such as titles matching a
-/// word that starts them, read by name, the walk gives up after `budget` rows, so the caller can
-/// read the page another way. A [`Walk`] checks its rows in SQL instead, which suits a tag's,
-/// whose links are indexed.
-pub struct Kept<'a> {
-    /// Whether the row with this ID is kept. A sort's last column is the row's ID.
-    pub keeps: &'a dyn Fn(i64) -> bool,
-    /// About how many rows there are for each one kept, so each read is enough for the rest of
-    /// the page.
-    pub spread: u32,
-    /// How many rows the walk reads for one page before it gives up.
-    pub budget: u32,
+/// The sort values of `row`, which follow the columns `source` selects.
+fn sort_values(row: &Row, source: &Source, sort: &Sort) -> rusqlite::Result<Vec<Value>> {
+    let width = source.select.len();
+    (width..width + sort.columns.len()).map(|index| row.get::<_, Value>(index)).collect()
 }
 
-/// The most rows a [`Kept`] walk reads at once, which bounds what one read holds in memory.
+/// The page `rows` make, read for `request` with `left` rows more still wanted: the row after
+/// the page, read when there is one, gives the page a cursor to it.
+fn finish<T>(mut rows: Rows<T>, left: u32, request: &Request) -> (Vec<T>, Option<String>) {
+    let next = if left == 0 {
+        rows.pop();
+        rows.last().map(|(_, key)| cursor::encode(&request.sort.label(request.order), key))
+    } else {
+        None
+    };
+    (rows.into_iter().map(|(item, _)| item).collect(), next)
+}
+
+/// The most rows a walk that checks by ID reads at once, which bounds what one read holds in
+/// memory.
 const MAX_CHUNK: u32 = 10_000;
 
-/// Reads the page of `source` that `request` asks for, of the rows `kept` keeps, walking the
-/// sort's index for them; `None` if the walk gave up ([`Kept`]).
-pub(super) fn fetch_kept<T>(
+/// The page of `source` that `request` asks for, of the rows `checks` passes, read a chunk of the
+/// index at a time, and `None` if the walk ran over its budget without filling the page.
+fn read_chunks<T>(
     conn: &Connection,
     source: &Source,
+    checks: &IdWalk,
     request: &Request,
-    kept: &Kept,
-    mut map: impl FnMut(&Row) -> rusqlite::Result<T>,
+    map: &mut impl FnMut(&Row) -> rusqlite::Result<T>,
 ) -> rusqlite::Result<Option<(Vec<T>, Option<String>)>> {
     // The row after the page, if there is one, says whether there is a next page.
     let mut left = request.limit + 1;
@@ -212,7 +266,7 @@ pub(super) fn fetch_kept<T>(
         let mut from = after.map(<[Value]>::to_vec);
         while left > 0 {
             // Half again what the share predicts, so a page rarely needs two reads.
-            let chunked = left.saturating_mul(kept.spread).saturating_mul(3) / 2;
+            let chunked = left.saturating_mul(checks.spread).saturating_mul(3) / 2;
             let want = chunked.clamp(left, MAX_CHUNK.max(left));
             let (sql, params) =
                 part_query(source, request.sort, request.order, from.as_deref(), part, want, None);
@@ -223,15 +277,12 @@ pub(super) fn fetch_kept<T>(
                 && let Some(row) = result.next()?
             {
                 read += 1;
-                let width = source.select.len();
-                let key = (width..width + request.sort.columns.len())
-                    .map(|index| row.get::<_, Value>(index))
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let key = sort_values(row, source, request.sort)?;
                 let Some(&Value::Integer(id)) = key.last() else {
                     unreachable!("a sort ends with the row's ID")
                 };
                 last = Some(key.clone());
-                if (kept.keeps)(id) {
+                if (checks.keeps)(id) {
                     rows.push((map(row)?, key));
                     left -= 1;
                 }
@@ -241,27 +292,21 @@ pub(super) fn fetch_kept<T>(
                 break;
             }
             walked = walked.saturating_add(read);
-            if left > 0 && walked >= kept.budget {
+            if left > 0 && walked >= checks.budget {
                 return Ok(None);
             }
             from = last;
         }
     }
-    let next = if left == 0 {
-        rows.pop();
-        rows.last().map(|(_, key)| cursor::encode(&request.sort.label(request.order), key))
-    } else {
-        None
-    };
-    Ok(Some((rows.into_iter().map(|(item, _)| item).collect(), next)))
+    Ok(Some(finish(rows, left, request)))
 }
 
 /// The page of `source` that `request` asks for, read a window of the index at a time if `walk`
 /// is given, and `None` if the walk read its whole budget without filling the page.
-pub(super) fn read_page<T>(
+fn read_page<T>(
     conn: &Connection,
     source: &Source,
-    walk: Option<&Walk>,
+    walk: Option<&SqlWalk>,
     request: &Request,
     map: &mut impl FnMut(&Row) -> rusqlite::Result<T>,
 ) -> rusqlite::Result<Option<(Vec<T>, Option<String>)>> {
@@ -296,14 +341,7 @@ pub(super) fn read_page<T>(
             (from, window) = (Some(edge), (window * WINDOW_GROWTH).min(budget - spent));
         }
     }
-
-    let next = if left == 0 {
-        rows.pop();
-        rows.last().map(|(_, key)| cursor::encode(&request.sort.label(request.order), key))
-    } else {
-        None
-    };
-    Ok(Some((rows.into_iter().map(|(item, _)| item).collect(), next)))
+    Ok(Some(finish(rows, left, request)))
 }
 
 /// Reads one part of the list after `after`, up to the sort values `until` if given, into `rows`,
@@ -324,10 +362,7 @@ fn read<T>(
     let mut statement = conn.prepare_cached(&sql)?;
     let mut result = statement.query(params_from_iter(params))?;
     while let Some(row) = result.next()? {
-        let width = source.select.len();
-        let key = (width..width + request.sort.columns.len())
-            .map(|index| row.get::<_, Value>(index))
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let key = sort_values(row, source, request.sort)?;
         rows.push((map(row)?, key));
         *left -= 1;
     }
@@ -339,7 +374,7 @@ fn read<T>(
 /// tags, from the index alone.
 fn edge_query(
     source: &Source,
-    walk: &Walk,
+    walk: &SqlWalk,
     sort: &Sort,
     order: Order,
     after: Option<&[Value]>,
@@ -363,7 +398,7 @@ fn edge_query(
 fn edge(
     conn: &Connection,
     source: &Source,
-    walk: &Walk,
+    walk: &SqlWalk,
     request: &Request,
     after: Option<&[Value]>,
     part: Part,
@@ -543,8 +578,9 @@ pub fn assert_indexed(conn: &Connection, source: &Source, sort: &Sort) -> rusqli
                     part_query(source, sort, order, after.as_deref(), part, 101, None);
                 assert_one_range(conn, &sql, params)?;
                 // A walk's windows are ranges of the same index: the query that finds a window's
-                // edge, and the page's query held to that edge.
-                let Some(walk) = &source.walk else { continue };
+                // edge, and the page's query held to that edge. A walk by ID reads only chunks of
+                // the part's query.
+                let Some(Walk::Sql(walk)) = source.walk.as_deref() else { continue };
                 let (sql, params) =
                     edge_query(source, walk, sort, order, after.as_deref(), part, 50);
                 assert_one_range(conn, &sql, params.clone())?;
