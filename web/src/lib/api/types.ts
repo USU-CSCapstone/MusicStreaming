@@ -49,6 +49,7 @@ export type SearchResponse = Schemas['SearchResponse'];
 export type RecentSearch = Schemas['RecentSearch'];
 export type RecentSearchCreate = Schemas['RecentSearchCreate'];
 export type SearchSectionType = Schemas['SearchSectionType'];
+export type SearchSectionPage = Schemas['SearchSectionPage'];
 export type Problem = Schemas['Problem'];
 export type ServerInfo = Schemas['ServerInfo'];
 export type DeviceRegistration = Schemas['DeviceRegistration'];
