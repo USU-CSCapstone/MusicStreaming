@@ -645,21 +645,18 @@ fn section_type(kind: Kind) -> &'static str {
     }
 }
 
-/// The response to a search for `q` in `library` that found `found` for `user`, whose hidden
-/// tracks `hid` says: the summaries of what the index found, as the browse lists show them to
-/// `user`, and whether the library holds no track at all.
-#[expect(clippy::too_many_arguments, reason = "a search's caller, query, and what it found")]
+/// The response to `search`, which found `found`: the summaries of what the index found, as the
+/// browse lists show them to the searcher, the names of its `misses` where it found nothing, and
+/// whether the library holds no track at all.
 pub fn response(
     conn: &Connection,
-    user: i64,
-    library: i64,
-    q: String,
+    search: Search,
     found: Vec<Found>,
-    hid: &Hid,
     misses: &[(Kind, i64)],
     tag_type: Option<&str>,
 ) -> rusqlite::Result<SearchResponse> {
-    let sections = sections(conn, user, library, found, &hid.losses)?;
+    let Search { user, library, q, keep } = search;
+    let sections = sections(conn, user, library, found, &keep.hid.losses)?;
     let library_empty = library_number(conn, library, "track_count")? == 0;
     // Nothing found in a library with music: what was nearly found (`requirements/search.md` §8).
     let near_misses = if sections.is_empty() && !library_empty {

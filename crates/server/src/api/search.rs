@@ -74,21 +74,22 @@ pub async fn search(
     // narrowed and without what the caller hid (`requirements/search.md` §8). Matching the whole
     // vocabulary again takes a while, so it runs off the async threads, with the search.
     let (q, tag_type) = (query.q.clone(), query.tag_type.clone());
-    let (found, misses, hid) = tokio::task::spawn_blocking(move || {
+    let (found, misses, (hid, tagged, held)) = tokio::task::spawn_blocking(move || {
         let both = Union(&[&index, &mine]);
         let keep = Keep::new(&hid, tagged.as_deref(), held.as_deref());
         let found = both.search_within(&q, &kinds, limit, |kind, id| keep.keeps(kind, id));
         let found = search::of_tag_type(found, tag_type.as_deref());
         let misses = search::misses(&both, &q, &kinds, &found, &keep);
-        (found, misses, hid)
+        (found, misses, (hid, tagged, held))
     })
     .await
     .map_err(|_| Problem::new(Code::Internal))?;
     let tag_type = query.tag_type;
     let response = db
         .read(move |conn| {
-            let tag_type = tag_type.as_deref();
-            response(conn, user, library, query.q, found, &hid, &misses, tag_type)
+            let keep = Keep::new(&hid, tagged.as_deref(), held.as_deref());
+            let search = Search { user, library, q: query.q, keep };
+            response(conn, search, found, &misses, tag_type.as_deref())
         })
         .await?;
     Ok(Json(response))
