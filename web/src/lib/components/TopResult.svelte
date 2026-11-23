@@ -24,6 +24,7 @@
 		result,
 		context,
 		from,
+		lyrics,
 		onact
 	}: {
 		result: SearchResult;
@@ -31,6 +32,11 @@
 		context: PlayContext;
 		/** The search's songs in its ranking, which a track plays as the first of. */
 		from?: PlayFrom;
+		/**
+		 * The songs of the search's lyric matches, and what they play in, which a lyric plays its
+		 * song among, as its section plays it.
+		 */
+		lyrics?: { tracks: TrackSummary[]; context: PlayContext };
 		/**
 		 * Playing it is acting on the search's result, which keeps the search: with the result,
 		 * where it is a song, an album or an artist, which a recent search can name.
@@ -47,14 +53,15 @@
 		if (result.tag) return tagCard(result.tag);
 		return null;
 	});
-	const track = $derived<TrackSummary | null>(result.track ?? null);
+	// A lyric is the song whose words were found, shown with the line that held them.
+	const track = $derived<TrackSummary | null>(result.track ?? result.lyric?.track ?? null);
 	const adding = $derived<Adding | null>(
 		card ? cardAdding(fetch, libraryId, card) : track ? songs([track]) : null
 	);
 	const kind = $derived.by(() => {
 		if (result.tag) return tagTypeName(result.tag.type, page.data.tagTypes ?? []);
 		const kinds = { album: 'Album', artist: 'Artist', playlist: 'Playlist', tag: 'Tag' };
-		return card ? kinds[card.type] : 'Song';
+		return card ? kinds[card.type] : result.lyric ? 'Lyrics' : 'Song';
 	});
 
 	let starting = $state(false);
@@ -89,6 +96,17 @@
 	 * the server resolves the rest.
 	 */
 	async function play() {
+		if (track && result.lyric) {
+			// From its start, then the matches after it, as its section plays it.
+			const tracks = lyrics?.tracks.length ? lyrics.tracks : [track];
+			const at = Math.max(
+				0,
+				tracks.findIndex((t) => t.id === track.id)
+			);
+			player.play(tracks, at, lyrics?.context ?? context);
+			onact({ type: 'track', id: track.id });
+			return;
+		}
 		if (track) {
 			player.play([track], 0, context, from);
 			onact({ type: 'track', id: track.id });
@@ -140,6 +158,9 @@
 					>
 				{/if}
 			</span>
+			{#if result.lyric}
+				<p class="lyric" {@attach fullText}>“{result.lyric.line.text}”</p>
+			{/if}
 		{/if}
 		<div class="buttons">
 			<button
@@ -210,6 +231,15 @@
 		gap: var(--space-1);
 		max-width: 100%;
 		overflow: hidden;
+		white-space: nowrap;
+	}
+
+	.lyric {
+		max-width: 100%;
+		margin: 0;
+		overflow: hidden;
+		font-weight: 600;
+		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
 

@@ -6,11 +6,12 @@
 	import { resolve } from '$app/paths';
 	import { view } from '$lib/adding.svelte';
 	import { searchSection } from '$lib/api/client';
-	import type { PlayContext, SearchResult } from '$lib/api/types';
+	import type { LyricMatch, PlayContext, SearchResult } from '$lib/api/types';
 	import { albumCard, artistCard, playlistCard, tagCard, type Card } from '$lib/cards';
 	import AddToPlaylistButton from '$lib/components/AddToPlaylistButton.svelte';
 	import CollectionView from '$lib/components/CollectionView.svelte';
 	import Icon from '$lib/components/Icon.svelte';
+	import LyricMatches from '$lib/components/LyricMatches.svelte';
 	import SearchBox, { settler } from '$lib/components/SearchBox.svelte';
 	import SearchScope from '$lib/components/SearchScope.svelte';
 	import SearchTabs from '$lib/components/SearchTabs.svelte';
@@ -22,7 +23,7 @@
 	import type { Selected } from '$lib/recent';
 	import { searchRecipe, type PlayFrom } from '$lib/queue';
 	import { HELD, scopeParams } from '$lib/search-scope';
-	import { SEARCH_TABS, tabHref, tabLabel, type Tab } from '$lib/search-tabs';
+	import { LYRICS_TAB, SEARCH_TABS, tabHref, tabLabel, type Tab } from '$lib/search-tabs';
 	import { currentSort, showSorted } from '$lib/sort-url';
 	import { FIELDS, serverSort } from '$lib/sorting';
 	import { sortTracks } from '$lib/track-sort';
@@ -54,7 +55,7 @@
 	}
 
 	// A tab's matches, a page at a time as the list scrolls, read again when the library changes
-	// what its type would find.
+	// what its type would find. Lyric matches are songs, so they read again as a song list does.
 	const paged = $derived.by(() => {
 		const { tab, section } = data;
 		if (!tab || !section) return null;
@@ -63,7 +64,7 @@
 			(cursor, limit) =>
 				searchSection(fetch, data.lib, tab.type, data.q, { ...section.query, cursor, limit }),
 			data.lib,
-			DEPENDS[tab.type],
+			DEPENDS[tab.type === 'lyrics' ? 'tracks' : tab.type],
 			data.since
 		);
 	});
@@ -97,6 +98,7 @@
 	function tabOf(section: { type: string; tagType?: string }): Tab | undefined {
 		if (section.type === 'tags')
 			return section.tagType ? { type: 'tags', tagType: section.tagType } : undefined;
+		if (section.type === LYRICS_TAB.type) return { type: LYRICS_TAB.type };
 		const found = SEARCH_TABS.find((t) => t.type === section.type);
 		return found && { type: found.type };
 	}
@@ -128,6 +130,19 @@
 		return { recipe: searchRecipe(data.q, server, narrowedTo), total: ranked.total };
 	});
 	const context = $derived<PlayContext>({ type: 'search', query: data.q ?? '', section: 'tracks' });
+
+	// Lyric matches, but those whose songs the user has hidden since; each plays its song, then
+	// those after it, in what it matched.
+	const lyrics = $derived.by((): LyricMatch[] => {
+		const found = sections.find((s) => s.type === 'lyrics')?.items ?? [];
+		const matches = found.flatMap((r) => (r.lyric ? [r.lyric] : []));
+		return matches.filter((match) => !marks.hidden(data.lib, match.track.id));
+	});
+	const lyricContext = $derived<PlayContext>({
+		type: 'search',
+		query: data.q ?? '',
+		section: 'lyrics'
+	});
 
 	// All the songs the search finds, in the order shown, which only queues. Sorted on All, there
 	// is no recipe for the order shown, and the rows queue one by one.
@@ -232,6 +247,7 @@
 			result={top}
 			{context}
 			from={ranked}
+			lyrics={{ tracks: lyrics.map((match) => match.track), context: lyricContext }}
 			onact={(selected) => settler.settle(selected)}
 		/>
 	{/if}
@@ -263,6 +279,13 @@
 					onsort={showSorted}
 					{context}
 					{from}
+					onplay={(track) => settler.settle({ type: 'track', id: track.id })}
+				/>
+			{:else if section.type === 'lyrics'}
+				<LyricMatches
+					matches={lyrics}
+					context={lyricContext}
+					sentinel={paged?.sentinel}
 					onplay={(track) => settler.settle({ type: 'track', id: track.id })}
 				/>
 			{:else}

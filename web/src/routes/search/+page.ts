@@ -37,8 +37,7 @@ export const load: PageLoad = async ({ fetch, parent, url }) => {
 		return { lib, q, tab, container, within, since, results: null, section: { query, first } };
 	}
 	// All shows each section's best. Search is not filtered by tag: tags are found by name
-	// instead (`requirements/search.md` §5). Every section but lyrics, until the page shows them.
-	const types = 'tracks,albums,artists,playlists,tags';
-	const results = await search(fetch, lib, q, { types, sectionLimit: 12, ...narrowed });
+	// instead (`requirements/search.md` §5).
+	const results = await search(fetch, lib, q, { sectionLimit: 12, ...narrowed });
 	return { lib, q, tab, container, within, since, results, section: null };
 };

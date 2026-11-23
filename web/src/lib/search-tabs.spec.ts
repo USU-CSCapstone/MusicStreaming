@@ -24,9 +24,14 @@ describe('search tabs', () => {
 			'Songs',
 			'Genres',
 			'Moods',
-			'Decade'
+			'Decade',
+			'Lyrics'
 		]);
-		expect(searchTabs([]).at(-1)?.label).toBe('Songs');
+		expect(
+			searchTabs([])
+				.map(({ label }) => label)
+				.slice(-2)
+		).toEqual(['Songs', 'Lyrics']);
 	});
 
 	it('are read from the URL, anything else being All', () => {
@@ -37,7 +42,7 @@ describe('search tabs', () => {
 		});
 		expect(readTab(new URLSearchParams('q=blue'))).toBeNull();
 		expect(readTab(new URLSearchParams('q=blue&type=tags'))).toBeNull();
-		expect(readTab(new URLSearchParams('q=blue&type=lyrics'))).toBeNull();
+		expect(readTab(new URLSearchParams('q=blue&type=lyrics'))).toEqual({ type: 'lyrics' });
 		expect(readTab(new URLSearchParams('q=blue&type=nope'))).toBeNull();
 	});
 
@@ -53,6 +58,7 @@ describe('search tabs', () => {
 
 	it('are named, and told apart by their type of tag', () => {
 		expect(tabLabel({ type: 'tracks' }, types)).toBe('Songs');
+		expect(tabLabel({ type: 'lyrics' }, types)).toBe('Lyrics');
 		expect(tabLabel({ type: 'tags', tagType: 'mood' }, types)).toBe('Moods');
 		expect(tabLabel(null, types)).toBeNull();
 		expect(sameTab({ type: 'tags', tagType: 'mood' }, { type: 'tags', tagType: 'mood' })).toBe(
