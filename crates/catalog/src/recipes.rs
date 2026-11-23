@@ -13,12 +13,12 @@ use serde_json::{Map, Value};
 
 use crate::by_ids::by_ids;
 use crate::credit::ArtistCredit;
-use crate::page::Order;
+use crate::page::{self, Order, Source};
 use crate::playlists::{self, ItemsError};
 use crate::tag_filter::{TagFilter, Tags};
 use crate::time::rfc3339;
 use crate::tracks::{self, TrackOrder, TrackSort};
-use crate::{AnyId, Invalid, hidden};
+use crate::{AnyId, Invalid, hidden, search};
 
 /// How a source's list is made, as a request sends it: the spec's `QueueRecipe` without
 /// `tracks`, which is a list the device sent.
@@ -50,11 +50,14 @@ pub enum Recipe {
     },
     /// A library's tracks under a browse filter, in a sort.
     Library { filters: Map<String, Value>, sort: TrackSort, order: Order },
-    /// The tracks a search finds under a filter, in its ranking.
+    /// The tracks a search finds under a filter, in its ranking or, with `sort` and `order`
+    /// together, in a sort of `listTracks`, as its Songs tab sorts them.
     Search {
         q: String,
         #[serde(default)]
         filters: Map<String, Value>,
+        sort: Option<TrackSort>,
+        order: Option<Order>,
     },
     /// The caller's own playlist at its current version, under a filter, in the sort its page
     /// offers or, with none, in its own order.
@@ -117,8 +120,10 @@ impl Recipe {
                 let (sort, order) = names(*sort, *order);
                 Stored::Library { filters: filters.clone(), sort, order }
             }
-            Recipe::Search { q, filters } => {
-                Stored::Search { q: q.clone(), filters: filters.clone() }
+            Recipe::Search { q, filters, sort, order } => {
+                let sorted = sort.zip(*order).map(|(sort, order)| names(sort, order));
+                let (sort, order) = sorted.unzip();
+                Stored::Search { q: q.clone(), filters: filters.clone(), sort, order }
             }
             Recipe::Playlist { playlist_id, filters, sort, order } => Stored::Playlist {
                 playlist_id: playlist_id.clone(),
@@ -139,6 +144,9 @@ impl Recipe {
             }
             Recipe::Playlist { sort, order, .. } if sort.is_some() != order.is_some() => {
                 Err(Invalid("A playlist recipe's sort and order come together.".to_owned()))
+            }
+            Recipe::Search { sort, order, .. } if sort.is_some() != order.is_some() => {
+                Err(Invalid("A search recipe's sort and order come together.".to_owned()))
             }
             Recipe::Album { filters, .. }
             | Recipe::Playlist { filters, .. }
@@ -164,7 +172,8 @@ fn names(sort: TrackSort, order: Order) -> (String, String) {
 /// not exist, and [`ItemsError::Incomplete`] if it is filtered or sorted and an item's track row is
 /// absent. `ranked` is called only for a search recipe, with its `q`, and gives the IDs of the
 /// library's tracks that match it, best first and only those that carry the tags, from the search
-/// index, which the catalog does not hold. Like every query here, this does not check that the
+/// index, which the catalog does not hold; a sorted search recipe, which sorts them as its Songs
+/// tab does, needs them in no order. Like every query here, this does not check that the
 /// caller reaches the library.
 pub fn resolve(
     conn: &Connection,
@@ -190,11 +199,20 @@ pub fn resolve(
             let sort = TrackOrder { sort: *sort, order: *order };
             tracks::resolve(conn, user, library, None, None, ArtistCredit::Any, tags, sort)?
         }
-        Recipe::Search { q, .. } => {
+        Recipe::Search { q, sort, order, .. } => {
             let hid = hidden::ids(conn, user, library)?;
             let mut ranked = ranked(q);
             ranked.retain(|id| !hid.contains(id));
-            in_library(conn, library, &ranked)?
+            match sort.zip(*order) {
+                // The matches lead, as a sorted section's few do, and sort as the list does.
+                Some((sort, order)) => {
+                    let lead = Some(search::matches_lead(&ranked));
+                    let source = tracks::TRACKS.source(conn, library, lead, None)?;
+                    let source = Source { select: &["t.id"], joins: "", ..source };
+                    page::ids(conn, &source, sort.sort(), order)?
+                }
+                None => in_library(conn, library, &ranked)?,
+            }
         }
         Recipe::Playlist { playlist_id, sort, order, .. } => {
             let Some(playlist) = AnyId::from(playlist_id.as_str()).0 else { return Ok(None) };

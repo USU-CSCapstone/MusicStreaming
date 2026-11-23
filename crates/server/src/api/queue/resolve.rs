@@ -51,7 +51,9 @@ pub async fn resolve(
     let library = library.0;
     // The index is the server's, read before the database is, since it may wait for a build.
     let ranked = match recipe {
-        Recipe::Search { q, .. } => search(db, indexes, library, q.clone(), &tags).await?,
+        Recipe::Search { q, sort, .. } => {
+            search(db, indexes, library, q.clone(), &tags, sort.is_some()).await?
+        }
         _ => Vec::new(),
     };
     let (user, recipe) = (caller.user, recipe.clone());
@@ -62,25 +64,31 @@ pub async fn resolve(
     .ok_or_else(Problem::not_found)
 }
 
-/// The IDs of every track of `library` that matches `q`, best first, as a search's tracks
-/// section ranks them but with no limit, and only those that carry the tags `tags` names. The
-/// tracks the caller hid are left out as the catalog resolves the recipe.
+/// The IDs of every track of `library` that matches `q`, and only those that carry the tags `tags`
+/// names: best first, as a search's tracks section ranks them but with no limit, or in no order
+/// for a recipe that is `sorted`, which saves ranking them. The tracks the caller hid are left out
+/// as the catalog resolves the recipe.
 async fn search(
     db: &Arc<Database>,
     indexes: &Indexes,
     library: i64,
     q: String,
     tags: &TagFilter,
+    sorted: bool,
 ) -> Result<Vec<i64>, Problem> {
     let tagged = indexes.tagged.get(db, library, tags, &[Kind::Track]).await?;
     let index = indexes.index(db, library).await?;
     // Ranking every match of a common word takes a while, so it runs off the async threads.
-    let found = tokio::task::spawn_blocking(move || {
-        index.search_within(&q, &[Kind::Track], usize::MAX, |kind, id| {
+    tokio::task::spawn_blocking(move || {
+        let keep = |kind: Kind, id| {
             tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
-        })
+        };
+        if sorted {
+            return index.matching(&q, Kind::Track, keep);
+        }
+        let found = index.search_within(&q, &[Kind::Track], usize::MAX, keep);
+        found.into_iter().next().map(|section| section.ids).unwrap_or_default()
     })
     .await
-    .map_err(|_| Problem::new(Code::Internal))?;
-    Ok(found.into_iter().next().map(|section| section.ids).unwrap_or_default())
+    .map_err(|_| Problem::new(Code::Internal))
 }

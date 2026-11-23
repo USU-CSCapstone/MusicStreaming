@@ -3896,7 +3896,10 @@ export interface components {
          * @enum {string}
          */
         QueueTrackOrder: "asc" | "desc";
-        /** @description A search's tracks, all of them, in the search's ranking. */
+        /**
+         * @description A search's tracks, all of them: in the search's ranking, or with `sort` and `order` in
+         *     that sort, as `searchSection`'s `tracks` pages them to the end.
+         */
         QueueSearchRecipe: {
             /**
              * @description discriminator enum property added by openapi-typescript
@@ -3911,6 +3914,13 @@ export interface components {
              *     no track.
              */
             filters?: components["schemas"]["BrowseFilter"];
+            /**
+             * @description A sort of `listTracks`, as `searchSection` takes it for `tracks`; the planned ones are
+             *     `422` as there. Left out, with `order`, for the search's ranking.
+             */
+            sort?: components["schemas"]["QueueTrackSort"];
+            /** @description The direction of `sort`. Sent with `sort` and only with it; either alone is `422`. */
+            order?: components["schemas"]["QueueTrackOrder"];
         };
         /**
          * @description The caller's own playlist in the source's library, at its current version, under a tag

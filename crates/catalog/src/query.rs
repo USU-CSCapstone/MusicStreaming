@@ -376,12 +376,16 @@ fn resolve(
             let index = built(index)?;
             let tagged =
                 Tags::read(conn, library, &tracks::TAGGED, &tags)?.ids(conn, &tracks::TAGGED)?;
-            Ok::<_, Error>(index.search_within(q, &[Kind::Track], usize::MAX, |_, id| {
-                tagged.as_ref().is_none_or(|tagged| tagged.contains(&id))
-            }))
+            let keep = |_, id| tagged.as_ref().is_none_or(|tagged| tagged.contains(&id));
+            // A sorted recipe sorts the matches itself, so they need no ranking.
+            if matches!(recipe, Recipe::Search { sort: Some(_), .. }) {
+                return Ok::<_, Error>(index.matching(q, Kind::Track, keep));
+            }
+            let found = index.search_within(q, &[Kind::Track], usize::MAX, keep);
+            Ok(found.into_iter().next().map(|section| section.ids).unwrap_or_default())
         })();
         match found {
-            Ok(found) => found.into_iter().next().map(|section| section.ids).unwrap_or_default(),
+            Ok(found) => found,
             Err(error) => {
                 failed = Some(error);
                 Vec::new()
