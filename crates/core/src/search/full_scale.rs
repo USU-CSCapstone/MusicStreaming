@@ -121,3 +121,61 @@ fn benchmark_full_scale() {
         );
     }
 }
+
+/// The lyric index's size and build time at the heavy case its budget is set for: 150,000 tracks
+/// with lyrics (`design/search.md` §2.5), each 30 lines of its own and a chorus of five sung three
+/// times, so 45 lines and 35 distinct, of 4 to 10 words from a 60,000-word vocabulary whose
+/// words occur as a language's do (Zipf-like, the commonest far the most). Run with
+/// `cargo test --release -p jewelcase-core benchmark_lyrics_full_scale -- --ignored --nocapture`.
+#[test]
+#[ignore = "benchmark"]
+fn benchmark_lyrics_full_scale() {
+    let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let letters: Vec<char> = "abcdefghijklmnoprstuvwy".chars().collect();
+    let vocabulary: Vec<String> = (0..60_000)
+        .map(|_| {
+            let len = 1 + (next() % 9) as usize;
+            (0..len).map(|_| letters[(next() % letters.len() as u64) as usize]).collect()
+        })
+        .collect();
+    let mut line = || {
+        let words = 4 + (next() % 7) as usize;
+        let words = (0..words).map(|_| {
+            let r = (next() % 1_000_000) as f64 / 1_000_000.0;
+            let i = usize::try_from(((vocabulary.len() as f64).powf(r) - 1.0) as i64).unwrap();
+            vocabulary[i.min(vocabulary.len() - 1)].as_str()
+        });
+        words.collect::<Vec<_>>().join(" ")
+    };
+    let tracks: Vec<(i64, Vec<String>)> = (0..150_000)
+        .map(|id| {
+            let chorus: Vec<String> = (0..5).map(|_| line()).collect();
+            let mut lines = Vec::with_capacity(45);
+            for _verse in 0..3 {
+                lines.extend((0..10).map(|_| line()));
+                lines.extend(chorus.iter().cloned());
+            }
+            (id, lines)
+        })
+        .collect();
+    let given: usize = tracks.iter().map(|(_, lines)| lines.len()).sum();
+
+    let started = std::time::Instant::now();
+    let index = LyricIndex::build(tracks);
+    let took = started.elapsed();
+    println!(
+        "{} tracks, {given} lines given, {} indexed, built in {took:?}: {:.1} MB",
+        index.tracks(),
+        index.lines(),
+        index.bytes() as f64 / 1_000_000.0
+    );
+    for (part, bytes) in index.parts() {
+        println!("{part:>24}: {:>6.1} MB", bytes as f64 / 1_000_000.0);
+    }
+}
