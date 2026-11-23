@@ -7,7 +7,8 @@ import {
 	playlistRecipe,
 	recipeFilters,
 	restartsOnPrevious,
-	searchRecipe
+	searchRecipe,
+	tagRecipe
 } from './queue';
 
 const ok = { availability: 'available' as const };
@@ -74,6 +75,15 @@ describe('recipes with a tag filter', () => {
 			type: 'library',
 			filters: { tagAll: ['30', '32'], tagAny: ['61'] },
 			...sort
+		});
+	});
+
+	it('name a tag as its page lists it, album by album', () => {
+		expect(tagRecipe('30')).toEqual({
+			type: 'library',
+			filters: { tagAll: ['30'] },
+			sort: 'album',
+			order: 'asc'
 		});
 	});
 

@@ -57,6 +57,10 @@ export const libraryRecipe = (
 	...sort
 });
 
+/** A tag's songs as its page lists them, album by album: the library under the tag. */
+export const tagRecipe = (tagId: string): QueueRecipe =>
+	libraryRecipe(BY_ALBUM, { all: [tagId], any: [] });
+
 /**
  * The songs a search finds, as the server resolves them: in its ranking, or in `sort`, as its
  * Songs tab sorts them.

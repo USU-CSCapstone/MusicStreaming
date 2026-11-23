@@ -15,7 +15,7 @@ import type { Playable, Playlist, QueueRecipe, TrackSummary } from './api/types'
 import type { Card } from './cards';
 import { connectivity } from './connectivity.svelte';
 import { plural } from './format';
-import { albumRecipe, artistRecipe, playlistRecipe } from './queue';
+import { albumRecipe, artistRecipe, playlistRecipe, tagRecipe } from './queue';
 import { catalog } from './catalog/client.svelte';
 import { mintId } from './sync/mutations/marks';
 import { sender } from './sync/sender';
@@ -85,11 +85,13 @@ export function view(label: string, count: number, recipe: QueueRecipe): Adding 
 }
 
 /**
- * The album, artist, or playlist a card stands for. It holds no songs: the server reads them
- * when it is queued, and they are fetched only when needed here.
+ * The album, artist, playlist, or tag a card stands for. It holds no songs: the server reads them
+ * when it is queued, and they are fetched only when needed here. A tag is a filtered view, which
+ * is no entity, so it only queues: its songs as its page lists them.
  */
 export function cardAdding(fetch: Fetch, libraryId: string, card: Card): Adding {
 	const { type, id, title, count } = card;
+	if (type === 'tag') return view(`“${title}”`, count, tagRecipe(id));
 	if (type === 'artist') {
 		const recipe = artistRecipe(id);
 		return collection(type, id, title, count, artistTracks(fetch, libraryId, id), recipe);
